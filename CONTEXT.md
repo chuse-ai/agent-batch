@@ -1,19 +1,75 @@
 # agent-batch
 
-Runs many one-off AI agent jobs unattended, each returning a result that meets a declared contract, on owned machines first and on Cloudflare when they are full.
+Runs many one-off AI agent jobs unattended, each returning a result that meets a declared contract, on the organization's own machines first and on Cloudflare when they are full.
 
 ## Language
 
+**Organization**:
+The company a deployment serves; it owns every job, member, key and host in that deployment.
+_Avoid_: tenant, account, workspace, team
+
+**Member**:
+A person in the organization, signed in through the organization's identity provider.
+_Avoid_: user, account, seat
+
+**API key**:
+A named, revocable credential owned by the organization that a service uses to call the hub, limited to the actions it is granted.
+_Avoid_: token, service account, secret
+
+**Secret**:
+A named credential the organization stores with the hosts it may be sent to; a job may use it without its agent ever seeing the value.
+_Avoid_: API key, token, credential, environment variable
+
 **Job**:
-One self-contained piece of agent work: a task, its inputs (including any scripts, sent as data), and an output contract. Runs once, with no ongoing conversation.
+One self-contained piece of agent work: a prompt, its input files, and an output contract. Runs once, unattended; a person may pause, resume or cancel it.
 _Avoid_: task, run, session, conversation
 
+**Label**:
+A key and value attached to a job when it is submitted, such as `customer = acme`, used to find jobs, group them, and attribute their cost.
+_Avoid_: tag, metadata, category
+
+**Job state**:
+Where a job is in its life: queued, running, paused, succeeded, failed or cancelled. Paused jobs can be resumed; succeeded, failed and cancelled are final. Why a job stopped is its reason, not a further state.
+_Avoid_: status, phase
+
+**Usage record**:
+The small, lasting record of a job's outcome and cost (labels, model, state, tokens, cost, times), kept after the job's content expires or is deleted.
+_Avoid_: billing record, receipt, audit log
+
+**Prompt**:
+The instruction text that tells a job's agent what to do.
+_Avoid_: task, instructions, query
+
+**Input file**:
+A file written into a job's workspace before its agent starts, such as a document, data or a script to run.
+_Avoid_: attachment, upload, input data
+
 **Output contract**:
-The schema a job's result must satisfy before the job counts as succeeded.
+The JSON Schema, and optional validation script, that a job's result must satisfy before the job counts as succeeded.
 _Avoid_: output format, response schema
 
+**Output file**:
+A file a job's agent puts in its output folder, delivered to the caller with the result and kept even if the job's host goes away.
+_Avoid_: artifact, attachment, export
+
+**Result item**:
+One element of a job's result when the result is a list, validated and kept the moment it is accepted.
+_Avoid_: checkpoint, partial result, record, chunk
+
+**Batch**:
+The jobs submitted together, released and paused as one.
+_Avoid_: run, group, campaign
+
+**Canary**:
+The first jobs of a batch, run before the rest are released.
+_Avoid_: preflight, pilot, trial run
+
+**Event**:
+One recorded happening in a job's life, such as a state change, agent output or a message; a job's events, in order, are what callers poll and watch live.
+_Avoid_: log line, update, notification
+
 **Hub**:
-The single central service that accepts jobs, keeps the record of every job and runner, and decides where each job runs.
+The single central service that every caller and runner connects to; it accepts jobs, keeps the record of every job and runner, decides where each job runs, and relays each job's events.
 _Avoid_: control, control plane, server, coordinator
 
 **Runner**:
@@ -29,7 +85,7 @@ The Linux image Cloudflare Computer's container backend starts when a job's comm
 _Avoid_: job image, sandbox image
 
 **Host**:
-A machine owned by the user that runs runners.
+A machine the organization controls, owned or rented, that runs runners.
 _Avoid_: node, server, box
 
 **Placement**:
