@@ -1,0 +1,28 @@
+{
+  "name": "agent-batch",
+  "type": "module",
+  "version": "0.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chuse-ai/agent-batch.git",
+    "directory": "packages/cli"
+  },
+  "description": "Run hundreds of one-off agent jobs unattended, each with an output contract. On your own machines first, spilling over to Cloudflare Workers.",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:"
+  },
+  "license": "MIT"
+}
