@@ -1,28 +1,40 @@
 {
   "name": "agent-batch",
-  "type": "module",
   "version": "0.0.0",
+  "description": "Run hundreds of one-off agent jobs unattended, each with an output contract. On your own machines first, spilling over to Cloudflare Workers.",
+  "homepage": "https://github.com/chuse-ai/agent-batch#readme",
+  "bugs": {
+    "url": "https://github.com/chuse-ai/agent-batch/issues"
+  },
+  "license": "MIT",
+  "author": "chuse <dev@chuse.ai>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/chuse-ai/agent-batch.git",
     "directory": "packages/cli"
   },
-  "description": "Run hundreds of one-off agent jobs unattended, each with an output contract. On your own machines first, spilling over to Cloudflare Workers.",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
   "exports": {
     ".": "./dist/index.mjs",
     "./package.json": "./package.json"
   },
-  "files": [
-    "dist"
-  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsdown",
-    "dev": "tsdown --watch"
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "check": "vp check",
+    "prepublishOnly": "vp run build"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "tsdown": "catalog:",
-    "typescript": "catalog:"
-  },
-  "license": "MIT"
+    "@types/node": "^26.1.1",
+    "bumpp": "^11.1.0",
+    "typescript": "^7.0.2",
+    "vite-plus": "catalog:"
+  }
 }

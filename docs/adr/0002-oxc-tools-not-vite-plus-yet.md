@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0006
+---
+
 # oxc tools and Vitest 4, not Vite+ yet
 
 We lint with oxlint (type-aware through tsgolint, built on TypeScript 7), format with oxfmt, test with Vitest 4, and build with tsdown, installed as separate tools. Vite+ bundles the same tools, but it ships Vitest 5, and Cloudflare's Workers test pool (`@cloudflare/vitest-pool-workers`) supports only Vitest 4, so tests that must run inside workerd could not run under `vp test`. Tools built on TypeScript's classic compiler API (typescript-eslint, ts-morph, some declaration bundlers) are ruled out regardless, because TypeScript 7 exposes only unstable programmatic APIs.

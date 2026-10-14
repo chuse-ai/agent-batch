@@ -1,13 +1,25 @@
+packages:
+  - apps/*
+  - packages/*
+  - tools/*
+
+catalogMode: prefer
+
+overrides:
+  vite@*: "catalog:"
+peerDependencyRules:
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: "*"
+minimumReleaseAge: 1440
 allowBuilds:
   # Both download their platform's native binary in postinstall; wrangler needs them.
   workerd: true
   esbuild: true
 catalog:
-  '@types/node': 26.6.5
-  tsdown: 0.23.1
-  typescript: 7.0.2
-  wrangler: 4.149.0
-catalogMode: strict
-minimumReleaseAge: 1440
-packages:
-  - packages/*
+  "@types/node": ^24
+  typescript: ^7.0.2
+  vite: npm:@voidzero-dev/vite-plus-core@1.1.0
+  vite-plus: 1.1.0
+  wrangler: ^4.149.0
