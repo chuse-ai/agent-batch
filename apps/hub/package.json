@@ -27,6 +27,7 @@
     "@types/pg": "catalog:",
     "kanel": "catalog:",
     "kanel-kysely": "catalog:",
+    "runner": "workspace:*",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
     "wrangler": "catalog:"

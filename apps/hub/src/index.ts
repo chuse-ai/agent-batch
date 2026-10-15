@@ -1,6 +1,6 @@
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { implement } from "@orpc/server";
-import { contract } from "contract";
+import { contract, RUNNER_CONNECT_ROUTE } from "contract";
 import { Hono } from "hono";
 import type { Kysely } from "kysely";
 
@@ -26,7 +26,7 @@ const api = new OpenAPIHandler(router);
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.get("/runners/:id/connect", (c) =>
+app.get(RUNNER_CONNECT_ROUTE, (c) =>
   c.env.RUNNER_CONNECTION.getByName(c.req.param("id")).fetch(c.req.raw),
 );
 

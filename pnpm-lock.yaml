@@ -188,6 +188,9 @@ catalogs:
     '@types/pg':
       specifier: ^8.23.1
       version: 8.23.1
+    '@types/ws':
+      specifier: ^8.18.2
+      version: 8.18.2
     hono:
       specifier: 5.0.0-rc.1
       version: 5.0.0-rc.1
@@ -212,6 +215,9 @@ catalogs:
     wrangler:
       specifier: ^4.149.0
       version: 4.149.0
+    ws:
+      specifier: ^8.22.0
+      version: 8.22.0
     zod:
       specifier: ^4.6.7
       version: 4.6.7
@@ -272,6 +278,9 @@ importers:
       kanel-kysely:
         specifier: 'catalog:'
         version: 4.0.0
+      runner:
+        specifier: workspace:*
+        version: link:../runner
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -293,16 +302,22 @@ importers:
       contract:
         specifier: workspace:*
         version: link:../../packages/contract
+      ws:
+        specifier: 'catalog:'
+        version: 8.22.0
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.2
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
-      wrangler:
+      vite-plus:
         specifier: 'catalog:'
-        version: 4.149.0(@cloudflare/workers-types@5.20261013.1)(@types/node@24.19.2)
+        version: 1.1.0(@types/node@24.19.2)(@vitest/ui@5.0.3)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)
 
   packages/cli:
     devDependencies:
@@ -1245,6 +1260,9 @@ packages:
 
   '@types/ssh2@1.15.6':
     resolution: {integrity: sha512-oGdxhBqcRTwSTKFm+9EiKzkNVYRLEFkcW44lhguvBalGJbWfGnDt/ezwSUZc+SF9m9bMc3VyklNAtp7zICjS5w==}
+
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -3636,6 +3654,10 @@ snapshots:
   '@types/ssh2@1.15.6':
     dependencies:
       '@types/node': 18.19.130
+
+  '@types/ws@8.18.2':
+    dependencies:
+      '@types/node': 24.19.2
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true

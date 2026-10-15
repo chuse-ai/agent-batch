@@ -1,6 +1,7 @@
 import type { Runner } from "contract";
 import { sql } from "kysely";
 import { expect, inject } from "vite-plus/test";
+import { startRunner, type Runner as RunnerProcess } from "runner";
 import { createTestHarness } from "wrangler";
 
 import { DB_SCHEMA, withDatabase } from "../src/db/database.ts";
@@ -18,21 +19,23 @@ async function clearDatabase(connectionString: string) {
   });
 }
 
-/** Starts the hub and one runner in workerd, against the run's Postgres. */
+/**
+ * Starts the hub in workerd, against the run's Postgres, and lets tests start the Runner `runner-1`
+ * beside it as a Node Runner on a host would run: dialling the hub's URL over a real WebSocket.
+ */
 export function startSystem(
-  options: { hubVars?: Record<string, string>; runnerVars?: Record<string, string> } = {},
+  options: { hubVars?: Record<string, string>; heartbeatIntervalMs?: number } = {},
 ) {
   const server = createTestHarness({
-    workers: [
-      { configPath: "./wrangler.jsonc", vars: options.hubVars },
-      {
-        configPath: "../runner/wrangler.jsonc",
-        vars: { RUNNER_ID: "runner-1", RUNNER_NAME: "test runner", ...options.runnerVars },
-      },
-    ],
+    workers: [{ configPath: "./wrangler.jsonc", vars: options.hubVars }],
   });
   const hub = server.getWorker<Env>("hub");
-  const runner = server.getWorker("runner");
+  let runner: RunnerProcess | undefined;
+
+  async function stopRunner() {
+    await runner?.stop();
+    runner = undefined;
+  }
 
   async function listRunners(): Promise<Runner[]> {
     const response = await hub.fetch("/runners");
@@ -46,14 +49,27 @@ export function startSystem(
 
   return {
     hub,
-    runner,
     async start() {
       const databaseUrl = inject("databaseUrl");
       await clearDatabase(databaseUrl);
       process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE = databaseUrl;
       await server.listen();
     },
-    stop: () => server.close(),
+    async stop() {
+      await stopRunner();
+      await server.close();
+    },
+    /** Starts the Runner `runner-1`, connecting to the hub's URL. */
+    async startRunner() {
+      const { url } = await server.listen();
+      runner = startRunner({
+        hubUrl: url,
+        runnerId: "runner-1",
+        heartbeatIntervalMs: options.heartbeatIntervalMs,
+      });
+    },
+    /** Stops the Runner `runner-1`, closing its connection. */
+    stopRunner,
     listRunners,
     /** The hub's listing of one Runner, or `undefined` if it lists none by that ID. */
     findRunner,

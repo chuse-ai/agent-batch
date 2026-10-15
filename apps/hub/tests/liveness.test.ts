@@ -1,7 +1,7 @@
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/websocket";
 import type { ContractRouterClient } from "@orpc/contract";
-import { HEARTBEAT_PING, HEARTBEAT_PONG, type runnerProtocol } from "contract";
+import { HEARTBEAT_PING, HEARTBEAT_PONG, runnerConnectPath, type runnerProtocol } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 import { startSystem } from "./harness.ts";
@@ -16,7 +16,7 @@ afterAll(() => system.stop());
 // Longer than Vitest's default 5 s timeout: the alarm fires after 2 s, the Runner waits 3 s before
 // subscribing again, and the poll allows for both.
 test("a runner that falls silent is dropped, and seen again once it reconnects", async () => {
-  await system.runner.fetch("/start", { method: "POST" });
+  await system.startRunner();
   await expect.poll(() => system.findRunner("runner-1")).toBeDefined();
   const subscribedAt = await system.lastSeen("runner-1");
 
@@ -61,9 +61,9 @@ test("the hub answers a runner's heartbeat", async () => {
   socket.close(1000);
 });
 
-/** Opens a Runner's socket to the hub directly, as the Runner Worker would. */
+/** Opens a Runner's socket to the hub directly, without a Runner's reconnects and heartbeats. */
 async function connect(runnerId: string) {
-  const response = await system.hub.fetch(`/runners/${runnerId}/connect`, {
+  const response = await system.hub.fetch(runnerConnectPath(runnerId), {
     headers: { Upgrade: "websocket" },
   });
   const socket = response.webSocket;

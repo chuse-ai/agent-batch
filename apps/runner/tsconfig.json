@@ -1,12 +1,20 @@
 {
   "compilerOptions": {
-    "target": "es2024",
-    "lib": ["es2024"],
-    "module": "es2022",
+    "target": "esnext",
+    "lib": ["es2023"],
+    "moduleDetection": "force",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "declaration": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
     "isolatedModules": true,
-    "skipLibCheck": true,
-    "types": ["./worker-configuration.d.ts", "node"]
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true
   }
 }

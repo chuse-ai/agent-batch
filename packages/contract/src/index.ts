@@ -21,6 +21,14 @@ export const contract = {
   },
 };
 
+/** The hub's route where a Runner opens its WebSocket, with the Runner's ID as `:id`. */
+export const RUNNER_CONNECT_ROUTE = "/runners/:id/connect";
+
+/** The path where the Runner `runnerId` opens its WebSocket to the hub. */
+export function runnerConnectPath(runnerId: string): string {
+  return RUNNER_CONNECT_ROUTE.replace(":id", encodeURIComponent(runnerId));
+}
+
 /** How often a Runner sends a heartbeat. */
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 /** After this long without heartbeats (three missed), each side treats the other as gone. */

@@ -1,3 +1,5 @@
+import { hostname } from "node:os";
+
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 import { startSystem } from "./harness.ts";
@@ -11,25 +13,25 @@ test("the hub lists no runners before any connect", async () => {
   expect(await system.listRunners()).toEqual([]);
 });
 
-test("a runner that connects is listed under its name, seen when it subscribed", async () => {
+test("a runner that connects is listed under its host's name, seen when it subscribed", async () => {
   const before = Date.now();
-  await system.runner.fetch("/start", { method: "POST" });
+  await system.startRunner();
 
   await expect
     .poll(() => system.findRunner("runner-1"))
-    .toEqual({ id: "runner-1", name: "test runner", lastSeenAt: expect.any(String) });
+    .toEqual({ id: "runner-1", name: hostname(), lastSeenAt: expect.any(String) });
   expect(await system.lastSeen("runner-1")).toBeGreaterThanOrEqual(before);
 });
 
 test("a runner that reconnects is listed once, seen again", async () => {
   const firstSeen = await system.lastSeen("runner-1");
 
-  await system.runner.fetch("/stop", { method: "POST" });
-  await system.runner.fetch("/start", { method: "POST" });
+  await system.stopRunner();
+  await system.startRunner();
 
   await expect.poll(() => system.lastSeen("runner-1")).toBeGreaterThan(firstSeen);
   expect(await system.listRunners()).toEqual([
-    expect.objectContaining({ id: "runner-1", name: "test runner" }),
+    expect.objectContaining({ id: "runner-1", name: hostname() }),
   ]);
 });
 

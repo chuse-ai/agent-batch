@@ -84,7 +84,14 @@ export class RunnerConnection extends DurableObject<Env> {
     });
   }
 
-  async webSocketClose(ws: WebSocket): Promise<void> {
+  async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    // Answers the Runner's close frame, as Cloudflare's example does: from compatibility date
+    // 2026-04-07 the runtime should do so itself, but local workerd does not, and the Runner waits
+    // for the answer before its socket counts as closed. Codes 1005, 1006 and 1015 only describe a
+    // close locally (no status, a dropped connection, a failed TLS handshake) and cannot be sent, so
+    // those are answered without a status; closing a socket that is already gone does nothing.
+    if (code === 1005 || code === 1006 || code === 1015) ws.close();
+    else ws.close(code, reason);
     await protocol.close(ws);
     // The alarm watches heartbeats on every socket, so it stays while another socket is open.
     const stillOpen = this.ctx
