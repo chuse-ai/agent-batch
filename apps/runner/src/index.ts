@@ -9,7 +9,6 @@ import { RPCLink } from "@orpc/client/websocket";
 import type { ContractRouterClient } from "@orpc/contract";
 import type { JsonifiedClient } from "@orpc/openapi";
 import { OpenAPILink } from "@orpc/openapi/fetch";
-import WebSocket from "ws";
 import {
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_PING,
@@ -21,6 +20,7 @@ import {
   type RegisteredRunner,
   type runnerProtocol,
 } from "contract";
+import WebSocket from "ws";
 
 type Hub = ContractRouterClient<typeof runnerProtocol, RetryLinkPluginContext>;
 

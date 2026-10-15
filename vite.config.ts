@@ -1,6 +1,10 @@
 import { defineConfig } from "vite-plus";
 
 export default defineConfig({
+  fmt: {
+    // Off by default in Oxfmt; on, so import order is the formatter's, not a review point.
+    sortImports: true,
+  },
   staged: {
     "*": "vp check --fix",
   },

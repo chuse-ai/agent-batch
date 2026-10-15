@@ -8,8 +8,8 @@ import type { JsonifiedClient } from "@orpc/openapi";
 import { OpenAPILink } from "@orpc/openapi/fetch";
 import { contract, RUNNER_CONNECT_PATH, type RegisteredRunner } from "contract";
 import { sql } from "kysely";
-import { expect, inject } from "vite-plus/test";
 import { startRunner, type Runner as RunnerProcess } from "runner";
+import { expect, inject } from "vite-plus/test";
 import { createTestHarness } from "wrangler";
 
 import { DB_SCHEMA, withDatabase } from "../src/db/database.ts";
