@@ -2,11 +2,16 @@
   "name": "runner",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "start": "wrangler dev",
     "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "@orpc/client": "catalog:",
+    "@orpc/contract": "catalog:",
+    "contract": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",

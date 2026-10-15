@@ -17,9 +17,27 @@ allowBuilds:
   # Both download their platform's native binary in postinstall; wrangler needs them.
   workerd: true
   esbuild: true
+  # Testcontainers' Docker client pulls these in; their install scripts are optional
+  # native speed-ups or version checks it does not need.
+  cpu-features: false
+  protobufjs: false
+  ssh2: false
 catalog:
+  "@mikro-orm/cli": ^7.2.5
+  "@mikro-orm/core": ^7.2.5
+  "@mikro-orm/migrations": ^7.2.5
+  "@mikro-orm/postgresql": ^7.2.5
+  "@orpc/client": 2.0.0-beta.43
+  "@orpc/contract": 2.0.0-beta.43
+  "@orpc/hibernation": 2.0.0-beta.43
+  "@orpc/openapi": 2.0.0-beta.43
+  "@orpc/server": 2.0.0-beta.43
+  "@testcontainers/postgresql": ^12.2.1
   "@types/node": ^24
+  hono: 5.0.0-rc.1
+  kysely: ^0.29.6
   typescript: ^7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.1.0
   vite-plus: 1.1.0
   wrangler: ^4.149.0
+  zod: ^4.6.7

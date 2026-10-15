@@ -31,3 +31,11 @@ dist-ssr
 
 # AI agent worktrees
 .claude/worktrees/
+
+# Wrangler
+.wrangler/
+.dev.vars*
+!.dev.vars.example
+
+# Vitest
+.vitest/

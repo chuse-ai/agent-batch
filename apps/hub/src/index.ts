@@ -1,64 +1,46 @@
-import { DurableObject } from "cloudflare:workers";
+import type { EntityManager } from "@mikro-orm/postgresql";
+import { OpenAPIHandler } from "@orpc/openapi/fetch";
+import { implement } from "@orpc/server";
+import { contract } from "contract";
+import { Hono } from "hono";
 
-/**
- * Welcome to Cloudflare Workers! This is your first Durable Objects application.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your Durable Object in action
- * - Run `npm run deploy` to publish your application
- *
- * Bind resources to your worker in `wrangler.jsonc`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/durable-objects
- */
+import { RunnerSchema } from "./db/entities.ts";
+import { withEntityManager } from "./db/orm.ts";
 
-/** A Durable Object's behavior is defined in an exported Javascript class */
-export class MyDurableObject extends DurableObject<Env> {
-  /**
-   * The constructor is invoked once upon creation of the Durable Object, i.e. the first call to
-   * 	`DurableObjectStub::get` for a given identifier (no-op constructors can be omitted)
-   *
-   * @param ctx - The interface for interacting with Durable Object state
-   * @param env - The interface to reference bindings declared in wrangler.jsonc
-   */
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-  }
+export { RunnerConnection } from "./runner-connection.ts";
 
-  /**
-   * The Durable Object exposes an RPC method sayHello which will be invoked when a Durable
-   *  Object instance receives a request from a Worker via the same method invocation on the stub
-   *
-   * @param name - The name provided to a Durable Object instance from a Worker
-   * @returns The greeting to be sent back to the Worker
-   */
-  async sayHello(name: string): Promise<string> {
-    return `Hello, ${name}!`;
-  }
+interface ApiContext {
+  em: EntityManager;
 }
 
-export default {
-  /**
-   * This is the standard fetch handler for a Cloudflare Worker
-   *
-   * @param request - The request submitted to the Worker from the client
-   * @param env - The interface to reference bindings declared in wrangler.jsonc
-   * @param ctx - The execution context of the Worker
-   * @returns The response to be sent back to the client
-   */
-  async fetch(request, env, ctx): Promise<Response> {
-    // Create a stub to open a communication channel with the Durable Object
-    // instance named "foo".
-    //
-    // Requests from all Workers to the Durable Object instance named "foo"
-    // will go to a single remote Durable Object instance.
-    const stub = env.MY_DURABLE_OBJECT.getByName("foo");
+const os = implement<typeof contract, ApiContext>(contract);
 
-    // Call the `sayHello()` RPC method on the stub to invoke the method on
-    // the remote Durable Object instance.
-    const greeting = await stub.sayHello("world");
-
-    return new Response(greeting);
+const router = os.router({
+  runners: {
+    list: os.runners.list.handler(async ({ context }) => {
+      const runners = await context.em.findAll(RunnerSchema);
+      return runners.map((runner) => ({
+        id: runner.id,
+        name: runner.name,
+        lastSeenAt: runner.lastSeenAt.toISOString(),
+      }));
+    }),
   },
-} satisfies ExportedHandler<Env>;
+});
+
+const api = new OpenAPIHandler(router);
+
+const app = new Hono<{ Bindings: Env }>();
+
+app.get("/runners/:id/connect", (c) =>
+  c.env.RUNNER_CONNECTION.getByName(c.req.param("id")).fetch(c.req.raw),
+);
+
+app.all("*", async (c) => {
+  const { matched, response } = await withEntityManager((em) =>
+    api.handle(c.req.raw, { context: { em } }),
+  );
+  return matched ? response : c.notFound();
+});
+
+export default app;

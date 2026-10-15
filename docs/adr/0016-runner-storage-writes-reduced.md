@@ -1,6 +1,8 @@
-# Runners on Durable Objects reduce pi-durable's row writes
+# pi-durable's row writes are reduced
 
 On Cloudflare, Durable Object SQLite is billed per row written, index entries and deletes included, and pi-durable's journal accounts for about 95% of a job's writes (the workspace's files for about 5%). Runners therefore set pi-durable's progress interval to one second instead of its 100 ms default, and apply two patches to pi-durable through `pnpm patch`: the task upsert sets only the columns that change after a task is created (status, record and the abort flag), so each state change writes three rows instead of five; and the `document_revisions_by_kind` index is dropped, because a document's revisions are read through the primary key anyway. Measured on a 30-step scripted job, rows written fell from 6,455 to 3,950 with the interval and to 2,921 with the patches, 55% fewer in all; a job killed mid-stream still resumed with each completed tool call run exactly once. The patches are meant to be proposed upstream.
+
+Runners are Node processes (ADR 0019), where these writes go to local disk; the settings stay, and the billing reason applies to jobs run inside Durable Objects, such as Cloudflare Computer.
 
 ## Considered options
 

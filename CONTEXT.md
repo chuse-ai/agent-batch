@@ -73,15 +73,19 @@ The single central service that every caller and runner connects to; it accepts 
 _Avoid_: control, control plane, server, coordinator
 
 **Runner**:
-A service that executes jobs; there can be many, on Cloudflare and on hosts.
+A process that runs many jobs' agents at once; there can be many, on hosts and in the cloud.
 _Avoid_: runtime, worker, agent, executor
 
 **Workspace**:
-A job's files and the place its commands run, provided by Cloudflare Computer and owned by the job's runner; it survives restarts.
+A job's files and the place its commands run, provided by its execution environment and owned by the job's runner; it survives restarts.
 _Avoid_: sandbox, filesystem, disk
 
+**Execution environment**:
+Where a job's commands run and its files live, such as a sandboxed shell beside the runner, a container, or Cloudflare Computer; each declares what it can run and how it isolates and keeps files.
+_Avoid_: backend, sandbox, runtime
+
 **Container image**:
-The Linux image Cloudflare Computer's container backend starts when a job's commands need real programs; ours is published as `agent-batch-container`.
+The Linux image a container starts when a job's commands need real programs; ours is published as `agent-batch-container`.
 _Avoid_: job image, sandbox image
 
 **Host**:
