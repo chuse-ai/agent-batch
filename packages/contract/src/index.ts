@@ -10,24 +10,86 @@ export const runnerSchema = z.object({
    * When the hub last heard from the Runner: its latest subscription, or a heartbeat the hub has
    * recorded. A connected Runner's is at most one heartbeat timeout old.
    */
-  lastSeenAt: z.iso.datetime(),
+  lastSeenAt: z.date(),
 });
 export type Runner = z.infer<typeof runnerSchema>;
 
-/** The hub's public HTTP API. */
+/** What an API key may do, as `{ resource: actions }`, for example `{ apiKey: ["create"] }`. */
+const permissionsSchema = z.record(z.string(), z.array(z.string()));
+
+/** An API key as the hub lists it; the key itself is shown only once, when it is created. */
+export const apiKeySchema = z.object({
+  id: z.string(),
+  name: z.nullable(z.string()),
+  /** The first characters of the key, to recognise it by. */
+  start: z.nullable(z.string()),
+  permissions: z.nullable(permissionsSchema),
+  createdAt: z.date(),
+  /** When the key stops working, if it was created to expire. */
+  expiresAt: z.nullable(z.date()),
+});
+export type ApiKey = z.infer<typeof apiKeySchema>;
+
+/** A newly created key: its ID and the key itself, shown only this once. */
+const createdKeySchema = z.object({ id: z.string(), key: z.string() });
+
+/** A newly registered Runner: its ID and its own key, which it keeps and connects with. */
+export const registeredRunnerSchema = z.object({ id: z.string(), key: z.string() });
+export type RegisteredRunner = z.infer<typeof registeredRunnerSchema>;
+
+/** The hub's public HTTP API. Callers sign in as a member or send an API key in `x-api-key`. */
 export const contract = {
   runners: {
     list: oc.meta(openapi({ method: "GET", path: "/runners" })).output(z.array(runnerSchema)),
+    /**
+     * Registers a new Runner, called with the shared key Runners start with. Returns the Runner's ID
+     * and its own key, which the Runner keeps and connects with.
+     */
+    register: oc
+      .meta(openapi({ method: "POST", path: "/runners/register" }))
+      .input(z.object({ name: z.string() }))
+      .output(registeredRunnerSchema),
+    /**
+     * Removes a Runner, for a host that is retired or compromised: its own key stops working and its
+     * connection is dropped at once. A compromised host also holds the shared key Runners register
+     * with, so revoke that too and create a new one for future hosts; Runners already registered
+     * keep working with their own keys.
+     */
+    delete: oc
+      .meta(openapi({ method: "DELETE", path: "/runners/{id}" }))
+      .input(z.object({ id: z.string() })),
+  },
+  apiKeys: {
+    create: oc
+      .meta(openapi({ method: "POST", path: "/api-keys" }))
+      .input(
+        z.object({
+          name: z.string(),
+          permissions: permissionsSchema,
+          /** Seconds until the key stops working, from one day to a year; without it, it never does. */
+          expiresIn: z.optional(z.number()),
+        }),
+      )
+      .output(createdKeySchema),
+    list: oc.meta(openapi({ method: "GET", path: "/api-keys" })).output(z.array(apiKeySchema)),
+    revoke: oc
+      .meta(openapi({ method: "DELETE", path: "/api-keys/{id}" }))
+      .input(z.object({ id: z.string() })),
   },
 };
 
-/** The hub's route where a Runner opens its WebSocket, with the Runner's ID as `:id`. */
-export const RUNNER_CONNECT_ROUTE = "/runners/:id/connect";
+/**
+ * Where a Runner opens its WebSocket to the hub, sending its own key in `x-api-key`; the hub takes
+ * the Runner's identity from the key.
+ */
+export const RUNNER_CONNECT_PATH = "/runners/connect";
 
-/** The path where the Runner `runnerId` opens its WebSocket to the hub. */
-export function runnerConnectPath(runnerId: string): string {
-  return RUNNER_CONNECT_ROUTE.replace(":id", encodeURIComponent(runnerId));
-}
+/**
+ * The `code` in the body of the hub's 401 when it no longer knows a Runner's key: the Runner was
+ * removed, or the hub was reset. A Runner stops only on this answer and retries any other refusal,
+ * which may come from a proxy in front of the hub or from a hub that cannot reach its database.
+ */
+export const RUNNER_NOT_FOUND = "RUNNER_NOT_FOUND";
 
 /** How often a Runner sends a heartbeat. */
 export const HEARTBEAT_INTERVAL_MS = 30_000;

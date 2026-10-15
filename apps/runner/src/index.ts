@@ -1,16 +1,24 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
+import path from "node:path";
+import { text } from "node:stream/consumers";
 
 import { createORPCClient } from "@orpc/client";
 import { RetryLinkPlugin, type RetryLinkPluginContext } from "@orpc/client/plugins";
 import { RPCLink } from "@orpc/client/websocket";
 import type { ContractRouterClient } from "@orpc/contract";
+import type { JsonifiedClient } from "@orpc/openapi";
+import { OpenAPILink } from "@orpc/openapi/fetch";
 import WebSocket from "ws";
 import {
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_PING,
   HEARTBEAT_PONG,
   HEARTBEAT_TIMEOUT_MS,
-  runnerConnectPath,
+  contract,
+  RUNNER_CONNECT_PATH,
+  RUNNER_NOT_FOUND,
+  type RegisteredRunner,
   type runnerProtocol,
 } from "contract";
 
@@ -38,9 +46,19 @@ const MIN_UPTIME_MS = 5_000;
 export interface RunnerOptions {
   /** The hub's URL; the Runner opens its WebSocket there, over `wss:` for `https:`. */
   hubUrl: string | URL;
-  runnerId: string;
+  /** The key Runners share to register; a Runner uses it once, to receive a key of its own. */
+  registrationKey: string;
+  /** Where the Runner keeps what must survive restarts, such as its own key. */
+  dataDir: string;
   /** How often to send a heartbeat; tests set it shorter. */
   heartbeatIntervalMs?: number;
+  /** Discards the Runner's own key and registers again, as the `register` command does. */
+  register?: boolean;
+  /**
+   * Called when the hub answers that it does not know the Runner's own key, because the Runner was
+   * removed or the hub was reset; the Runner has stopped by then, since retrying cannot succeed.
+   */
+  onRemoved?: () => void;
 }
 
 export interface Runner {
@@ -48,11 +66,39 @@ export interface Runner {
   stop(): Promise<void>;
 }
 
-/** Starts a Runner that stays connected to the hub until stopped. */
-export function startRunner(options: RunnerOptions): Runner {
-  const connection = new HubConnection(options);
+/** Starts a Runner that stays connected to the hub until stopped, registering it on its first start. */
+export async function startRunner(options: RunnerOptions): Promise<Runner> {
+  const hubUrl = new URL(options.hubUrl);
+  const registration = await loadOrRegister(hubUrl, options);
+  const connection = new HubConnection(hubUrl, registration.key, options);
   connection.start();
   return connection;
+}
+
+/**
+ * The Runner's own key, kept in its data directory, or, on its first start, a new one from
+ * registering with the shared key, as GitHub Actions and Buildkite runners do.
+ */
+async function loadOrRegister(hubUrl: URL, options: RunnerOptions): Promise<RegisteredRunner> {
+  const file = path.join(options.dataDir, "runner.json");
+  if (!options.register) {
+    try {
+      return JSON.parse(await readFile(file, "utf8")) as RegisteredRunner;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  const hub: JsonifiedClient<ContractRouterClient<typeof contract>> = createORPCClient(
+    new OpenAPILink(contract, {
+      origin: hubUrl.origin,
+      headers: { "x-api-key": options.registrationKey },
+    }),
+  );
+  const registration = await hub.runners.register({ name: hostname() });
+  await mkdir(options.dataDir, { recursive: true });
+  // Only the operating-system user running the Runner may read its key.
+  await writeFile(file, JSON.stringify(registration), { mode: 0o600 });
+  return registration;
 }
 
 /**
@@ -66,8 +112,10 @@ export function startRunner(options: RunnerOptions): Runner {
  */
 class HubConnection implements Runner {
   readonly #hubUrl: URL;
-  readonly #runnerId: string;
+  /** The Runner's own key, from which the hub takes its identity. */
+  readonly #key: string;
   readonly #heartbeatIntervalMs: number;
+  readonly #onRemoved: (() => void) | undefined;
 
   #heartbeats: ReturnType<typeof setInterval> | undefined;
   #hub: Hub | undefined;
@@ -77,10 +125,15 @@ class HubConnection implements Runner {
   /** Connection attempts since the last one that stayed open long enough; -1 before the first. */
   #retryCount = -1;
 
-  constructor(options: RunnerOptions) {
-    this.#hubUrl = new URL(options.hubUrl);
-    this.#runnerId = options.runnerId;
+  constructor(
+    hubUrl: URL,
+    key: string,
+    options: Pick<RunnerOptions, "heartbeatIntervalMs" | "onRemoved">,
+  ) {
+    this.#hubUrl = hubUrl;
+    this.#key = key;
     this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
+    this.#onRemoved = options.onRemoved;
   }
 
   start(): void {
@@ -179,12 +232,28 @@ class HubConnection implements Runner {
   #openSocket(client: Hub): WebSocket {
     if (this.#hub !== client) throw new Error("The connection was dropped");
     this.#retryCount += 1;
-    const url = new URL(runnerConnectPath(this.#runnerId), this.#hubUrl);
+    const url = new URL(RUNNER_CONNECT_PATH, this.#hubUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     // A socket that does not open in time closes, which ends the attempt, and oRPC tries again.
     const socket = new WebSocket(url, {
+      headers: { "x-api-key": this.#key },
       handshakeTimeout: CONNECT_TIMEOUT_MS,
       closeTimeout: CLOSE_TIMEOUT_MS,
+    });
+    // The hub answers 401 with `RUNNER_NOT_FOUND` to a key it no longer knows: the Runner was
+    // removed, or the hub was reset. Retrying cannot succeed, so the Runner stops, as a GitHub Actions
+    // runner does only on its server's `invalid_client`. Other refusals, such as a proxy's or a hub's
+    // that cannot reach its database, end the attempt, and oRPC tries again.
+    socket.on("unexpected-response", (_request, response) => {
+      // The body is read before the socket is dropped, which would discard it.
+      void text(response)
+        .catch(() => "")
+        .then((body) => {
+          socket.terminate();
+          if (response.statusCode === 401 && isRunnerNotFound(body)) {
+            void this.stop().then(() => this.#onRemoved?.());
+          }
+        });
     });
     let minUptimeTimer: ReturnType<typeof setTimeout> | undefined;
     socket.addEventListener("open", () => {
@@ -197,5 +266,14 @@ class HubConnection implements Runner {
     });
     this.#socket = socket;
     return socket;
+  }
+}
+
+/** Whether a refusal's body is the hub's answer that it does not know the Runner. */
+function isRunnerNotFound(body: string): boolean {
+  try {
+    return (JSON.parse(body) as { code?: unknown }).code === RUNNER_NOT_FOUND;
+  } catch {
+    return false;
   }
 }

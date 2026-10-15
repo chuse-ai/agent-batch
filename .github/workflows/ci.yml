@@ -21,6 +21,8 @@ jobs:
         with:
           cache: true
       - run: vp run ready
+      # The migrations must create everything Better Auth needs.
+      - run: vp run --no-cache hub#db:draft-auth-migration --check
       # The committed database types must be what the migrations produce.
       - run: vp run --no-cache hub#db:types
       - name: Fail if the generated database types differ

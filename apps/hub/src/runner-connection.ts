@@ -11,11 +11,11 @@ import {
 } from "contract";
 
 import { withDatabase } from "./db/database.ts";
-import type { RunnersId } from "./db/types.ts";
+import type { RunnerId } from "./db/types.ts";
 import { recordRunnerSeen, recordRunnerSubscribed } from "./runners.ts";
 
 interface ProtocolContext {
-  runnerId: RunnersId;
+  runnerId: RunnerId;
   ws: WebSocket;
   connectionString: string;
 }
@@ -52,8 +52,9 @@ const protocol = new RPCHandler(
  * sockets once heartbeats stop.
  *
  * This object only holds the connection: sockets, the alarm and hibernation. What the hub records
- * about Runners lives in plain modules, so a hub outside Workers replaces only this class. It has no
- * public methods of its own, so other Workers cannot call into it over RPC.
+ * about Runners lives in plain modules, so a hub outside Workers replaces only this class. Only
+ * Workers bound to its namespace, which only the hub's configuration declares, can reach it: `fetch`
+ * accepts the Runner's WebSocket, and `dropConnections` closes it when the Runner is removed.
  */
 export class RunnerConnection extends DurableObject<Env> {
   /** How long the Runner may go without a heartbeat; tests set `HEARTBEAT_TIMEOUT_MS` shorter. */
@@ -72,6 +73,12 @@ export class RunnerConnection extends DurableObject<Env> {
     // The alarm drops the Runner's sockets if no heartbeat arrives before the timeout.
     await this.ctx.storage.setAlarm(Date.now() + this.#heartbeatTimeoutMs);
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /** Closes the Runner's sockets, for a Runner the hub has removed. */
+  async dropConnections(): Promise<void> {
+    for (const ws of this.ctx.getWebSockets()) ws.close(1008, "Runner removed");
+    await this.ctx.storage.deleteAlarm();
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -121,9 +128,9 @@ export class RunnerConnection extends DurableObject<Env> {
     }
   }
 
-  get #runnerId(): RunnersId {
+  get #runnerId(): RunnerId {
     const name = this.ctx.id.name;
     if (name === undefined) throw new Error("RunnerConnection must be addressed by Runner ID");
-    return name as RunnersId;
+    return name as RunnerId;
   }
 }

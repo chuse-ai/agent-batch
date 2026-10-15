@@ -9,7 +9,7 @@ import { DB_SCHEMA } from "./database.ts";
 
 /** Applies all pending migrations to the database at `connectionString`. Runs in Node, not in the Worker. */
 export async function migrateDatabase(connectionString: string) {
-  const db = new Kysely<unknown>({
+  await using db = new Kysely<unknown>({
     dialect: new PostgresDialect({ pool: new Pool({ connectionString }) }),
   });
   const migrator = new Migrator({
@@ -22,10 +22,6 @@ export async function migrateDatabase(connectionString: string) {
     // Kysely's own tables, which record the applied migrations, live with the hub's.
     migrationTableSchema: DB_SCHEMA,
   });
-  try {
-    const { error } = await migrator.migrateToLatest();
-    if (error) throw error;
-  } finally {
-    await db.destroy();
-  }
+  const { error } = await migrator.migrateToLatest();
+  if (error) throw error;
 }

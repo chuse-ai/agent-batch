@@ -16,6 +16,7 @@
   "dependencies": {
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
+    "@orpc/openapi": "catalog:",
     "contract": "workspace:*",
     "ws": "catalog:"
   },

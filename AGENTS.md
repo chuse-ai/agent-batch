@@ -12,6 +12,12 @@ The five default triage labels, unchanged. See `docs/agents/triage-labels.md`.
 
 Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+## Conventions
+
+- `CONTEXT.md`'s terms apply in code, comments and docs too, not only in the domain model; its _Avoid_ words, such as account, secret and token, mean something else here.
+- After `vp add`, check `package.json`: with `catalogMode: prefer`, it turns `workspace:*` dependencies into `catalog:` entries; set them back to `workspace:*`.
+- After changing a migration, run `vp run hub#db:types`; after upgrading Better Auth, run `vp run hub#db:draft-auth-migration`. CI fails on either otherwise.
+
 <!--VITE PLUS START-->
 
 # Using Vite+, the Unified Toolchain for the Web

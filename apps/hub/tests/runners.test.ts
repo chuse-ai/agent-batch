@@ -10,35 +10,51 @@ beforeAll(() => system.start());
 afterAll(() => system.stop());
 
 test("the hub lists no runners before any connect", async () => {
-  expect(await system.listRunners()).toEqual([]);
+  expect(await system.owner().runners.list()).toEqual([]);
 });
 
 test("a runner that connects is listed under its host's name, seen when it subscribed", async () => {
   const before = Date.now();
-  await system.startRunner();
+  const runnerId = await system.startRunner();
 
   await expect
-    .poll(() => system.findRunner("runner-1"))
-    .toEqual({ id: "runner-1", name: hostname(), lastSeenAt: expect.any(String) });
-  expect(await system.lastSeen("runner-1")).toBeGreaterThanOrEqual(before);
+    .poll(() => system.findRunner(runnerId))
+    .toEqual({ id: runnerId, name: hostname(), lastSeenAt: expect.any(String) });
+  expect(await system.lastSeen(runnerId)).toBeGreaterThanOrEqual(before);
 });
 
-test("a runner that reconnects is listed once, seen again", async () => {
-  const firstSeen = await system.lastSeen("runner-1");
+test("a runner that restarts keeps its identity, listed once and seen again", async () => {
+  const [{ id: runnerId }] = await system.owner().runners.list();
+  const firstSeen = await system.lastSeen(runnerId);
 
   await system.stopRunner();
-  await system.startRunner();
+  expect(await system.startRunner()).toBe(runnerId);
 
-  await expect.poll(() => system.lastSeen("runner-1")).toBeGreaterThan(firstSeen);
-  expect(await system.listRunners()).toEqual([
-    expect.objectContaining({ id: "runner-1", name: hostname() }),
+  await expect.poll(() => system.lastSeen(runnerId)).toBeGreaterThan(firstSeen);
+  expect(await system.owner().runners.list()).toEqual([
+    expect.objectContaining({ id: runnerId, name: hostname() }),
   ]);
 });
 
 test("the hub serves many requests at once", async () => {
   const responses = await Promise.all(
-    Array.from({ length: 20 }, () => system.hub.fetch("/runners")),
+    Array.from({ length: 20 }, () =>
+      system.hub.fetch("/runners", { headers: { cookie: system.ownerCookie() } }),
+    ),
   );
 
   expect(responses.map((response) => response.status)).toEqual(Array(20).fill(200));
+});
+
+test("a removed runner stops when started again, and joins anew with register", async () => {
+  const runnerId = await system.startRunner();
+  await system.stopRunner();
+  await system.owner().runners.delete({ id: runnerId });
+
+  const removed = new Promise<void>((resolve) => system.startRunner({ onRemoved: resolve }));
+  await removed;
+
+  const newRunnerId = await system.startRunner({ register: true });
+  expect(newRunnerId).not.toBe(runnerId);
+  await expect.poll(() => system.findRunner(newRunnerId)).toBeDefined();
 });

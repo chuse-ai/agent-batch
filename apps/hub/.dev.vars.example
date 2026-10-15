@@ -1,0 +1,5 @@
+# Copy to .dev.vars for `wrangler dev`.
+# Signs sessions; generate one with `openssl rand -base64 32`.
+BETTER_AUTH_SECRET=
+# The hub's URL as members reach it.
+HUB_URL=http://localhost:8787

@@ -9,7 +9,7 @@ The company a deployment serves; it owns every job, member, key and host in that
 _Avoid_: tenant, account, workspace, team
 
 **Member**:
-A person in the organization, signed in through the organization's identity provider.
+A person in the organization, signed in with a password or through the organization's identity provider.
 _Avoid_: user, account, seat
 
 **API key**:
