@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0020
+---
+
 # MikroORM for data access, with typed Kysely for hot paths
 
 The hub defines its schema as MikroORM 7 entities (`defineEntity`), generates migrations from them, and reads and writes through MikroORM's entity manager by default. Performance-critical and complex queries use the Kysely builder that MikroORM exposes (`em.getKysely()`), typed from the same entities. MikroORM supplies what plain Kysely leaves to conventions (column naming, write semantics, per-property type conversion, loading relations) while keeping SQL-level control where it matters.

@@ -21,3 +21,13 @@ jobs:
         with:
           cache: true
       - run: vp run ready
+      # The committed database types must be what the migrations produce.
+      - run: vp run --no-cache hub#db:types
+      - name: Fail if the generated database types differ
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --porcelain
+            git diff
+            echo "::error::The hub's database types are out of date. Run \`vp run hub#db:types\` and commit the result."
+            exit 1
+          fi

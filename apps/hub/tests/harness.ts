@@ -1,8 +1,22 @@
 import type { Runner } from "contract";
+import { sql } from "kysely";
 import { expect, inject } from "vite-plus/test";
 import { createTestHarness } from "wrangler";
 
-import { clearDatabase } from "../src/db/migrate.ts";
+import { DB_SCHEMA, withDatabase } from "../src/db/database.ts";
+
+/** Deletes all rows from the hub's tables, keeping the schema and the record of applied migrations. */
+async function clearDatabase(connectionString: string) {
+  await withDatabase(connectionString, async (db) => {
+    const tables = (await db.introspection.getTables()).filter(
+      (table) => table.schema === DB_SCHEMA,
+    );
+    if (tables.length === 0) return;
+    await sql`truncate ${sql.join(tables.map((table) => sql.table(`${table.schema}.${table.name}`)))}`.execute(
+      db,
+    );
+  });
+}
 
 /** Starts the hub and one runner in workerd, against the run's Postgres. */
 export function startSystem(

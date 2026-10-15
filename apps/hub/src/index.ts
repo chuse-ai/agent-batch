@@ -1,30 +1,24 @@
-import type { EntityManager } from "@mikro-orm/postgresql";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { implement } from "@orpc/server";
 import { contract } from "contract";
 import { Hono } from "hono";
+import type { Kysely } from "kysely";
 
-import { RunnerSchema } from "./db/entities.ts";
-import { withEntityManager } from "./db/orm.ts";
+import { withDatabase } from "./db/database.ts";
+import type { Database } from "./db/types.ts";
+import { listRunners } from "./runners.ts";
 
 export { RunnerConnection } from "./runner-connection.ts";
 
 interface ApiContext {
-  em: EntityManager;
+  db: Kysely<Database>;
 }
 
 const os = implement<typeof contract, ApiContext>(contract);
 
 const router = os.router({
   runners: {
-    list: os.runners.list.handler(async ({ context }) => {
-      const runners = await context.em.findAll(RunnerSchema);
-      return runners.map((runner) => ({
-        id: runner.id,
-        name: runner.name,
-        lastSeenAt: runner.lastSeenAt.toISOString(),
-      }));
-    }),
+    list: os.runners.list.handler(({ context }) => listRunners(context.db)),
   },
 });
 
@@ -37,8 +31,8 @@ app.get("/runners/:id/connect", (c) =>
 );
 
 app.all("*", async (c) => {
-  const { matched, response } = await withEntityManager((em) =>
-    api.handle(c.req.raw, { context: { em } }),
+  const { matched, response } = await withDatabase(c.env.HYPERDRIVE.connectionString, (db) =>
+    api.handle(c.req.raw, { context: { db } }),
   );
   return matched ? response : c.notFound();
 });

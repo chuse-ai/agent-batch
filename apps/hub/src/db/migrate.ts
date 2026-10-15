@@ -1,24 +1,31 @@
-import { Migrator } from "@mikro-orm/migrations";
-import { MikroORM } from "@mikro-orm/postgresql";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 
-import { baseConfig } from "./config.ts";
+import { Kysely, PostgresDialect } from "kysely";
+import { FileMigrationProvider, Migrator } from "kysely/migration";
+import { Pool } from "pg";
 
-/** Applies all pending migrations to the database at `clientUrl`. Runs in Node, not in the Worker. */
-export async function migrateDatabase(clientUrl: string) {
-  const orm = await MikroORM.init({ ...baseConfig, clientUrl, extensions: [Migrator] });
+import { DB_SCHEMA } from "./database.ts";
+
+/** Applies all pending migrations to the database at `connectionString`. Runs in Node, not in the Worker. */
+export async function migrateDatabase(connectionString: string) {
+  const db = new Kysely<unknown>({
+    dialect: new PostgresDialect({ pool: new Pool({ connectionString }) }),
+  });
+  const migrator = new Migrator({
+    db,
+    provider: new FileMigrationProvider({
+      fs,
+      path,
+      migrationFolder: path.join(import.meta.dirname, "../../migrations"),
+    }),
+    // Kysely's own tables, which record the applied migrations, live with the hub's.
+    migrationTableSchema: DB_SCHEMA,
+  });
   try {
-    await orm.migrator.up();
+    const { error } = await migrator.migrateToLatest();
+    if (error) throw error;
   } finally {
-    await orm.close();
-  }
-}
-
-/** Deletes all rows from every table, keeping the schema. Runs in Node, for tests. */
-export async function clearDatabase(clientUrl: string) {
-  const orm = await MikroORM.init({ ...baseConfig, clientUrl });
-  try {
-    await orm.schema.clear();
-  } finally {
-    await orm.close();
+    await db.destroy();
   }
 }

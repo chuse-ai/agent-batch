@@ -10,16 +10,14 @@ import {
   type Command,
 } from "contract";
 
-import type { Kysely } from "kysely";
-
-import { DB_SCHEMA } from "./db/config.ts";
-import type { Database } from "./db/entities.ts";
-import { withEntityManager } from "./db/orm.ts";
+import { withDatabase } from "./db/database.ts";
+import type { RunnersId } from "./db/types.ts";
 import { recordRunnerSeen, recordRunnerSubscribed } from "./runners.ts";
 
 interface ProtocolContext {
-  runnerId: string;
+  runnerId: RunnersId;
   ws: WebSocket;
+  connectionString: string;
 }
 
 /** What the hub keeps with each socket, surviving hibernation. */
@@ -36,7 +34,7 @@ const os = implement<typeof runnerProtocol, ProtocolContext>(runnerProtocol);
 const protocol = new RPCHandler(
   os.router({
     commands: os.commands.handler(async ({ input, context }) => {
-      await withDatabase((db) =>
+      await withDatabase(context.connectionString, (db) =>
         recordRunnerSubscribed(db, context.runnerId, input.name, new Date()),
       );
       return new HibernationAsyncIteratorClass<Command>((id) => {
@@ -46,10 +44,6 @@ const protocol = new RPCHandler(
   }),
   { plugins: [new HibernationHandlerPlugin()] },
 );
-
-function withDatabase<T>(work: (db: Kysely<Database>) => Promise<T>): Promise<T> {
-  return withEntityManager((em) => work(em.getKysely<Database>().withSchema(DB_SCHEMA)));
-}
 
 /**
  * Holds one Runner's WebSocket, hibernating while the Runner is idle. The runtime answers the
@@ -81,7 +75,13 @@ export class RunnerConnection extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    await protocol.message(ws, message, { context: { runnerId: this.#runnerId, ws } });
+    await protocol.message(ws, message, {
+      context: {
+        runnerId: this.#runnerId,
+        ws,
+        connectionString: this.env.HYPERDRIVE.connectionString,
+      },
+    });
   }
 
   async webSocketClose(ws: WebSocket): Promise<void> {
@@ -106,15 +106,17 @@ export class RunnerConnection extends DurableObject<Env> {
     // Recorded after the next alarm is set: a failed write is made good by a later one, while an
     // alarm that throws is retried only a few times.
     try {
-      await withDatabase((db) => recordRunnerSeen(db, this.#runnerId, new Date(lastHeartbeat)));
+      await withDatabase(this.env.HYPERDRIVE.connectionString, (db) =>
+        recordRunnerSeen(db, this.#runnerId, new Date(lastHeartbeat)),
+      );
     } catch (error) {
       console.error("Recording the Runner's last heartbeat failed", error);
     }
   }
 
-  get #runnerId(): string {
+  get #runnerId(): RunnersId {
     const name = this.ctx.id.name;
     if (name === undefined) throw new Error("RunnerConnection must be addressed by Runner ID");
-    return name;
+    return name as RunnersId;
   }
 }

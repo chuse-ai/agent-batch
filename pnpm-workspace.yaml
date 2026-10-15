@@ -23,10 +23,6 @@ allowBuilds:
   protobufjs: false
   ssh2: false
 catalog:
-  "@mikro-orm/cli": ^7.2.5
-  "@mikro-orm/core": ^7.2.5
-  "@mikro-orm/migrations": ^7.2.5
-  "@mikro-orm/postgresql": ^7.2.5
   "@orpc/client": 2.0.0-beta.43
   "@orpc/contract": 2.0.0-beta.43
   "@orpc/hibernation": 2.0.0-beta.43
@@ -34,8 +30,12 @@ catalog:
   "@orpc/server": 2.0.0-beta.43
   "@testcontainers/postgresql": ^12.2.1
   "@types/node": ^24
+  "@types/pg": ^8.23.1
   hono: 5.0.0-rc.1
+  kanel: ^4.0.4
+  kanel-kysely: ^4.0.0
   kysely: ^0.29.6
+  pg: ^8.23.1
   typescript: ^7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.1.0
   vite-plus: 1.1.0
