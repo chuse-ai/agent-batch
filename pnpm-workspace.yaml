@@ -55,6 +55,6 @@ catalog:
   typescript: ^7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.1.0
   vite-plus: 1.1.0
-  wrangler: ^4.149.0
+  wrangler: ^4.150.0
   ws: ^8.22.0
   zod: ^4.6.7
