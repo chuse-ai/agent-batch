@@ -18,8 +18,11 @@ function workersLayer(env: Env) {
     settings = readConfig(hubSettings, env);
   } catch (error) {
     // Without them Better Auth would guess the URL from each request, which its docs warn against,
-    // and sign sessions with a development secret; a hub missing either answers no request.
-    throw new HTTPException(503, { message: (error as Error).message });
+    // and sign sessions with a development secret; a hub missing either answers no request. Wrangler
+    // refuses to deploy without them, so this catches a secret removed from a live hub: its callers
+    // learn only that it is unavailable, and the operator finds which setting in the logs.
+    console.error((error as Error).message);
+    throw new HTTPException(503);
   }
   return Layer.mergeAll(
     databaseAndAuthLayer(env.HYPERDRIVE.connectionString, authSettings(settings)),
