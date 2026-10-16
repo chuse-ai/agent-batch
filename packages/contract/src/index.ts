@@ -1,4 +1,4 @@
-import { oc, type } from "@orpc/contract";
+import { error, oc, type } from "@orpc/contract";
 import { openapi } from "@orpc/openapi";
 import * as z from "zod/mini";
 
@@ -37,15 +37,33 @@ const createdKeySchema = z.object({ id: z.string(), key: z.string() });
 export const registeredRunnerSchema = z.object({ id: z.string(), key: z.string() });
 export type RegisteredRunner = z.infer<typeof registeredRunnerSchema>;
 
+/** A call made without a signed-in member or an API key holding the permission it needs. */
+export const Unauthorized = error("UNAUTHORIZED");
+/** A call that acts for the Organization, made before the hub is set up. */
+export const HubNotSetUp = error("SERVICE_UNAVAILABLE", { message: "The hub is not set up" });
+/** A call naming a Runner or an API key the hub does not have. */
+export const NotFound = error("NOT_FOUND");
+
+// Calls a member's role does not allow fail with `FORBIDDEN`, and invalid ones with `BAD_REQUEST`.
+// Neither is declared with a factory: the hub passes `FORBIDDEN` through from Better Auth, and raises
+// `BAD_REQUEST` itself in only one procedure. `FORBIDDEN` becomes a factory once the hub raises it.
+
+/** Calls made by a signed-in member or with an API key. */
+const authenticated = oc.errors({ [Unauthorized.code]: Unauthorized });
+/** Calls that act for the Organization, which exists once the hub is set up. */
+const forOrganization = authenticated.errors({ [HubNotSetUp.code]: HubNotSetUp });
+
 /** The hub's public HTTP API. Callers sign in as a member or send an API key in `x-api-key`. */
 export const contract = {
   runners: {
-    list: oc.meta(openapi({ method: "GET", path: "/runners" })).output(z.array(runnerSchema)),
+    list: authenticated
+      .meta(openapi({ method: "GET", path: "/runners" }))
+      .output(z.array(runnerSchema)),
     /**
      * Registers a new Runner, called with the shared key Runners start with. Returns the Runner's ID
      * and its own key, which the Runner keeps and connects with.
      */
-    register: oc
+    register: forOrganization
       .meta(openapi({ method: "POST", path: "/runners/register" }))
       .input(z.object({ name: z.string() }))
       .output(registeredRunnerSchema),
@@ -55,12 +73,14 @@ export const contract = {
      * with, so revoke that too and create a new one for future hosts; Runners already registered
      * keep working with their own keys.
      */
-    delete: oc
+    delete: authenticated
+      .errors({ FORBIDDEN: {}, [NotFound.code]: NotFound })
       .meta(openapi({ method: "DELETE", path: "/runners/{id}" }))
       .input(z.object({ id: z.string() })),
   },
   apiKeys: {
-    create: oc
+    create: forOrganization
+      .errors({ BAD_REQUEST: {}, FORBIDDEN: {} })
       .meta(openapi({ method: "POST", path: "/api-keys" }))
       .input(
         z.object({
@@ -71,8 +91,12 @@ export const contract = {
         }),
       )
       .output(createdKeySchema),
-    list: oc.meta(openapi({ method: "GET", path: "/api-keys" })).output(z.array(apiKeySchema)),
-    revoke: oc
+    list: forOrganization
+      .errors({ FORBIDDEN: {} })
+      .meta(openapi({ method: "GET", path: "/api-keys" }))
+      .output(z.array(apiKeySchema)),
+    revoke: authenticated
+      .errors({ FORBIDDEN: {}, [NotFound.code]: NotFound })
       .meta(openapi({ method: "DELETE", path: "/api-keys/{id}" }))
       .input(z.object({ id: z.string() })),
   },

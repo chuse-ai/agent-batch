@@ -18,6 +18,7 @@
   "dependencies": {
     "@better-auth/api-key": "catalog:",
     "@hono/node-server": "catalog:",
+    "@orpc/experimental-effect": "catalog:",
     "@orpc/hibernation": "catalog:",
     "@orpc/openapi": "catalog:",
     "@orpc/server": "catalog:",

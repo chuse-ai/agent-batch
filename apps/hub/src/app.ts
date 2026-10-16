@@ -1,91 +1,88 @@
+import { catchORPCErrorCode, type WithEffectContext } from "@orpc/experimental-effect";
+import "@orpc/experimental-effect/extensions/effect";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { ORPCError, implement } from "@orpc/server";
-import { isAPIError } from "better-auth/api";
+import { implement } from "@orpc/server";
 import { contract, RUNNER_CONNECT_PATH, RUNNER_NOT_FOUND } from "contract";
-import { Effect } from "effect";
+import { type Context, Effect } from "effect";
 import { Hono } from "hono";
-import { sql, type Kysely } from "kysely";
+import { sql } from "kysely";
 
-import { getOrganization, requireKey, requireMember, type Auth } from "./auth/auth.ts";
+import { Auth, getOrganization, requireKey, requireMember } from "./auth/auth.ts";
 import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
-import type { ApikeyId, Database, RunnerId } from "./db/types.ts";
-import { DatabaseConnection, RunnerConnections } from "./platform.ts";
+import { Db } from "./db/database.ts";
+import type { ApikeyId, RunnerId } from "./db/types.ts";
+import { RunnerConnections, type HubServices } from "./platform.ts";
 import { findRunnerByKey, registerRunner, removeRunner } from "./runner-registration.ts";
 import { listRunners } from "./runners.ts";
 
-interface ApiContext {
-  auth: Auth;
-  db: Kysely<Database>;
+interface ApiContext extends WithEffectContext<HubServices> {
   headers: Headers;
-  /** Closes the Runner's WebSocket, wherever the platform holds it. */
-  dropRunnerConnection: (runnerId: RunnerId) => Promise<void>;
 }
 
-const os = implement<typeof contract, ApiContext>(contract).use(async ({ next }) => {
-  // oRPC answers an error it does not know with a 500, so Better Auth's errors, which carry their
-  // status, become oRPC's.
-  try {
-    return await next();
-  } catch (error) {
-    if (!isAPIError(error)) throw error;
-    // Better Auth names its statuses as oRPC names its codes, such as `BAD_REQUEST` and `NOT_FOUND`.
-    throw new ORPCError(String(error.status), { message: error.body?.message });
-  }
-});
+const os = implement<typeof contract, ApiContext>(contract);
 
 const router = os.router({
   runners: {
-    list: os.runners.list.handler(async ({ context }) => {
-      await requireMember(context.auth, context.headers);
-      return listRunners(context.db);
+    list: os.runners.list.effect(function* ({ context }) {
+      yield* requireMember(context.headers);
+      return yield* listRunners;
     }),
-    register: os.runners.register.handler(async ({ input, context }) => {
-      await requireKey(context.auth, context.headers, { runner: ["register"] });
-      return registerRunner(context.auth, context.db, input.name);
+    register: os.runners.register.effect(function* ({ input, context }) {
+      yield* requireKey(context.headers, { runner: ["register"] });
+      return yield* registerRunner(input.name);
     }),
-    delete: os.runners.delete.handler(async ({ input, context }) => {
-      await requireMember(context.auth, context.headers);
+    delete: os.runners.delete.effect(function* ({ input, context }) {
+      yield* requireMember(context.headers);
       // The ID enters the hub here.
       const runnerId = input.id as RunnerId;
-      await removeRunner(context.auth, context.db, context.headers, runnerId);
-      await context.dropRunnerConnection(runnerId);
+      yield* removeRunner(context.headers, runnerId);
+      yield* RunnerConnections.use((connections) => connections.drop(runnerId));
     }),
   },
   apiKeys: {
-    create: os.apiKeys.create.handler(async ({ input, context }) => {
-      const member = await requireMember(context.auth, context.headers);
+    create: os.apiKeys.create.effect(function* ({ input, context, errors }) {
+      const member = yield* requireMember(context.headers);
       const grant = GRANTABLE_KEY_PERMISSIONS.authorize(input.permissions);
-      if (!grant.success) throw new ORPCError("BAD_REQUEST", { message: grant.error });
-      const organization = await getOrganization(context.db);
+      if (!grant.success) return yield* Effect.fail(errors.BAD_REQUEST({ message: grant.error }));
+      const organization = yield* getOrganization;
+      const auth = yield* Auth;
       // Without request headers, as a call from the hub itself: Better Auth sets a key's permissions
       // only then, and still checks that the member may create the Organization's keys.
-      const key = await context.auth.api.createApiKey({
-        body: {
-          configId: API_KEY_CONFIG,
-          organizationId: organization.id,
-          userId: member.id,
-          name: input.name,
-          permissions: input.permissions,
-          expiresIn: input.expiresIn,
-        },
-      });
+      const key = yield* auth.call((betterAuth) =>
+        betterAuth.api.createApiKey({
+          body: {
+            configId: API_KEY_CONFIG,
+            organizationId: organization.id,
+            userId: member.id,
+            name: input.name,
+            permissions: input.permissions,
+            expiresIn: input.expiresIn,
+          },
+        }),
+      );
       return { id: key.id, key: key.key };
     }),
-    list: os.apiKeys.list.handler(async ({ context }) => {
-      await requireMember(context.auth, context.headers);
-      const organization = await getOrganization(context.db);
-      const { apiKeys } = await context.auth.api.listApiKeys({
-        headers: context.headers,
-        query: { organizationId: organization.id, configId: API_KEY_CONFIG },
-      });
+    list: os.apiKeys.list.effect(function* ({ context }) {
+      yield* requireMember(context.headers);
+      const organization = yield* getOrganization;
+      const auth = yield* Auth;
+      const { apiKeys } = yield* auth.call((betterAuth) =>
+        betterAuth.api.listApiKeys({
+          headers: context.headers,
+          query: { organizationId: organization.id, configId: API_KEY_CONFIG },
+        }),
+      );
       return apiKeys;
     }),
-    revoke: os.apiKeys.revoke.handler(async ({ input, context }) => {
-      await requireMember(context.auth, context.headers);
-      await context.auth.api.deleteApiKey({
-        headers: context.headers,
-        body: { keyId: input.id, configId: API_KEY_CONFIG },
-      });
+    revoke: os.apiKeys.revoke.effect(function* ({ input, context }) {
+      yield* requireMember(context.headers);
+      const auth = yield* Auth;
+      yield* auth.call((betterAuth) =>
+        betterAuth.api.deleteApiKey({
+          headers: context.headers,
+          body: { keyId: input.id, configId: API_KEY_CONFIG },
+        }),
+      );
     }),
   },
 });
@@ -102,10 +99,7 @@ export const AUTH_CHALLENGE = 'ApiKey realm="agent-batch"';
 /** What the app needs from the platform it runs on. */
 export interface HubPlatform<Bindings> {
   /** Runs `effect` with the platform's services, for a request made with `env`. */
-  run<A>(
-    env: Bindings,
-    effect: Effect.Effect<A, unknown, DatabaseConnection | RunnerConnections>,
-  ): Promise<A>;
+  run<A, E>(env: Bindings, effect: Effect.Effect<A, E, HubServices>): Promise<A>;
   /**
    * Accepts the WebSocket that `request` opens for the Runner `runnerId`, already authenticated, on
    * platforms where upgrade requests reach the app.
@@ -126,40 +120,30 @@ function runnerNotFound(): Response {
  * it. Both hubs accept the socket their own way: on Workers the route hands it to the Runner's
  * Durable Object, and in Docker the server's upgrade hook takes it.
  */
-export function decideRunnerUpgrade(
-  request: Request,
-): Effect.Effect<RunnerId | Response, unknown, DatabaseConnection> {
+export function decideRunnerUpgrade(request: Request) {
   // Only a WebSocket opens here; HTTP's answer to anything else names the protocol to upgrade to.
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
     return Effect.succeed(new Response(null, { status: 426, headers: { upgrade: "websocket" } }));
   }
-  return DatabaseConnection.use((database) =>
-    database.withAuth((auth, db) => authenticateRunner(request.headers, auth, db)),
-  );
+  return authenticateRunner(request.headers);
 }
 
 /** The Runner whose own key `headers` carry, or the hub's answer refusing it. */
-async function authenticateRunner(
-  headers: Headers,
-  auth: Auth,
-  db: Kysely<Database>,
-): Promise<RunnerId | Response> {
-  let keyId: ApikeyId;
-  try {
-    keyId = (await requireKey(auth, headers, { runner: ["connect"] })).id as ApikeyId;
-  } catch (error) {
-    if (!(error instanceof ORPCError)) throw error;
+function authenticateRunner(headers: Headers) {
+  return Effect.gen(function* () {
+    const key = yield* requireKey(headers, { runner: ["connect"] });
+    return (yield* findRunnerByKey(key.id as ApikeyId)) ?? runnerNotFound();
+  }).pipe(
     // Better Auth answers a key it could not check, such as while the database is unreachable, as it
     // answers an unknown key. Only a hub that reaches its database tells a Runner it is unknown;
     // otherwise the Runner retries.
-    try {
-      await sql`select 1`.execute(db);
-    } catch {
-      return new Response(null, { status: 503 });
-    }
-    return runnerNotFound();
-  }
-  return (await findRunnerByKey(db, keyId)) ?? runnerNotFound();
+    catchORPCErrorCode("UNAUTHORIZED", () =>
+      Db.use((database) => database.query((db) => sql`select 1`.execute(db))).pipe(
+        Effect.as(runnerNotFound()),
+        Effect.orElseSucceed(() => new Response(null, { status: 503 })),
+      ),
+    ),
+  );
 }
 
 /** The hub's HTTP API, Better Auth's routes and the Runners' WebSocket endpoint, on any platform. */
@@ -177,7 +161,7 @@ export function createApp<Bindings extends object>(platform: HubPlatform<Binding
   app.on(["GET", "POST"], "/api/auth/*", (c) =>
     platform.run(
       c.env,
-      DatabaseConnection.use((database) => database.withAuth((auth) => auth.handler(c.req.raw))),
+      Auth.use((auth) => auth.call((betterAuth) => betterAuth.handler(c.req.raw))),
     ),
   );
 
@@ -190,20 +174,13 @@ export function createApp<Bindings extends object>(platform: HubPlatform<Binding
   app.all("*", async (c) => {
     const { matched, response } = await platform.run(
       c.env,
-      Effect.gen(function* () {
-        const database = yield* DatabaseConnection;
-        const connections = yield* RunnerConnections;
-        return yield* database.withAuth((auth, db) =>
+      Effect.contextWith((services: Context.Context<HubServices>) =>
+        Effect.promise(() =>
           api.handle(c.req.raw, {
-            context: {
-              auth,
-              db,
-              headers: c.req.raw.headers,
-              dropRunnerConnection: (runnerId) => Effect.runPromise(connections.drop(runnerId)),
-            },
+            context: { "effect/context": services, headers: c.req.raw.headers },
           }),
-        );
-      }),
+        ),
+      ),
     );
     return matched ? response : c.notFound();
   });

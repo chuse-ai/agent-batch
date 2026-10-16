@@ -1,10 +1,13 @@
+import type { WithEffectContext } from "@orpc/experimental-effect";
+import "@orpc/experimental-effect/extensions/effect";
 import { HibernationAsyncIteratorClass, HibernationHandlerPlugin } from "@orpc/hibernation";
 import { implement } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/websocket";
 import { DurableObject } from "cloudflare:workers";
 import { HEARTBEAT_PING, HEARTBEAT_PONG, runnerProtocol, type Command } from "contract";
+import { type Context, Effect } from "effect";
 
-import { withDatabase } from "./db/database.ts";
+import { Db, databaseLayer } from "./db/database.ts";
 import type { RunnerId } from "./db/types.ts";
 import {
   nextHeartbeatCheck,
@@ -14,10 +17,9 @@ import {
 } from "./runners.ts";
 import { heartbeatTimeoutMs, readConfig } from "./settings.ts";
 
-interface ProtocolContext {
+interface ProtocolContext extends WithEffectContext<Db> {
   runnerId: RunnerId;
   ws: WebSocket;
-  connectionString: string;
 }
 
 /** What the hub keeps with each socket, surviving hibernation. */
@@ -30,10 +32,8 @@ const os = implement<typeof runnerProtocol, ProtocolContext>(runnerProtocol);
 
 const protocol = new RPCHandler(
   os.router({
-    commands: os.commands.handler(async ({ input, context }) => {
-      await withDatabase(context.connectionString, (db) =>
-        recordRunnerSubscribed(db, context.runnerId, input.name, new Date()),
-      );
+    commands: os.commands.effect(function* ({ input, context }) {
+      yield* recordRunnerSubscribed(context.runnerId, input.name, new Date());
       return new HibernationAsyncIteratorClass<Command>((id) => {
         context.ws.serializeAttachment({ commandsId: id } satisfies SocketAttachment);
       });
@@ -78,13 +78,14 @@ export class RunnerConnection extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    await protocol.message(ws, message, {
-      context: {
-        runnerId: this.#runnerId,
-        ws,
-        connectionString: this.env.HYPERDRIVE.connectionString,
-      },
-    });
+    const runnerId = this.#runnerId;
+    await this.#withDatabase(
+      Effect.contextWith((services: Context.Context<Db>) =>
+        Effect.promise(() =>
+          protocol.message(ws, message, { context: { "effect/context": services, runnerId, ws } }),
+        ),
+      ),
+    );
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
@@ -116,12 +117,20 @@ export class RunnerConnection extends DurableObject<Env> {
     // Recorded after the next alarm is set: a failed write is made good by a later one, while an
     // alarm that throws is retried only a few times.
     try {
-      await withDatabase(this.env.HYPERDRIVE.connectionString, (db) =>
-        recordRunnerSeen(db, this.#runnerId, new Date(lastHeartbeat)),
-      );
+      await this.#withDatabase(recordRunnerSeen(this.#runnerId, new Date(lastHeartbeat)));
     } catch (error) {
       console.error("Recording the Runner's last heartbeat failed", error);
     }
+  }
+
+  /**
+   * Runs `effect` with a database connection of its own, closed when it ends: Workers forbid using a
+   * connection in any request but the one that opened it.
+   */
+  #withDatabase<A, E>(effect: Effect.Effect<A, E, Db>): Promise<A> {
+    return Effect.runPromise(
+      Effect.provide(effect, databaseLayer(this.env.HYPERDRIVE.connectionString)),
+    );
   }
 
   get #runnerId(): RunnerId {

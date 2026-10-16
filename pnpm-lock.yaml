@@ -176,6 +176,9 @@ catalogs:
     '@orpc/contract':
       specifier: 2.0.0-beta.43
       version: 2.0.0-beta.43
+    '@orpc/experimental-effect':
+      specifier: 2.0.0-beta.43
+      version: 2.0.0-beta.43
     '@orpc/hibernation':
       specifier: 2.0.0-beta.43
       version: 2.0.0-beta.43
@@ -271,6 +274,9 @@ importers:
       '@hono/node-server':
         specifier: 'catalog:'
         version: 2.1.5(hono@5.0.0-rc.1)
+      '@orpc/experimental-effect':
+        specifier: 'catalog:'
+        version: 2.0.0-beta.43(crossws@0.4.15)(effect@4.0.5)
       '@orpc/hibernation':
         specifier: 'catalog:'
         version: 2.0.0-beta.43(crossws@0.4.15)
@@ -1153,6 +1159,11 @@ packages:
 
   '@orpc/contract@2.0.0-beta.43':
     resolution: {integrity: sha512-8IyzPrpdvGhi51G6QHEkoPOvs4AyV0YjhV6OP57W9rUAS9YnPyc/ScKwpsTZsm6dOjPcNBk8R2n+iN2s7m4t4w==}
+
+  '@orpc/experimental-effect@2.0.0-beta.43':
+    resolution: {integrity: sha512-24Lwf6rbiaeidp0d28IG8TosinZInV7f0duHoDAeV9HNccsiXB/7ShL5G/va7tNDaDX+L3N/DU01GybSK5Pl7g==}
+    peerDependencies:
+      effect: '>=4.0.0'
 
   '@orpc/hibernation@2.0.0-beta.43':
     resolution: {integrity: sha512-yMsjqSxAnTTU1wxRo3r4VS447ieNYbxIoIyU0fofGN0IB0zOVMrRIAy/JYXe8iRMbuPv1Vlnx21Jnun1DYzPaA==}
@@ -4406,6 +4417,18 @@ snapshots:
       '@orpc/shared': 2.0.0-beta.43
       '@standard-schema/spec': 1.1.0
 
+  '@orpc/experimental-effect@2.0.0-beta.43(crossws@0.4.15)(effect@4.0.5)':
+    dependencies:
+      '@orpc/client': 2.0.0-beta.43
+      '@orpc/contract': 2.0.0-beta.43
+      '@orpc/json-schema': 2.0.0-beta.43(crossws@0.4.15)
+      '@orpc/server': 2.0.0-beta.43(crossws@0.4.15)
+      '@orpc/shared': 2.0.0-beta.43
+      effect: 4.0.5
+    transitivePeerDependencies:
+      - crossws
+      - fastify
+
   '@orpc/hibernation@2.0.0-beta.43(crossws@0.4.15)':
     dependencies:
       '@orpc/client': 2.0.0-beta.43
@@ -6818,49 +6841,6 @@ snapshots:
     optionalDependencies:
       '@types/node': 24.19.2
       '@vitest/browser-preview': 5.0.3(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(vitest@5.0.3)(yaml@2.9.1)
-      '@vitest/ui': 5.0.3(vitest@5.0.3)
-    transitivePeerDependencies:
-      - '@arethetypeswrong/core'
-      - '@typescript/native-preview'
-      - '@vitejs/devtools'
-      - '@volar/typescript'
-      - '@vue/language-core'
-      - esbuild
-      - jiti
-      - less
-      - msw
-      - publint
-      - sass
-      - sass-embedded
-      - stylus
-      - sugarss
-      - terser
-      - tsx
-      - typescript
-      - unplugin-unused
-      - unrun
-      - vue-tsc
-      - yaml
-
-  vitest@5.0.3(@types/node@24.19.2)(@vitest/browser-preview@5.0.3)(@vitest/ui@5.0.3)(@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1):
-    dependencies:
-      '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.3(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)
-      chai: 6.3.0
-      es-module-lexer: 2.3.2
-      expect-type: 1.4.0
-      magic-string: 1.4.3
-      obug: 2.2.1
-      picomatch: 4.0.7
-      std-env: 4.3.0
-      tinybench: 6.2.2
-      tinyexec: 1.3.1
-      tinyglobby: 0.2.17
-      vite: '@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
-      why-is-node-running: 3.2.1
-    optionalDependencies:
-      '@types/node': 24.19.2
-      '@vitest/browser-preview': 5.0.3(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(vitest@5.0.3)(yaml@2.9.1)
       '@vitest/ui': 5.0.3(vitest@5.0.3)
     transitivePeerDependencies:
       - '@arethetypeswrong/core'

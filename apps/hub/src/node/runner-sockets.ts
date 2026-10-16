@@ -1,11 +1,13 @@
+import type { WithEffectContext } from "@orpc/experimental-effect";
+import "@orpc/experimental-effect/extensions/effect";
 import { implement } from "@orpc/server";
 import { experimental_RPCHandler as RPCHandler } from "@orpc/server/crossws";
-import { HEARTBEAT_PING, HEARTBEAT_PONG, runnerProtocol } from "contract";
+import { HEARTBEAT_PING, HEARTBEAT_PONG, runnerProtocol, type Command } from "contract";
 import type { Message, Peer } from "crossws";
 import { Clock, type Context, Effect } from "effect";
 
+import type { Db } from "../db/database.ts";
 import type { RunnerId } from "../db/types.ts";
-import type { DatabaseConnection } from "../platform.ts";
 import {
   nextHeartbeatCheck,
   recordRunnerSeen,
@@ -13,31 +15,26 @@ import {
   SILENT_RUNNER_CLOSE,
 } from "../runners.ts";
 
-/** The hub's database, as the platform service provides it. */
-type Database = Context.Service.Shape<typeof DatabaseConnection>;
-
-interface ProtocolContext {
+interface ProtocolContext extends WithEffectContext<Db> {
   runnerId: RunnerId;
-  database: Database;
 }
 
 const os = implement<typeof runnerProtocol, ProtocolContext>(runnerProtocol);
 
 const protocol = new RPCHandler(
   os.router({
-    // oxlint-disable-next-line require-yield -- No commands exist yet; jobs will be the first.
-    commands: os.commands.handler(async function* ({ input, context, signal }) {
-      // oRPC handlers are promise-based for now, so this is the one place the service is run here.
-      await Effect.runPromise(
-        context.database.withAuth((_auth, db) =>
-          recordRunnerSubscribed(db, context.runnerId, input.name, new Date()),
-        ),
-      );
-      // The stream stays open until the Runner ends it or its socket closes.
-      await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+    commands: os.commands.effect(function* ({ input, context, signal }) {
+      yield* recordRunnerSubscribed(context.runnerId, input.name, new Date());
+      return commandsUntil(signal);
     }),
   }),
 );
+
+/** The Runner's commands, a stream that stays open until the Runner ends it or its socket closes. */
+// oxlint-disable-next-line require-yield -- No commands exist yet; jobs will be the first.
+async function* commandsUntil(signal: AbortSignal | undefined): AsyncGenerator<Command> {
+  await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+}
 
 /** One Runner's open sockets, each with when its latest heartbeat arrived (0 before the first). */
 type Sockets = Map<Peer, number>;
@@ -54,7 +51,8 @@ type Watch = (runnerId: RunnerId, watch: Effect.Effect<void>) => void;
 export class RunnerSockets {
   readonly #runners = new Map<RunnerId, Sockets>();
   readonly #watch: Watch;
-  readonly #database: Database;
+  /** The services with the hub's database, for the Runners' protocol and the watching fibers. */
+  readonly #services: Context.Context<Db>;
   /** The runtime's clock, which the watching fibers also sleep on. */
   readonly #clock: Clock.Clock;
   readonly #heartbeatTimeoutMs: number;
@@ -63,9 +61,14 @@ export class RunnerSockets {
    * `watch` runs each Runner's watching fiber in a `FiberMap`, which replaces a Runner's fiber when
    * it starts another and interrupts them all when the hub stops.
    */
-  constructor(watch: Watch, database: Database, clock: Clock.Clock, heartbeatTimeoutMs: number) {
+  constructor(
+    watch: Watch,
+    services: Context.Context<Db>,
+    clock: Clock.Clock,
+    heartbeatTimeoutMs: number,
+  ) {
     this.#watch = watch;
-    this.#database = database;
+    this.#services = services;
     this.#clock = clock;
     this.#heartbeatTimeoutMs = heartbeatTimeoutMs;
   }
@@ -91,7 +94,7 @@ export class RunnerSockets {
       return;
     }
     await protocol.message(peer, message, {
-      context: { runnerId, database: this.#database },
+      context: { "effect/context": this.#services, runnerId },
     });
   }
 
@@ -125,14 +128,13 @@ export class RunnerSockets {
   #watchHeartbeats(runnerId: RunnerId, sockets: Sockets): Effect.Effect<void> {
     const timeoutMs = this.#heartbeatTimeoutMs;
     const recordSeen = (seenAt: number) =>
-      this.#database
-        .withAuth((_auth, db) => recordRunnerSeen(db, runnerId, new Date(seenAt)))
-        .pipe(
-          Effect.tapError((error) =>
-            Effect.sync(() => console.error("Recording the Runner's last heartbeat failed", error)),
-          ),
-          Effect.ignore,
-        );
+      recordRunnerSeen(runnerId, new Date(seenAt)).pipe(
+        Effect.provide(this.#services),
+        Effect.tapError((error) =>
+          Effect.sync(() => console.error("Recording the Runner's last heartbeat failed", error)),
+        ),
+        Effect.ignore,
+      );
     return Effect.gen(function* () {
       // As on Workers, a new socket gives the Runner a full timeout before its first heartbeat.
       let next: number | undefined = (yield* Clock.currentTimeMillis) + timeoutMs;

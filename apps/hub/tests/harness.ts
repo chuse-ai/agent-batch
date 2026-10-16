@@ -17,7 +17,7 @@ import { expect, inject, vi } from "vite-plus/test";
 import { createTestHarness } from "wrangler";
 import WebSocket from "ws";
 
-import { DB_SCHEMA, withDatabase } from "../src/db/database.ts";
+import { DB_SCHEMA, openDatabase } from "../src/db/database.ts";
 import { setUpOrganization } from "../src/setup.ts";
 
 /** The hub's API as a caller sees it over JSON, with dates as ISO strings. */
@@ -52,15 +52,12 @@ const HUB_SETTINGS = {
 
 /** Deletes all rows from the hub's tables, keeping the schema and the record of applied migrations. */
 export async function clearDatabase(connectionString: string) {
-  await withDatabase(connectionString, async (db) => {
-    const tables = (await db.introspection.getTables()).filter(
-      (table) => table.schema === DB_SCHEMA,
-    );
-    if (tables.length === 0) return;
-    await sql`truncate ${sql.join(tables.map((table) => sql.table(`${table.schema}.${table.name}`)))}`.execute(
-      db,
-    );
-  });
+  await using db = openDatabase(connectionString);
+  const tables = (await db.introspection.getTables()).filter((table) => table.schema === DB_SCHEMA);
+  if (tables.length === 0) return;
+  await sql`truncate ${sql.join(tables.map((table) => sql.table(`${table.schema}.${table.name}`)))}`.execute(
+    db,
+  );
 }
 
 /** A running hub, as the suite reaches it: over HTTP at `url`. */

@@ -27,6 +27,7 @@ catalog:
   "@hono/node-server": ^2.1.5
   "@orpc/client": 2.0.0-beta.43
   "@orpc/contract": 2.0.0-beta.43
+  "@orpc/experimental-effect": 2.0.0-beta.43
   "@orpc/hibernation": 2.0.0-beta.43
   "@orpc/openapi": 2.0.0-beta.43
   "@orpc/server": 2.0.0-beta.43

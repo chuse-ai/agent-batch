@@ -2,8 +2,8 @@ import { Effect, Layer } from "effect";
 import { HTTPException } from "hono/http-exception";
 
 import { createApp } from "./app.ts";
-import { withAuth } from "./auth/auth.ts";
-import { DatabaseConnection, RunnerConnections } from "./platform.ts";
+import { databaseAndAuthLayer } from "./auth/auth.ts";
+import { RunnerConnections } from "./platform.ts";
 import { authSettings, hubSettings, readConfig, type HubSettings } from "./settings.ts";
 
 export { RunnerConnection } from "./runner-connection.ts";
@@ -21,17 +21,11 @@ function workersLayer(env: Env) {
     // and sign sessions with a development secret; a hub missing either answers no request.
     throw new HTTPException(503, { message: (error as Error).message });
   }
-  const auth = { connectionString: env.HYPERDRIVE.connectionString, ...authSettings(settings) };
   return Layer.mergeAll(
-    Layer.succeed(DatabaseConnection, {
-      withAuth: (work) => Effect.tryPromise({ try: () => withAuth(auth, work), catch: (e) => e }),
-    }),
+    databaseAndAuthLayer(env.HYPERDRIVE.connectionString, authSettings(settings)),
     Layer.succeed(RunnerConnections, {
       drop: (runnerId) =>
-        Effect.tryPromise({
-          try: () => env.RUNNER_CONNECTION.getByName(runnerId).dropConnections(),
-          catch: (e) => e,
-        }),
+        Effect.tryPromise(() => env.RUNNER_CONNECTION.getByName(runnerId).dropConnections()),
     }),
   );
 }
