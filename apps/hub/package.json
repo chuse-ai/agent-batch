@@ -23,13 +23,16 @@
     "@orpc/openapi": "catalog:",
     "@orpc/server": "catalog:",
     "better-auth": "catalog:",
+    "canonicalize": "catalog:",
     "contract": "workspace:*",
     "crossws": "catalog:",
     "effect": "catalog:",
     "hono": "catalog:",
     "hono-problem-details": "catalog:",
+    "json-schema-library": "catalog:",
     "kysely": "catalog:",
     "pg": "catalog:",
+    "uuid": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

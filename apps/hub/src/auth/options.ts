@@ -24,6 +24,7 @@ const statements = {
   apiKey: ["create", "read", "update", "delete"],
   // `register` is for the shared key Runners start with; `connect`, for a Runner's own key.
   runner: ["register", "connect"],
+  job: ["create", "read"],
 } as const;
 
 const ac = createAccessControl(statements);
@@ -32,7 +33,10 @@ const ac = createAccessControl(statements);
  * The permissions a member may grant an API key, as a role whose `authorize` checks a request. A
  * Runner's own key, with `runner: ["connect"]`, is created only by the hub when the Runner registers.
  */
-export const GRANTABLE_KEY_PERMISSIONS = ac.newRole({ runner: ["register"] });
+export const GRANTABLE_KEY_PERMISSIONS = ac.newRole({
+  runner: ["register"],
+  job: ["create", "read"],
+});
 
 /**
  * Better Auth's default organization roles. Owners have every key permission already; admins are
@@ -125,6 +129,10 @@ export function authOptions(settings: AuthSettings) {
           references: "organization",
           // API rate limits are a separate concern; per-key limits would add a write to every request.
           rateLimit: { enabled: false },
+          // Better Auth keeps an Organization's key without the member who created it, so the hub
+          // records them in the key's metadata. Only the hub writes it: Better Auth's routes that
+          // create and update keys are disabled.
+          enableMetadata: true,
         },
         {
           configId: RUNNER_KEY_CONFIG,

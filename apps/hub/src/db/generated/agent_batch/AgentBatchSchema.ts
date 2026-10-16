@@ -3,7 +3,9 @@
 
 import type { default as AccountTable } from "./Account.js";
 import type { default as ApikeyTable } from "./Apikey.js";
+import type { default as InputFileTable } from "./InputFile.js";
 import type { default as InvitationTable } from "./Invitation.js";
+import type { default as JobTable } from "./Job.js";
 import type { default as MemberTable } from "./Member.js";
 import type { default as OrganizationTable } from "./Organization.js";
 import type { default as RateLimitTable } from "./RateLimit.js";
@@ -19,7 +21,11 @@ export default interface AgentBatchSchema {
 
   organization: OrganizationTable;
 
+  inputFile: InputFileTable;
+
   apikey: ApikeyTable;
+
+  job: JobTable;
 
   account: AccountTable;
 

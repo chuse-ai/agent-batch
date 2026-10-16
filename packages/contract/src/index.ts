@@ -1,5 +1,6 @@
 import { error, oc, type } from "@orpc/contract";
 import { openapi } from "@orpc/openapi";
+import isValidFilename from "valid-filename";
 import { en } from "zod/locales";
 import * as z from "zod/mini";
 
@@ -43,16 +44,98 @@ const createdKeySchema = z.object({ id: z.string(), key: z.string() });
 export const registeredRunnerSchema = z.object({ id: z.string(), key: z.string() });
 export type RegisteredRunner = z.infer<typeof registeredRunnerSchema>;
 
+/** Where a job is in its life. A job is accepted as `queued`. */
+export const jobStateSchema = z.enum([
+  "queued",
+  "running",
+  "paused",
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+export type JobState = z.infer<typeof jobStateSchema>;
+
+/** A job as the hub reports it. */
+export const jobSchema = z.object({
+  id: z.string(),
+  state: jobStateSchema,
+  createdAt: z.date(),
+});
+export type Job = z.infer<typeof jobSchema>;
+
+/**
+ * Text as a job keeps it. JSON can carry a lone UTF-16 surrogate, which is not Unicode text and which
+ * neither UTF-8 storage nor canonical JSON accepts, and NUL, which Postgres text cannot hold.
+ */
+const textSchema = z
+  .string()
+  .check(
+    z.refine(
+      (text) => text.isWellFormed() && !text.includes("\0"),
+      "Must be Unicode text without NUL",
+    ),
+  );
+
+/** File systems limit a file name to 255 bytes of UTF-8; `valid-filename` counts UTF-16 units. */
+const MAX_NAME_BYTES = 255;
+
+/** An Input file's name: one file name, without folders, valid wherever a Runner writes it. */
+const fileNameSchema = textSchema.check(
+  z.refine(isValidFilename),
+  z.refine((name) => new TextEncoder().encode(name).length <= MAX_NAME_BYTES),
+);
+
+/** An Input file's content, given inline as UTF-8 text. */
+const inputFileSchema = z.object({ content: textSchema });
+
+/**
+ * Files written into the job's Workspace before its agent starts, by file name, as GitHub's Gists
+ * take them: the agent finds them all in one folder, and no two can share a name. Zod reports a bad
+ * key without the key's own messages, so the record says what a name must be.
+ */
+const inputFilesSchema = z.record(fileNameSchema, inputFileSchema, {
+  error: (issue) =>
+    issue.code === "invalid_key"
+      ? `Must be a file name that is valid on Linux, macOS and Windows, of at most ${MAX_NAME_BYTES} bytes`
+      : undefined,
+});
+
+/**
+ * The result a job must produce: a JSON Schema (2020-12 unless `$schema` says otherwise) describing
+ * a single value, not a list, and referring to nothing outside itself.
+ */
+const outputContractSchema = z.object({ schema: z.record(z.string(), z.unknown()) });
+export type OutputContract = z.infer<typeof outputContractSchema>;
+
+/** A job as a caller submits it. */
+export const jobSubmissionSchema = z.object({
+  /** What the agent is asked to do. */
+  prompt: textSchema.check(z.minLength(1)),
+  /** Defaults to none, so a submission without them is the same job as one with an empty list. */
+  inputFiles: z._default(inputFilesSchema, {}),
+  outputContract: outputContractSchema,
+  /**
+   * Makes submitting safe to retry: submitting again with the same key and the same job returns the
+   * job already accepted, and with a different job is refused.
+   */
+  idempotencyKey: z.optional(textSchema.check(z.minLength(1), z.maxLength(255))),
+});
+export type JobSubmission = z.infer<typeof jobSubmissionSchema>;
+
 /** A call made without a signed-in member or an API key holding the permission it needs. */
 export const Unauthorized = error("UNAUTHORIZED");
 /** A call that acts for the Organization, made before the hub is set up. */
 export const HubNotSetUp = error("SERVICE_UNAVAILABLE", { message: "The hub is not set up" });
-/** A call naming a Runner or an API key the hub does not have. */
+/** A call naming a Runner, an API key or a job the hub does not have. */
 export const NotFound = error("NOT_FOUND");
+/** A job submitted with an idempotency key the Organization already used for a different job. */
+export const IdempotencyKeyReused = error("UNPROCESSABLE_CONTENT", {
+  message: "The idempotency key was already used for a different job",
+});
 
 // Calls a member's role does not allow fail with `FORBIDDEN`, and invalid ones with `BAD_REQUEST`.
 // Neither is declared with a factory: the hub passes `FORBIDDEN` through from Better Auth, and raises
-// `BAD_REQUEST` itself in only one procedure. `FORBIDDEN` becomes a factory once the hub raises it.
+// `BAD_REQUEST` itself in only two procedures. `FORBIDDEN` becomes a factory once the hub raises it.
 
 /**
  * Every call of the API, whose bodies are all JSON. oRPC's client reads only `application/json` as
@@ -110,6 +193,23 @@ export const contract = {
       .errors({ FORBIDDEN: {}, [NotFound.code]: NotFound })
       .meta(openapi({ method: "DELETE", path: "/api-keys/{id}" }))
       .input(z.object({ id: z.string() })),
+  },
+  jobs: {
+    /**
+     * Submits a job, called with an API key holding `job: ["create"]`. The hub checks the Output
+     * contract's schema, refusing one that is invalid, describes a list or refers outside itself.
+     */
+    submit: forOrganization
+      .errors({ BAD_REQUEST: {}, [IdempotencyKeyReused.code]: IdempotencyKeyReused })
+      .meta(openapi({ method: "POST", path: "/jobs", successStatus: 201 }))
+      .input(jobSubmissionSchema)
+      .output(jobSchema),
+    /** Reads a job, called by a signed-in member or with an API key holding `job: ["read"]`. */
+    get: authenticated
+      .errors({ [NotFound.code]: NotFound })
+      .meta(openapi({ method: "GET", path: "/jobs/{id}" }))
+      .input(z.object({ id: z.string() }))
+      .output(jobSchema),
   },
 };
 

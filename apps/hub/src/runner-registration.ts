@@ -9,7 +9,7 @@ import type { ApikeyId, RunnerId } from "./db/types.ts";
 // A Runner starts with a key shared by many Runners and registers once, receiving a key of its own
 // that it keeps and connects with, as GitHub Actions and Buildkite runners do. The hub records which
 // key belongs to which Runner and looks the Runner up by the key, so one Runner cannot connect as
-// another. The link is not kept in the key's metadata, which Better Auth lets clients edit.
+// another. The link is the key's ID in the Runner's row, which the database deletes with the key.
 
 /** Registers a Runner named `name`, returning its ID and its own key. */
 export function registerRunner(name: string) {

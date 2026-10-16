@@ -17,6 +17,7 @@
     "@orpc/json-schema": "catalog:",
     "@orpc/openapi": "catalog:",
     "@orpc/zod": "catalog:",
+    "valid-filename": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

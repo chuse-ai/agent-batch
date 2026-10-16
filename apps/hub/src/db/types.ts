@@ -3,3 +3,5 @@
 export type { default as Database } from "./generated/Database.ts";
 export type { ApikeyId } from "./generated/agent_batch/Apikey.ts";
 export type { RunnerId } from "./generated/agent_batch/Runner.ts";
+export type { JobId } from "./generated/agent_batch/Job.ts";
+export type { InputFileName } from "./generated/agent_batch/InputFile.ts";

@@ -1,7 +1,7 @@
 import { catchORPCErrorCode, type WithEffectContext } from "@orpc/experimental-effect";
 import "@orpc/experimental-effect/extensions/effect";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { implement } from "@orpc/server";
+import { implement, ValidationError } from "@orpc/server";
 import { contract, RUNNER_CONNECT_PATH, RUNNER_NOT_FOUND } from "contract";
 import { type Context, Effect } from "effect";
 import { Hono } from "hono";
@@ -12,10 +12,18 @@ import {
 } from "hono-problem-details";
 import { sql } from "kysely";
 
-import { Auth, getOrganization, requireKey, requireMember } from "./auth/auth.ts";
+import {
+  Auth,
+  getOrganization,
+  type KeyMetadata,
+  requireKey,
+  requireKeyOrMember,
+  requireMember,
+} from "./auth/auth.ts";
 import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
 import { Db } from "./db/database.ts";
-import type { ApikeyId, RunnerId } from "./db/types.ts";
+import type { ApikeyId, JobId, RunnerId } from "./db/types.ts";
+import { getJob, outputContractProblems, submitJob, submitterOf } from "./jobs.ts";
 import { RunnerConnections, type HubServices } from "./platform.ts";
 import { toProblemDetails } from "./problem-details.ts";
 import { findRunnerByKey, registerRunner, removeRunner } from "./runner-registration.ts";
@@ -63,6 +71,7 @@ const router = os.router({
             name: input.name,
             permissions: input.permissions,
             expiresIn: input.expiresIn,
+            metadata: { createdBy: member.id } satisfies KeyMetadata,
           },
         }),
       );
@@ -89,6 +98,28 @@ const router = os.router({
           body: { keyId: input.id, configId: API_KEY_CONFIG },
         }),
       );
+    }),
+  },
+  jobs: {
+    submit: os.jobs.submit.effect(function* ({ input, context, errors }) {
+      const key = yield* requireKey(context.headers, { job: ["create"] });
+      const problems = outputContractProblems(input.outputContract.schema);
+      if (problems.length > 0) {
+        // Raised as oRPC raises invalid input, so the answer lists the problems the same way.
+        const path = ["outputContract", "schema"];
+        const cause = new ValidationError({
+          message: "Input validation failed",
+          issues: problems.map((message) => ({ message, path })),
+          invalidData: input,
+        });
+        return yield* Effect.fail(errors.BAD_REQUEST({ cause }));
+      }
+      return yield* submitJob(input, submitterOf(key));
+    }),
+    get: os.jobs.get.effect(function* ({ input, context }) {
+      yield* requireKeyOrMember(context.headers, { job: ["read"] });
+      // The ID enters the hub here.
+      return yield* getJob(input.id as JobId);
     }),
   },
 });

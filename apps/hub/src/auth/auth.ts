@@ -4,6 +4,7 @@ import { isAPIError } from "better-auth/api";
 import { HubNotSetUp, Unauthorized } from "contract";
 import { Cause, Context, Effect, Layer } from "effect";
 import type { Kysely } from "kysely";
+import * as z from "zod/mini";
 
 import { Db, openScopedDatabase } from "../db/database.ts";
 import type { Database } from "../db/types.ts";
@@ -101,4 +102,19 @@ export function requireKey(headers: Headers, permissions: Record<string, string[
     if (!result.valid || !result.key) return yield* Effect.fail(new Unauthorized());
     return result.key;
   });
+}
+
+/**
+ * What the hub records in the metadata of a key a member creates: the member, whom Better Auth does
+ * not keep for an Organization's key. Better Auth types metadata as any object, so the hub checks it.
+ */
+export const keyMetadataSchema = z.object({ createdBy: z.string() });
+export type KeyMetadata = z.infer<typeof keyMetadataSchema>;
+
+/**
+ * The API key sent in `x-api-key`, verified to hold `permissions`, or else the signed-in member; a
+ * 401 error if neither is given.
+ */
+export function requireKeyOrMember(headers: Headers, permissions: Record<string, string[]>) {
+  return headers.has("x-api-key") ? requireKey(headers, permissions) : requireMember(headers);
 }
