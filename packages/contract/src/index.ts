@@ -1,6 +1,12 @@
 import { error, oc, type } from "@orpc/contract";
 import { openapi } from "@orpc/openapi";
+import { en } from "zod/locales";
 import * as z from "zod/mini";
+
+export * from "./problem-details.ts";
+
+// `zod/mini` leaves messages out unless asked; without them every problem reads "Invalid input".
+z.config(en());
 
 /** A Runner as the hub reports it. */
 export const runnerSchema = z.object({
@@ -48,8 +54,13 @@ export const NotFound = error("NOT_FOUND");
 // Neither is declared with a factory: the hub passes `FORBIDDEN` through from Better Auth, and raises
 // `BAD_REQUEST` itself in only one procedure. `FORBIDDEN` becomes a factory once the hub raises it.
 
+/**
+ * Every call of the API, whose bodies are all JSON. oRPC's client reads only `application/json` as
+ * JSON by itself, and errors arrive as `application/problem+json`.
+ */
+const api = oc.meta(openapi({ responseBodyHint: "json" }));
 /** Calls made by a signed-in member or with an API key. */
-const authenticated = oc.errors({ [Unauthorized.code]: Unauthorized });
+const authenticated = api.errors({ [Unauthorized.code]: Unauthorized });
 /** Calls that act for the Organization, which exists once the hub is set up. */
 const forOrganization = authenticated.errors({ [HubNotSetUp.code]: HubNotSetUp });
 
@@ -111,9 +122,10 @@ export const RUNNER_CONNECT_PATH = "/runners/connect";
 /**
  * The `code` in the body of the hub's 401 when it no longer knows a Runner's key: the Runner was
  * removed, or the hub was reset. A Runner stops only on this answer and retries any other refusal,
- * which may come from a proxy in front of the hub or from a hub that cannot reach its database.
+ * which may come from a proxy in front of the hub or from a hub that cannot reach its database. The
+ * refusal belongs to the Runner protocol, not the API, so it is not a Problem Details document.
  */
-export const RUNNER_NOT_FOUND = "RUNNER_NOT_FOUND";
+export const RUNNER_NOT_FOUND = "runnerNotFound";
 
 /** How often a Runner sends a heartbeat. */
 export const HEARTBEAT_INTERVAL_MS = 30_000;

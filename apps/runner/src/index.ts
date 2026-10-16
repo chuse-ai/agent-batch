@@ -7,14 +7,13 @@ import { createORPCClient } from "@orpc/client";
 import { RetryLinkPlugin, type RetryLinkPluginContext } from "@orpc/client/plugins";
 import { RPCLink } from "@orpc/client/websocket";
 import type { ContractRouterClient } from "@orpc/contract";
-import type { JsonifiedClient } from "@orpc/openapi";
-import { OpenAPILink } from "@orpc/openapi/fetch";
 import {
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_PING,
   HEARTBEAT_PONG,
   HEARTBEAT_TIMEOUT_MS,
   contract,
+  createProblemDetailsLink,
   RUNNER_CONNECT_PATH,
   RUNNER_NOT_FOUND,
   type RegisteredRunner,
@@ -88,8 +87,8 @@ async function loadOrRegister(hubUrl: URL, options: RunnerOptions): Promise<Regi
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
-  const hub: JsonifiedClient<ContractRouterClient<typeof contract>> = createORPCClient(
-    new OpenAPILink(contract, {
+  const hub: ContractRouterClient<typeof contract> = createORPCClient(
+    createProblemDetailsLink(contract, {
       origin: hubUrl.origin,
       headers: { "x-api-key": options.registrationKey },
     }),

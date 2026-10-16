@@ -182,10 +182,19 @@ catalogs:
     '@orpc/hibernation':
       specifier: 2.0.0-beta.43
       version: 2.0.0-beta.43
+    '@orpc/json-schema':
+      specifier: 2.0.0-beta.43
+      version: 2.0.0-beta.43
     '@orpc/openapi':
       specifier: 2.0.0-beta.43
       version: 2.0.0-beta.43
     '@orpc/server':
+      specifier: 2.0.0-beta.43
+      version: 2.0.0-beta.43
+    '@orpc/shared':
+      specifier: 2.0.0-beta.43
+      version: 2.0.0-beta.43
+    '@orpc/zod':
       specifier: 2.0.0-beta.43
       version: 2.0.0-beta.43
     '@testcontainers/postgresql':
@@ -197,6 +206,9 @@ catalogs:
     '@types/pg':
       specifier: ^8.23.1
       version: 8.23.1
+    '@types/statuses':
+      specifier: ^2.0.6
+      version: 2.0.6
     '@types/ws':
       specifier: ^8.18.2
       version: 8.18.2
@@ -233,6 +245,9 @@ catalogs:
     pg:
       specifier: ^8.23.1
       version: 8.23.1
+    statuses:
+      specifier: ^2.0.2
+      version: 2.0.2
     testcontainers:
       specifier: ^12.2.1
       version: 12.2.1
@@ -408,12 +423,27 @@ importers:
 
   packages/contract:
     dependencies:
+      '@orpc/client':
+        specifier: 'catalog:'
+        version: 2.0.0-beta.43
       '@orpc/contract':
         specifier: 'catalog:'
         version: 2.0.0-beta.43
+      '@orpc/json-schema':
+        specifier: 'catalog:'
+        version: 2.0.0-beta.43(crossws@0.4.15)
       '@orpc/openapi':
         specifier: 'catalog:'
         version: 2.0.0-beta.43(crossws@0.4.15)
+      '@orpc/shared':
+        specifier: 'catalog:'
+        version: 2.0.0-beta.43
+      '@orpc/zod':
+        specifier: 'catalog:'
+        version: 2.0.0-beta.43(crossws@0.4.15)(zod@4.6.7)
+      statuses:
+        specifier: 'catalog:'
+        version: 2.0.2
       zod:
         specifier: 'catalog:'
         version: 4.6.7
@@ -421,6 +451,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
+      '@types/statuses':
+        specifier: 'catalog:'
+        version: 2.0.6
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1199,6 +1232,11 @@ packages:
   '@orpc/shared@2.0.0-beta.43':
     resolution: {integrity: sha512-2DP1wex6Aja6dcmudQAiMdZlXcuJXN7/k0dtFAj2Sy0TwQ6Jcr+t7aJk5lmZrosPpEAQTbY/f9kJJW+Cxr35Cw==}
 
+  '@orpc/zod@2.0.0-beta.43':
+    resolution: {integrity: sha512-Ria1YRhR1tX1DT1dQVrQDhy5SZ/hSJcQknh2XZJ2lGa2cZTtvm8jJL4wsWYaZNtDaXpOLx/DBH7RoGDS0ewaPw==}
+    peerDependencies:
+      zod: '>=4.5.0'
+
   '@oxc-project/runtime@0.153.0':
     resolution: {integrity: sha512-rXJvtlsVG4xJNq64hiaUTIatE7jbBgpa6l4QgmEa2jLgT3ULH9scUBkpsC9N1DfmqixLEyT6DuK6OSXozziIlw==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -1623,6 +1661,9 @@ packages:
 
   '@types/ssh2@1.15.6':
     resolution: {integrity: sha512-oGdxhBqcRTwSTKFm+9EiKzkNVYRLEFkcW44lhguvBalGJbWfGnDt/ezwSUZc+SF9m9bMc3VyklNAtp7zICjS5w==}
+
+  '@types/statuses@2.0.6':
+    resolution: {integrity: sha512-xMAgYwceFhRA2zY+XbEA7mxYbA093wdiW8Vu6gZPGWy9cmOyU9XesH1tNcEWsKFd5Vzrqx5T3D38PWx1FIIXkA==}
 
   '@types/ws@8.18.2':
     resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
@@ -3426,6 +3467,10 @@ packages:
     resolution: {integrity: sha512-wPldCk3asibAjQ/kziWQQt1Wh3PgDFpC0XpwclzKcdT1vql6KeYxf5LIt4nlFkUeR8WuphYMKqUA56X4rjbfgQ==}
     engines: {node: '>=10.16.0'}
 
+  statuses@2.0.2:
+    resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
+    engines: {node: '>= 0.8'}
+
   std-env@4.3.0:
     resolution: {integrity: sha512-OtU/EgQ1kIm5KwqQpBC6ZEMXrZRui11w8zgfTWp8cdO9B8OaPsbA8bTHO2P+HNo1VlUTGMVBwPhydu6poeXiag==}
 
@@ -4489,6 +4534,15 @@ snapshots:
       radash: 12.1.1
       type-fest: 5.10.0
 
+  '@orpc/zod@2.0.0-beta.43(crossws@0.4.15)(zod@4.6.7)':
+    dependencies:
+      '@openapi-spec/types': 0.3.0
+      '@orpc/json-schema': 2.0.0-beta.43(crossws@0.4.15)
+      zod: 4.6.7
+    transitivePeerDependencies:
+      - crossws
+      - fastify
+
   '@oxc-project/runtime@0.153.0': {}
 
   '@oxc-project/types@0.153.0': {}
@@ -4787,6 +4841,8 @@ snapshots:
   '@types/ssh2@1.15.6':
     dependencies:
       '@types/node': 18.19.130
+
+  '@types/statuses@2.0.6': {}
 
   '@types/ws@8.18.2':
     dependencies:
@@ -6481,6 +6537,8 @@ snapshots:
     optionalDependencies:
       cpu-features: 0.0.10
       nan: 2.29.0
+
+  statuses@2.0.2: {}
 
   std-env@4.3.0: {}
 

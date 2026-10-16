@@ -7,9 +7,12 @@ import { text } from "node:stream/consumers";
 
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
-import type { JsonifiedClient } from "@orpc/openapi";
-import { OpenAPILink } from "@orpc/openapi/fetch";
-import { contract, RUNNER_CONNECT_PATH, type RegisteredRunner } from "contract";
+import {
+  contract,
+  createProblemDetailsLink,
+  RUNNER_CONNECT_PATH,
+  type RegisteredRunner,
+} from "contract";
 import getPort from "get-port";
 import { sql } from "kysely";
 import { startRunner, type Runner as RunnerProcess } from "runner";
@@ -21,7 +24,7 @@ import { DB_SCHEMA, openDatabase } from "../src/db/database.ts";
 import { setUpOrganization } from "../src/setup.ts";
 
 /** The hub's API as a caller sees it over JSON, with dates as ISO strings. */
-export type HubClient = JsonifiedClient<ContractRouterClient<typeof contract>>;
+export type HubClient = ContractRouterClient<typeof contract>;
 
 /** Which hub the suite runs against: the Worker in workerd, or the Node process its image runs. */
 export type HubTarget = "workers" | "node";
@@ -135,7 +138,7 @@ export function startSystem(
 
   /** A client of the hub's API sending `headers`, such as a member's session or an API key. */
   function client(headers: Record<string, string> = {}): HubClient {
-    return createORPCClient(new OpenAPILink(contract, { origin: url.origin, headers }));
+    return createORPCClient(createProblemDetailsLink(contract, { origin: url.origin, headers }));
   }
 
   /** Signs in with `credentials`, returning the session cookie a member's requests carry. */
@@ -271,7 +274,7 @@ export function startSystem(
     lastSeen: async (id: string) => {
       const listed = await findRunner(id);
       if (!listed) throw new Error(`The hub lists no runner ${id}`);
-      return Date.parse(listed.lastSeenAt);
+      return listed.lastSeenAt.getTime();
     },
   };
 }

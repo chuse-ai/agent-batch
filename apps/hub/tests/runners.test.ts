@@ -19,7 +19,7 @@ test("a runner that connects is listed under its host's name, seen when it subsc
 
   await expect
     .poll(() => system.findRunner(runnerId))
-    .toEqual({ id: runnerId, name: hostname(), lastSeenAt: expect.any(String) });
+    .toEqual({ id: runnerId, name: hostname(), lastSeenAt: expect.any(Date) });
   expect(await system.lastSeen(runnerId)).toBeGreaterThanOrEqual(before);
 });
 

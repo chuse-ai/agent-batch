@@ -13,10 +13,22 @@ test("calls without a member's session or a key are refused", async () => {
   for (const path of ["/runners", "/api-keys"]) {
     expect((await system.hub.fetch(path)).status).toBe(401);
   }
+  // `defined`: the contract declares the error, so the TypeScript client's errors stay typed.
   await expect(system.client().runners.register({ name: "host" })).rejects.toMatchObject({
     code: "UNAUTHORIZED",
+    defined: true,
   });
   expect((await system.connect()).status).toBe(401);
+});
+
+test("API errors are RFC 9457 Problem Details", async () => {
+  const refused = await system.hub.fetch("/runners");
+  expect(refused.headers.get("content-type")).toBe("application/problem+json");
+  expect(await refused.json()).toEqual({ type: "about:blank", title: "Unauthorized", status: 401 });
+
+  const missing = await system.hub.fetch("/no-such-path");
+  expect(missing.headers.get("content-type")).toBe("application/problem+json");
+  expect(await missing.json()).toEqual({ type: "about:blank", title: "Not Found", status: 404 });
 });
 
 test("a member creates and lists keys, and a revoked key is refused at once", async () => {
@@ -86,7 +98,7 @@ test("a key can be created to expire, within Better Auth's limits of a day to a 
   });
 
   const listed = (await owner.apiKeys.list()).find((key) => key.id === id);
-  expect(Date.parse(listed?.expiresAt ?? "")).toBeGreaterThan(Date.now() + day * 1000 - 60_000);
+  expect(listed?.expiresAt?.getTime()).toBeGreaterThan(Date.now() + day * 1000 - 60_000);
   await expect(
     owner.apiKeys.create({
       name: "too short",

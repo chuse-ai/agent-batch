@@ -1,8 +1,14 @@
 import { catchORPCErrorCode, type WithEffectContext } from "@orpc/experimental-effect";
 import "@orpc/experimental-effect/extensions/effect";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { implement } from "@orpc/server";
-import { contract, RUNNER_CONNECT_PATH, RUNNER_NOT_FOUND } from "contract";
+import { implement, ORPCError } from "@orpc/server";
+import {
+  contract,
+  PROBLEM_JSON,
+  RUNNER_CONNECT_PATH,
+  RUNNER_NOT_FOUND,
+  toProblemDetails,
+} from "contract";
 import { type Context, Effect } from "effect";
 import { Hono } from "hono";
 import { sql } from "kysely";
@@ -87,7 +93,7 @@ const router = os.router({
   },
 });
 
-const api = new OpenAPIHandler(router);
+const api = new OpenAPIHandler(router, { customErrorResponseBodyEncoder: toProblemDetails });
 
 /**
  * The challenge every 401 carries, as HTTP requires (RFC 9110, section 15.5.2): callers authenticate
@@ -165,6 +171,14 @@ export function createApp<Bindings extends object>(platform: HubPlatform<Binding
     ),
   );
 
+  // Paths outside the API answer as the API does.
+  app.notFound(() =>
+    Response.json(toProblemDetails(new ORPCError("NOT_FOUND")), {
+      status: 404,
+      headers: { "content-type": PROBLEM_JSON },
+    }),
+  );
+
   app.get(RUNNER_CONNECT_PATH, async (c) => {
     const runner = await platform.run(c.env, decideRunnerUpgrade(c.req.raw));
     if (runner instanceof Response) return runner;
@@ -182,7 +196,10 @@ export function createApp<Bindings extends object>(platform: HubPlatform<Binding
         ),
       ),
     );
-    return matched ? response : c.notFound();
+    if (!matched) return c.notFound();
+    // oRPC labels every JSON body `application/json`; its error bodies are Problem Details.
+    if (response.status >= 400) response.headers.set("content-type", PROBLEM_JSON);
+    return response;
   });
 
   return app;

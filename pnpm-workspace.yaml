@@ -29,11 +29,15 @@ catalog:
   "@orpc/contract": 2.0.0-beta.43
   "@orpc/experimental-effect": 2.0.0-beta.43
   "@orpc/hibernation": 2.0.0-beta.43
+  "@orpc/json-schema": 2.0.0-beta.43
   "@orpc/openapi": 2.0.0-beta.43
   "@orpc/server": 2.0.0-beta.43
+  "@orpc/shared": 2.0.0-beta.43
+  "@orpc/zod": 2.0.0-beta.43
   "@testcontainers/postgresql": ^12.2.1
   "@types/node": ^24
   "@types/pg": ^8.23.1
+  "@types/statuses": ^2.0.6
   "@types/ws": ^8.18.2
   auth: 1.7.8
   better-auth: 1.7.8
@@ -46,6 +50,7 @@ catalog:
   kysely: ^0.29.6
   nf3: ^0.4.2
   pg: ^8.23.1
+  statuses: ^2.0.2
   testcontainers: ^12.2.1
   typescript: ^7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.1.0
