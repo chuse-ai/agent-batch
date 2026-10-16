@@ -12,3 +12,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+  # Base images in the Dockerfile, pinned by tag and digest.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"

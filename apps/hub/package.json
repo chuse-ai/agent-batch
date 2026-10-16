@@ -6,6 +6,8 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
+    "build": "vp pack",
+    "start": "node dist/main.mjs",
     "cf-typegen": "wrangler types",
     "db:types": "node scripts/generate-db-types.ts && vp fmt src/db/generated",
     "db:draft-auth-migration": "node scripts/draft-auth-migration.ts",
@@ -15,11 +17,14 @@
   },
   "dependencies": {
     "@better-auth/api-key": "catalog:",
+    "@hono/node-server": "catalog:",
     "@orpc/hibernation": "catalog:",
     "@orpc/openapi": "catalog:",
     "@orpc/server": "catalog:",
     "better-auth": "catalog:",
     "contract": "workspace:*",
+    "crossws": "catalog:",
+    "effect": "catalog:",
     "hono": "catalog:",
     "kysely": "catalog:",
     "pg": "catalog:"
@@ -30,12 +35,20 @@
     "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
+    "@types/ws": "catalog:",
     "auth": "catalog:",
+    "get-port": "catalog:",
     "kanel": "catalog:",
     "kanel-kysely": "catalog:",
+    "nf3": "catalog:",
     "runner": "workspace:*",
+    "testcontainers": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
-    "wrangler": "catalog:"
+    "wrangler": "catalog:",
+    "ws": "catalog:"
+  },
+  "engines": {
+    "node": ">=26"
   }
 }

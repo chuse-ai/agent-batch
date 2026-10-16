@@ -16,6 +16,7 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
 - `CONTEXT.md`'s terms apply in code, comments and docs too, not only in the domain model; its _Avoid_ words, such as account, secret and token, mean something else here.
 - After `vp add`, check `package.json`: with `catalogMode: prefer`, it turns `workspace:*` dependencies into `catalog:` entries; set them back to `workspace:*`.
+- Add a test only for behaviour a caller depends on, reached through a real interface (ADR 0003). A fix or a new edge case is not by itself a reason for one; a comment can record why code behaves as it does.
 - After changing a migration, run `vp run hub#db:types`; after upgrading Better Auth, run `vp run hub#db:draft-auth-migration`. CI fails on either otherwise.
 
 <!--VITE PLUS START-->

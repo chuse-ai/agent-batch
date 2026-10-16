@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+.git
+.gitignore
+*.md
+# Local settings and their credentials stay out of images.
+**/.env
+**/.env.*
+**/.dev.vars*
+**/.wrangler

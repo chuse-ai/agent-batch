@@ -39,3 +39,20 @@ export async function recordRunnerSeen(
 export function listRunners(db: Kysely<Database>): Promise<Runner[]> {
   return db.selectFrom("runner").select(["id", "name", "lastSeenAt"]).execute();
 }
+
+/**
+ * When the Runner's next heartbeat check is due, given when its latest heartbeat arrived (0 before
+ * the first) and the timeout, or `undefined` if it has gone silent and its sockets are to be dropped.
+ * Both hubs apply it, each scheduling the checks its own way.
+ */
+export function nextHeartbeatCheck(
+  lastHeartbeat: number,
+  timeoutMs: number,
+  now: number,
+): number | undefined {
+  const deadline = lastHeartbeat + timeoutMs;
+  return deadline > now ? deadline : undefined;
+}
+
+/** How the hub closes the sockets of a Runner that has gone silent. */
+export const SILENT_RUNNER_CLOSE = { code: 1001, reason: "No heartbeat" } as const;

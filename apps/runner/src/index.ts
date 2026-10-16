@@ -106,9 +106,9 @@ async function loadOrRegister(hubUrl: URL, options: RunnerOptions): Promise<Regi
  * oRPC reopens the socket and subscribes again whenever the stream ends; the heartbeat timer also
  * restarts the subscription if it ended, and drops the connection if the hub stopped answering.
  *
- * The heartbeat is our own because nothing below provides one: the hub's runtime answers and records
- * only a text message without waking the hub, and oRPC neither sends heartbeats nor notices a silent
- * peer.
+ * The heartbeat is our own because nothing below provides one: on Workers, the hub's runtime answers
+ * and records only a text message without waking the hub, and oRPC neither sends heartbeats nor
+ * notices a silent peer.
  */
 class HubConnection implements Runner {
   readonly #hubUrl: URL;

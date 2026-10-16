@@ -2,17 +2,17 @@ import { HibernationAsyncIteratorClass, HibernationHandlerPlugin } from "@orpc/h
 import { implement } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/websocket";
 import { DurableObject } from "cloudflare:workers";
-import {
-  HEARTBEAT_PING,
-  HEARTBEAT_PONG,
-  HEARTBEAT_TIMEOUT_MS,
-  runnerProtocol,
-  type Command,
-} from "contract";
+import { HEARTBEAT_PING, HEARTBEAT_PONG, runnerProtocol, type Command } from "contract";
 
 import { withDatabase } from "./db/database.ts";
 import type { RunnerId } from "./db/types.ts";
-import { recordRunnerSeen, recordRunnerSubscribed } from "./runners.ts";
+import {
+  nextHeartbeatCheck,
+  recordRunnerSeen,
+  recordRunnerSubscribed,
+  SILENT_RUNNER_CLOSE,
+} from "./runners.ts";
+import { heartbeatTimeoutMs, readConfig } from "./settings.ts";
 
 interface ProtocolContext {
   runnerId: RunnerId;
@@ -25,9 +25,6 @@ interface SocketAttachment {
   /** The commands subscription to send this Runner's commands to. */
   commandsId: string;
 }
-
-/** Variables only tests set, to shorten the protocol's timings; the deployed config declares none. */
-type TestEnv = Env & { HEARTBEAT_TIMEOUT_MS?: string };
 
 const os = implement<typeof runnerProtocol, ProtocolContext>(runnerProtocol);
 
@@ -62,8 +59,7 @@ export class RunnerConnection extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.#heartbeatTimeoutMs =
-      Number((env as TestEnv).HEARTBEAT_TIMEOUT_MS) || HEARTBEAT_TIMEOUT_MS;
+    this.#heartbeatTimeoutMs = readConfig(heartbeatTimeoutMs, env);
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG));
   }
 
@@ -113,9 +109,9 @@ export class RunnerConnection extends DurableObject<Env> {
       0,
       ...sockets.map((ws) => this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0),
     );
-    const deadline = lastHeartbeat + this.#heartbeatTimeoutMs;
-    if (deadline > Date.now()) await this.ctx.storage.setAlarm(deadline);
-    else for (const ws of sockets) ws.close(1001, "No heartbeat");
+    const next = nextHeartbeatCheck(lastHeartbeat, this.#heartbeatTimeoutMs, Date.now());
+    if (next !== undefined) await this.ctx.storage.setAlarm(next);
+    else for (const ws of sockets) ws.close(SILENT_RUNNER_CLOSE.code, SILENT_RUNNER_CLOSE.reason);
     if (lastHeartbeat === 0) return;
     // Recorded after the next alarm is set: a failed write is made good by a later one, while an
     // alarm that throws is retried only a few times.

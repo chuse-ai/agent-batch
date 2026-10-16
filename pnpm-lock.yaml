@@ -167,6 +167,9 @@ catalogs:
     '@better-auth/api-key':
       specifier: 1.7.8
       version: 1.7.8
+    '@hono/node-server':
+      specifier: ^2.1.5
+      version: 2.1.5
     '@orpc/client':
       specifier: 2.0.0-beta.43
       version: 2.0.0-beta.43
@@ -200,6 +203,15 @@ catalogs:
     better-auth:
       specifier: 1.7.8
       version: 1.7.8
+    crossws:
+      specifier: ^0.4.15
+      version: 0.4.15
+    effect:
+      specifier: ^4.0.5
+      version: 4.0.5
+    get-port:
+      specifier: ^7.2.0
+      version: 7.2.0
     hono:
       specifier: 5.0.0-rc.1
       version: 5.0.0-rc.1
@@ -212,9 +224,15 @@ catalogs:
     kysely:
       specifier: ^0.29.6
       version: 0.29.6
+    nf3:
+      specifier: ^0.4.2
+      version: 0.4.2
     pg:
       specifier: ^8.23.1
       version: 8.23.1
+    testcontainers:
+      specifier: ^12.2.1
+      version: 12.2.1
     typescript:
       specifier: ^7.0.2
       version: 7.0.2
@@ -238,6 +256,9 @@ importers:
 
   .:
     devDependencies:
+      node:
+        specifier: runtime:26.12.0
+        version: runtime:26.12.0
       vite-plus:
         specifier: 'catalog:'
         version: 1.1.0(@types/node@26.6.5)(@vitest/ui@5.0.3)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)
@@ -247,21 +268,30 @@ importers:
       '@better-auth/api-key':
         specifier: 'catalog:'
         version: 1.7.8(@better-auth/core@1.7.8(@better-auth/utils@0.5.0)(@better-fetch/fetch@1.3.2)(better-call@1.4.2(zod@4.6.7))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.5.5))(@better-auth/utils@0.5.0)(better-auth@1.7.8(pg@8.23.1)(vitest@5.0.3))(better-call@1.4.2(zod@4.6.7))
+      '@hono/node-server':
+        specifier: 'catalog:'
+        version: 2.1.5(hono@5.0.0-rc.1)
       '@orpc/hibernation':
         specifier: 'catalog:'
-        version: 2.0.0-beta.43
+        version: 2.0.0-beta.43(crossws@0.4.15)
       '@orpc/openapi':
         specifier: 'catalog:'
-        version: 2.0.0-beta.43
+        version: 2.0.0-beta.43(crossws@0.4.15)
       '@orpc/server':
         specifier: 'catalog:'
-        version: 2.0.0-beta.43
+        version: 2.0.0-beta.43(crossws@0.4.15)
       better-auth:
         specifier: 'catalog:'
         version: 1.7.8(pg@8.23.1)(vitest@5.0.3)
       contract:
         specifier: workspace:*
         version: link:../../packages/contract
+      crossws:
+        specifier: 'catalog:'
+        version: 0.4.15
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
       hono:
         specifier: 'catalog:'
         version: 5.0.0-rc.1
@@ -287,18 +317,30 @@ importers:
       '@types/pg':
         specifier: 'catalog:'
         version: 8.23.1
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.2
       auth:
         specifier: 'catalog:'
         version: 1.7.8(@better-fetch/fetch@1.3.2)(better-call@1.4.2(zod@4.6.7))(jose@6.2.12)(kysely@0.29.6)(nanostores@1.5.5)(pg@8.23.1)(supports-color@10.2.2)(vitest@5.0.3)
+      get-port:
+        specifier: 'catalog:'
+        version: 7.2.0
       kanel:
         specifier: 'catalog:'
         version: 4.0.4(@electric-sql/pglite@0.5.9)(prettier@3.9.10)(supports-color@10.2.2)
       kanel-kysely:
         specifier: 'catalog:'
         version: 4.0.0
+      nf3:
+        specifier: 'catalog:'
+        version: 0.4.2
       runner:
         specifier: workspace:*
         version: link:../runner
+      testcontainers:
+        specifier: 'catalog:'
+        version: 12.2.1(supports-color@10.2.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -308,6 +350,9 @@ importers:
       wrangler:
         specifier: 'catalog:'
         version: 4.149.0(@cloudflare/workers-types@5.20261013.1)(@types/node@24.19.2)
+      ws:
+        specifier: 'catalog:'
+        version: 8.22.0
 
   apps/runner:
     dependencies:
@@ -319,7 +364,7 @@ importers:
         version: 2.0.0-beta.43
       '@orpc/openapi':
         specifier: 'catalog:'
-        version: 2.0.0-beta.43
+        version: 2.0.0-beta.43(crossws@0.4.15)
       contract:
         specifier: workspace:*
         version: link:../../packages/contract
@@ -362,7 +407,7 @@ importers:
         version: 2.0.0-beta.43
       '@orpc/openapi':
         specifier: 'catalog:'
-        version: 2.0.0-beta.43
+        version: 2.0.0-beta.43(crossws@0.4.15)
       zod:
         specifier: 'catalog:'
         version: 4.6.7
@@ -880,6 +925,12 @@ packages:
     resolution: {integrity: sha512-wtF6h+DY6M3YaDBPAmvuuA6jV8Sif9MjtOI5euKFWRgCDl5PeDpPsHR9u2l6St5ceY8AZgoNDww5+HvEsXFsGg==}
     engines: {node: '>=6'}
     hasBin: true
+
+  '@hono/node-server@2.1.5':
+    resolution: {integrity: sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      hono: ^4 || ^5.0.0-0
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -2334,6 +2385,14 @@ packages:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
     engines: {node: '>= 8'}
 
+  crossws@0.4.15:
+    resolution: {integrity: sha512-NsUOpDZosz7nyI+qEIl05yaiXOWaXH2oTeM+XBWtiSWZtb5rzcIsl1AST/HzM2jzUn76eFuyrkn83E6iSBRUvw==}
+    peerDependencies:
+      srvx: '>=0.11.5'
+    peerDependenciesMeta:
+      srvx:
+        optional: true
+
   debug@4.3.4:
     resolution: {integrity: sha512-PRWFHuSU3eDtQJPvnNY7Jcket1j0t5OuOsFzPPzsekD52Zl8qUfFIPEiswXqIvHWGVHOgX+7G/vCNNhehwxfkQ==}
     engines: {node: '>=6.0'}
@@ -2402,6 +2461,9 @@ packages:
 
   eastasianwidth@0.2.0:
     resolution: {integrity: sha512-I88TYZWc9XiYHRQ4/3c5rjjfgkjhLyW2luGIheGERbNQ6OY7yTybanSpDXZa8y7VUP9YmDcYa+eyq4ca7iLqWA==}
+
+  effect@4.0.5:
+    resolution: {integrity: sha512-BY4/28NlpOd99yzmV741xbVGmp+1U7tks4oB7F/Png64bTa5tm5eCA6W0RiXsnuLDDoJpjfVSo4Dnq4BZb/89Q==}
 
   electron-to-chromium@1.5.456:
     resolution: {integrity: sha512-8hboqI6xesozteFb8aa7OGknvxUtTeRJLz0FoePysUEh/oWbddykIGdgpEJRbPRg/nIMfBf2DFos+H2MtvJl2A==}
@@ -2524,6 +2586,10 @@ packages:
   get-port@5.1.1:
     resolution: {integrity: sha512-g/Q1aTSDOxFpchXC4i8ZWvxA1lnPqx/JHqcpIw0/LX9T8x/GBbi6YnlN5nhaKIFkT8oFsscUKgDJYxfwfS6QsQ==}
     engines: {node: '>=8'}
+
+  get-port@7.2.0:
+    resolution: {integrity: sha512-afP4W205ONCuMoPBqcR6PSXnzX35KTcJygfJfcp+QY+uwm3p20p1YczWXhlICIzGMCxYBQcySEcOgsJcrkyobg==}
+    engines: {node: '>=16'}
 
   get-tsconfig@4.14.3:
     resolution: {integrity: sha512-++QEw4DIY7WGoukz+/+A/8dGYPT9l9yIadnmSgZ8Rjr3YVSVDipQSO9CdnJo9ePqFqUUqh+wk9uIaoiAwsiPkA==}
@@ -2859,9 +2925,144 @@ packages:
   neo-async@2.6.2:
     resolution: {integrity: sha512-Yd3UES5mWCSqR+qNT93S3UoYUkqAZ9lLg8a7g9rimsWmYGK8cVToA4/sF3RrshdyV3sAGMXVUmpMYOw+dLpOuw==}
 
+  nf3@0.4.2:
+    resolution: {integrity: sha512-6kPsyCzvzb8gnFQFzxuQc/hU9HWEMwn0v9j41Mv7LezeUmgS0qgsGjDbtdrOfqV+kkM8KpYS+aZ6Y0wkWzJzLQ==}
+
   node-releases@2.0.58:
     resolution: {integrity: sha512-BdiKAgbfRlvfMq/XzO/AF9NPmaA8a+YpLAyAFTVFBj3gARrAIfWvNq7Q7NE4se3KgFu0KkrvQMxTS0XVnsGzHg==}
     engines: {node: '>=18'}
+
+  node@runtime:26.12.0:
+    resolution:
+      type: variations
+      variants:
+        - resolution:
+            archive: tarball
+            bin:
+              node: bin/node
+            integrity: sha256-NNMG0T4yGUL2pIxcC4xOeB6GTL4FLPBDhqzpT1RIAz0=
+            type: binary
+            url: https://nodejs.org/download/release/v26.12.0/node-v26.12.0-aix-ppc64.tar.gz
+          targets:
+            - cpu: ppc64
+              os: aix
+        - resolution:
+            archive: tarball
+            bin:
+              node: bin/node
+            integrity: sha256-KhVNSlRYkw4KLWoez2Tt31orPhwTY2tgnC7LBC6MRVM=
+            type: binary
+            url: https://nodejs.org/download/release/v26.12.0/node-v26.12.0-darwin-arm64.tar.gz
+          targets:
+            - cpu: arm64
+              os: darwin
+        - resolution:
+            archive: tarball
+            bin:
+              node: bin/node
+            integrity: sha256-h47O3hkcerwb/wHT+4H37YGqEWEEDboYd2uP+Fk2FLE=
+            type: binary
+            url: https://nodejs.org/download/release/v26.12.0/node-v26.12.0-darwin-x64.tar.gz
+          targets:
+            - cpu: x64
+              os: darwin
+        - resolution:
+            archive: tarball
+            bin:
+              node: bin/node
+            integrity: sha256-7FPJFcP92HhsVoWr0lrj/p+6BpIwf5gR18qq3qG8rwM=
+            type: binary
+            url: https://nodejs.org/download/release/v26.12.0/node-v26.12.0-linux-arm64.tar.gz
+          targets:
+            - cpu: arm64
+              os: linux
+        - resolution:
+            archive: tarball
+            bin:
+              node: bin/node
+            integrity: sha256-+TUIR9BzL4vMFXdBfOU28NYX+T8JPGZNiPCx5w8sxOQ=
+            type: binary
+            url: https://nodejs.org/download/release/v26.12.0/node-v26.12.0-linux-ppc64le.tar.gz
+          targets:
+            - cpu: ppc64le
+              os: linux
+        - resolution:
+            archive: tarball
+            bin:
+              node: bin/node
+            integrity: sha256-dWPgJqwD+VEgIB431gdJYNBmEFNvRarB+l7YfPdKwNQ=
+            type: binary
+            url: https://nodejs.org/download/release/v26.12.0/node-v26.12.0-linux-s390x.tar.gz
+          targets:
+            - cpu: s390x
+              os: linux
+        - resolution:
+            archive: tarball
+            bin:
+              node: bin/node
+            integrity: sha256-/aos9uRMpEOjdLBdsSGCcAGqFnviVnY2i6ub82wOSNE=
+            type: binary
+            url: https://nodejs.org/download/release/v26.12.0/node-v26.12.0-linux-x64-musl.tar.gz
+          targets:
+            - cpu: x64
+              os: linux
+              libc: musl
+        - resolution:
+            archive: tarball
+            bin:
+              node: bin/node
+            integrity: sha256-2fiK9yrTT33fjmcomCnxaY9UtiVPfU9Ut0UxF/8aPSw=
+            type: binary
+            url: https://nodejs.org/download/release/v26.12.0/node-v26.12.0-linux-x64.tar.gz
+          targets:
+            - cpu: x64
+              os: linux
+        - resolution:
+            archive: zip
+            bin:
+              node: node.exe
+            integrity: sha256-zHc7mCliPj1P0TrvOU8FAQ4EWSc/J/syVRUPOKJXer8=
+            prefix: node-v26.12.0-win-arm64
+            type: binary
+            url: https://nodejs.org/download/release/v26.12.0/node-v26.12.0-win-arm64.zip
+          targets:
+            - cpu: arm64
+              os: win32
+        - resolution:
+            archive: zip
+            bin:
+              node: node.exe
+            integrity: sha256-UO+vAaCMUgtLvkmcCajFpcNwACxBnA2dosaBXTBmpFM=
+            prefix: node-v26.12.0-win-x64
+            type: binary
+            url: https://nodejs.org/download/release/v26.12.0/node-v26.12.0-win-x64.zip
+          targets:
+            - cpu: x64
+              os: win32
+        - resolution:
+            archive: tarball
+            bin:
+              node: bin/node
+            integrity: sha256-LnC21a266UVGxNfgHee2TFC/jT2/qtK7B3SULp2pArg=
+            type: binary
+            url: https://unofficial-builds.nodejs.org/download/release/v26.12.0/node-v26.12.0-linux-arm64-musl.tar.gz
+          targets:
+            - cpu: arm64
+              os: linux
+              libc: musl
+        - resolution:
+            archive: tarball
+            bin:
+              node: bin/node
+            integrity: sha256-SLoc3yHmhPE/OLYpX0O/6pUfH/0Ai0z5M2HJZrM/aTg=
+            type: binary
+            url: https://unofficial-builds.nodejs.org/download/release/v26.12.0/node-v26.12.0-linux-x64-musl.tar.gz
+          targets:
+            - cpu: x64
+              os: linux
+              libc: musl
+    version: 26.12.0
+    hasBin: true
 
   normalize-path@3.0.0:
     resolution: {integrity: sha512-6eZs5Ls3WtCisHWp9S2GUy8dqkpGi4BVSz3GaqiE6ezub0512ESztXUwUB6C6IKbQkY2Pnb/mD4WYojCRwcwLA==}
@@ -4020,6 +4221,10 @@ snapshots:
       protobufjs: 7.6.6
       yargs: 17.7.3
 
+  '@hono/node-server@2.1.5(hono@5.0.0-rc.1)':
+    dependencies:
+      hono: 5.0.0-rc.1
+
   '@img/colour@1.1.0': {}
 
   '@img/sharp-darwin-arm64@0.35.5':
@@ -4201,10 +4406,10 @@ snapshots:
       '@orpc/shared': 2.0.0-beta.43
       '@standard-schema/spec': 1.1.0
 
-  '@orpc/hibernation@2.0.0-beta.43':
+  '@orpc/hibernation@2.0.0-beta.43(crossws@0.4.15)':
     dependencies:
       '@orpc/client': 2.0.0-beta.43
-      '@orpc/server': 2.0.0-beta.43
+      '@orpc/server': 2.0.0-beta.43(crossws@0.4.15)
       '@orpc/shared': 2.0.0-beta.43
       '@standard-server/core': 0.10.3
       '@standard-server/peer': 0.10.3
@@ -4212,26 +4417,26 @@ snapshots:
       - crossws
       - fastify
 
-  '@orpc/json-schema@2.0.0-beta.43':
+  '@orpc/json-schema@2.0.0-beta.43(crossws@0.4.15)':
     dependencies:
       '@openapi-spec/types': 0.3.0
       '@orpc/client': 2.0.0-beta.43
       '@orpc/contract': 2.0.0-beta.43
-      '@orpc/server': 2.0.0-beta.43
+      '@orpc/server': 2.0.0-beta.43(crossws@0.4.15)
       '@orpc/shared': 2.0.0-beta.43
       '@standard-schema/spec': 1.1.0
     transitivePeerDependencies:
       - crossws
       - fastify
 
-  '@orpc/openapi@2.0.0-beta.43':
+  '@orpc/openapi@2.0.0-beta.43(crossws@0.4.15)':
     dependencies:
       '@openapi-spec/downgrader': 0.3.0
       '@openapi-spec/types': 0.3.0
       '@orpc/client': 2.0.0-beta.43
       '@orpc/contract': 2.0.0-beta.43
-      '@orpc/json-schema': 2.0.0-beta.43
-      '@orpc/server': 2.0.0-beta.43
+      '@orpc/json-schema': 2.0.0-beta.43(crossws@0.4.15)
+      '@orpc/server': 2.0.0-beta.43(crossws@0.4.15)
       '@orpc/shared': 2.0.0-beta.43
       '@standard-server/core': 0.10.3
       '@standard-server/fetch': 0.10.3
@@ -4240,7 +4445,7 @@ snapshots:
       - crossws
       - fastify
 
-  '@orpc/server@2.0.0-beta.43':
+  '@orpc/server@2.0.0-beta.43(crossws@0.4.15)':
     dependencies:
       '@orpc/client': 2.0.0-beta.43
       '@orpc/contract': 2.0.0-beta.43
@@ -4252,6 +4457,8 @@ snapshots:
       '@standard-server/node': 0.10.3
       '@standard-server/peer': 0.10.3
       cookie: 2.0.1
+    optionalDependencies:
+      crossws: 0.4.15
 
   '@orpc/shared@2.0.0-beta.43':
     dependencies:
@@ -5329,6 +5536,8 @@ snapshots:
       shebang-command: 2.0.0
       which: 2.0.2
 
+  crossws@0.4.15: {}
+
   debug@4.3.4(supports-color@10.2.2):
     dependencies:
       ms: 2.1.2
@@ -5389,6 +5598,8 @@ snapshots:
   dotenv@17.4.2: {}
 
   eastasianwidth@0.2.0: {}
+
+  effect@4.0.5: {}
 
   electron-to-chromium@1.5.456: {}
 
@@ -5515,6 +5726,8 @@ snapshots:
   get-package-type@0.1.0: {}
 
   get-port@5.1.1: {}
+
+  get-port@7.2.0: {}
 
   get-tsconfig@4.14.3:
     dependencies:
@@ -5792,7 +6005,11 @@ snapshots:
 
   neo-async@2.6.2: {}
 
+  nf3@0.4.2: {}
+
   node-releases@2.0.58: {}
+
+  node@runtime:26.12.0: {}
 
   normalize-path@3.0.0: {}
 
@@ -6601,6 +6818,49 @@ snapshots:
     optionalDependencies:
       '@types/node': 24.19.2
       '@vitest/browser-preview': 5.0.3(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(vitest@5.0.3)(yaml@2.9.1)
+      '@vitest/ui': 5.0.3(vitest@5.0.3)
+    transitivePeerDependencies:
+      - '@arethetypeswrong/core'
+      - '@typescript/native-preview'
+      - '@vitejs/devtools'
+      - '@volar/typescript'
+      - '@vue/language-core'
+      - esbuild
+      - jiti
+      - less
+      - msw
+      - publint
+      - sass
+      - sass-embedded
+      - stylus
+      - sugarss
+      - terser
+      - tsx
+      - typescript
+      - unplugin-unused
+      - unrun
+      - vue-tsc
+      - yaml
+
+  vitest@5.0.3(@types/node@24.19.2)(@vitest/browser-preview@5.0.3)(@vitest/ui@5.0.3)(@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1):
+    dependencies:
+      '@types/chai': 5.2.3
+      '@vitest/mocker': 5.0.3(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)
+      chai: 6.3.0
+      es-module-lexer: 2.3.2
+      expect-type: 1.4.0
+      magic-string: 1.4.3
+      obug: 2.2.1
+      picomatch: 4.0.7
+      std-env: 4.3.0
+      tinybench: 6.2.2
+      tinyexec: 1.3.1
+      tinyglobby: 0.2.17
+      vite: '@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
+      why-is-node-running: 3.2.1
+    optionalDependencies:
+      '@types/node': 24.19.2
+      '@vitest/browser-preview': 5.0.3(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(vitest@5.0.3)(yaml@2.9.1)
       '@vitest/ui': 5.0.3(vitest@5.0.3)
     transitivePeerDependencies:
       - '@arethetypeswrong/core'

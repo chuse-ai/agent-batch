@@ -7,8 +7,14 @@ import { Pool } from "pg";
 
 import { DB_SCHEMA } from "./database.ts";
 
-/** Applies all pending migrations to the database at `connectionString`. Runs in Node, not in the Worker. */
-export async function migrateDatabase(connectionString: string) {
+/**
+ * Applies all pending migrations to the database at `connectionString`, from `migrationFolder`. Runs
+ * in Node, not in the Worker.
+ */
+export async function migrateDatabase(
+  connectionString: string,
+  migrationFolder = path.join(import.meta.dirname, "../../migrations"),
+) {
   await using db = new Kysely<unknown>({
     dialect: new PostgresDialect({ pool: new Pool({ connectionString }) }),
   });
@@ -17,7 +23,7 @@ export async function migrateDatabase(connectionString: string) {
     provider: new FileMigrationProvider({
       fs,
       path,
-      migrationFolder: path.join(import.meta.dirname, "../../migrations"),
+      migrationFolder,
     }),
     // Kysely's own tables, which record the applied migrations, live with the hub's.
     migrationTableSchema: DB_SCHEMA,

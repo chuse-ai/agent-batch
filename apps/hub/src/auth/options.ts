@@ -56,8 +56,11 @@ export interface AuthSettings {
   secret: string;
   /** The hub's public URL, which Better Auth uses for its routes and cookies. */
   baseURL: string;
-  /** The request headers that carry the client's IP address, for rate limiting. */
-  ipAddressHeaders: string[];
+  /**
+   * The request headers that carry the client's IP address, for rate limiting; when unset, Better
+   * Auth's default, `x-forwarded-for`.
+   */
+  ipAddressHeaders?: string[] | undefined;
   /** Whether Better Auth's rate limits apply; tests turn them off. */
   rateLimit: boolean;
 }

@@ -96,8 +96,9 @@ export const HEARTBEAT_INTERVAL_MS = 30_000;
 /** After this long without heartbeats (three missed), each side treats the other as gone. */
 export const HEARTBEAT_TIMEOUT_MS = 3 * HEARTBEAT_INTERVAL_MS;
 /**
- * A heartbeat on the wire: the Runner sends `HEARTBEAT_PING` as a text message, and the hub's runtime
- * answers `HEARTBEAT_PONG` without waking the hub. Neither is an oRPC message, so oRPC ignores both.
+ * A heartbeat on the wire: the Runner sends `HEARTBEAT_PING` as a text message, and the hub answers
+ * `HEARTBEAT_PONG`; on Workers the runtime answers without waking the hub. Neither is an oRPC
+ * message, so oRPC ignores both.
  */
 export const HEARTBEAT_PING = "ping";
 export const HEARTBEAT_PONG = "pong";

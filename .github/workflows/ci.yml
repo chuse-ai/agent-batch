@@ -33,3 +33,15 @@ jobs:
             echo "::error::The hub's database types are out of date. Run \`vp run hub#db:types\` and commit the result."
             exit 1
           fi
+
+  hub-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+        with:
+          cache: true
+      # Builds the hub's Docker image and starts it on a fresh database (ADR 0014); the default test
+      # run skips this tagged test (ADR 0003).
+      - run: vp test --project node --tags-filter=container
+        working-directory: apps/hub

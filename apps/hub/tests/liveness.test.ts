@@ -34,7 +34,7 @@ test("a runner that sent heartbeats and then stopped is dropped, last seen at it
     socket.addEventListener("close", (event) => resolve(event.code)),
   );
   const hub: ContractRouterClient<typeof runnerProtocol> = createORPCClient(
-    // The harness returns Miniflare's WebSocket: the same API as the Workers one, typed separately.
+    // The harness returns `ws`'s WebSocket: the same API as the standard one, typed separately.
     new RPCLink({ connect: () => socket as unknown as WebSocket }),
   );
   await hub.commands({ name: "silent runner" });

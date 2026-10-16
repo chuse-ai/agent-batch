@@ -1,14 +1,30 @@
 # hub
 
-The central service every caller and Runner connects to (ADR 0008), on Cloudflare Workers with Postgres through Hyperdrive (ADR 0014).
+The central service every caller and Runner connects to (ADR 0008). It runs on Cloudflare Workers, with Postgres through Hyperdrive, and as a Node process in a Docker image, with Postgres directly (ADR 0014).
 
 ## Settings
 
-For `wrangler dev`, copy `.dev.vars.example` to `.dev.vars`.
+On Workers, set them in `wrangler.jsonc` and as Wrangler secrets; for `wrangler dev`, copy `.dev.vars.example` to `.dev.vars`. In Docker, set them as environment variables.
 
 - `BETTER_AUTH_SECRET` (required): signs members' sessions. Generate one with `openssl rand -base64 32`.
 - `HUB_URL` (required): the hub's public URL, the same setting a Runner dials. Better Auth uses it as its base URL, for its links, its trusted origin and whether session cookies are `Secure`. Without either, the hub answers every request with 503 and says what to set.
-- `CLIENT_IP_HEADER`: the request header carrying the client's IP address, for Better Auth's rate limits; `cf-connecting-ip` on Workers.
+- `CLIENT_IP_HEADER`: the request header carrying the client's IP address, for Better Auth's rate limits; `cf-connecting-ip` on Workers. Unset, Better Auth uses its default, `x-forwarded-for`.
+
+In Docker, also:
+
+- `DATABASE_URL` (required): the hub's Postgres database.
+- `ADMIN_EMAIL` and `ADMIN_PASSWORD`: the owner to create on first start, when no Organization exists (ADR 0015). The hub applies migrations and sets up as it starts, then ignores both.
+- `PORT`: where the hub listens; 8787 by default.
+
+## Docker
+
+Build the image from the repository's root and run one container per hub: it runs as a single process (ADR 0014).
+
+```sh
+docker build . --target hub --tag agent-batch-hub
+```
+
+`vp run build` builds the same Node hub into `dist/`, and `vp run start` runs it.
 
 ## Scripts
 
