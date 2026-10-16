@@ -27,8 +27,10 @@
     "crossws": "catalog:",
     "effect": "catalog:",
     "hono": "catalog:",
+    "hono-problem-details": "catalog:",
     "kysely": "catalog:",
-    "pg": "catalog:"
+    "pg": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@orpc/client": "catalog:",

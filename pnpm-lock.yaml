@@ -191,9 +191,6 @@ catalogs:
     '@orpc/server':
       specifier: 2.0.0-beta.43
       version: 2.0.0-beta.43
-    '@orpc/shared':
-      specifier: 2.0.0-beta.43
-      version: 2.0.0-beta.43
     '@orpc/zod':
       specifier: 2.0.0-beta.43
       version: 2.0.0-beta.43
@@ -206,9 +203,6 @@ catalogs:
     '@types/pg':
       specifier: ^8.23.1
       version: 8.23.1
-    '@types/statuses':
-      specifier: ^2.0.6
-      version: 2.0.6
     '@types/ws':
       specifier: ^8.18.2
       version: 8.18.2
@@ -230,6 +224,9 @@ catalogs:
     hono:
       specifier: 5.0.0-rc.1
       version: 5.0.0-rc.1
+    hono-problem-details:
+      specifier: ^0.12.0
+      version: 0.12.0
     kanel:
       specifier: ^4.0.4
       version: 4.0.4
@@ -245,9 +242,6 @@ catalogs:
     pg:
       specifier: ^8.23.1
       version: 8.23.1
-    statuses:
-      specifier: ^2.0.2
-      version: 2.0.2
     testcontainers:
       specifier: ^12.2.1
       version: 12.2.1
@@ -316,12 +310,18 @@ importers:
       hono:
         specifier: 'catalog:'
         version: 5.0.0-rc.1
+      hono-problem-details:
+        specifier: 'catalog:'
+        version: 0.12.0(@standard-schema/spec@1.1.0)(hono@5.0.0-rc.1)(zod@4.6.7)
       kysely:
         specifier: 'catalog:'
         version: 0.29.6
       pg:
         specifier: 'catalog:'
         version: 8.23.1
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@orpc/client':
         specifier: 'catalog:'
@@ -435,15 +435,9 @@ importers:
       '@orpc/openapi':
         specifier: 'catalog:'
         version: 2.0.0-beta.43(crossws@0.4.15)
-      '@orpc/shared':
-        specifier: 'catalog:'
-        version: 2.0.0-beta.43
       '@orpc/zod':
         specifier: 'catalog:'
         version: 2.0.0-beta.43(crossws@0.4.15)(zod@4.6.7)
-      statuses:
-        specifier: 'catalog:'
-        version: 2.0.2
       zod:
         specifier: 'catalog:'
         version: 4.6.7
@@ -451,9 +445,6 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
-      '@types/statuses':
-        specifier: 'catalog:'
-        version: 2.0.6
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1662,9 +1653,6 @@ packages:
   '@types/ssh2@1.15.6':
     resolution: {integrity: sha512-oGdxhBqcRTwSTKFm+9EiKzkNVYRLEFkcW44lhguvBalGJbWfGnDt/ezwSUZc+SF9m9bMc3VyklNAtp7zICjS5w==}
 
-  '@types/statuses@2.0.6':
-    resolution: {integrity: sha512-xMAgYwceFhRA2zY+XbEA7mxYbA093wdiW8Vu6gZPGWy9cmOyU9XesH1tNcEWsKFd5Vzrqx5T3D38PWx1FIIXkA==}
-
   '@types/ws@8.18.2':
     resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
@@ -2674,6 +2662,37 @@ packages:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
 
+  hono-problem-details@0.12.0:
+    resolution: {integrity: sha512-/0YShwyOSWOqS5vJ66/42pC1krxFPviVSIFuCe2vvCszKnDgslaCR6QEtDOmhB4jeJ5ld5FPeeB8NxtKrMRhWw==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      '@hono/standard-validator': ^0.2.0
+      '@hono/valibot-validator': ^0.6.0
+      '@hono/zod-openapi': ^1.0.0
+      '@hono/zod-validator': ^0.7.5
+      '@opentelemetry/api': ^1.0.0
+      '@standard-schema/spec': ^1.0.0
+      hono: '>=4.13.7'
+      valibot: ^1.0.0
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      '@hono/standard-validator':
+        optional: true
+      '@hono/valibot-validator':
+        optional: true
+      '@hono/zod-openapi':
+        optional: true
+      '@hono/zod-validator':
+        optional: true
+      '@opentelemetry/api':
+        optional: true
+      '@standard-schema/spec':
+        optional: true
+      valibot:
+        optional: true
+      zod:
+        optional: true
+
   hono@5.0.0-rc.1:
     resolution: {integrity: sha512-vTcfU9yAggXh/+ZSi8zpYbzYDubCgFnSt8d5afCAlgkd38dyYb3CVtOh8YWhS65NkEqBseCsTj/P8mceJ+7KNA==}
     engines: {node: '>=22.12.0'}
@@ -3466,10 +3485,6 @@ packages:
   ssh2@1.17.0:
     resolution: {integrity: sha512-wPldCk3asibAjQ/kziWQQt1Wh3PgDFpC0XpwclzKcdT1vql6KeYxf5LIt4nlFkUeR8WuphYMKqUA56X4rjbfgQ==}
     engines: {node: '>=10.16.0'}
-
-  statuses@2.0.2:
-    resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
-    engines: {node: '>= 0.8'}
 
   std-env@4.3.0:
     resolution: {integrity: sha512-OtU/EgQ1kIm5KwqQpBC6ZEMXrZRui11w8zgfTWp8cdO9B8OaPsbA8bTHO2P+HNo1VlUTGMVBwPhydu6poeXiag==}
@@ -4842,8 +4857,6 @@ snapshots:
     dependencies:
       '@types/node': 18.19.130
 
-  '@types/statuses@2.0.6': {}
-
   '@types/ws@8.18.2':
     dependencies:
       '@types/node': 24.19.2
@@ -5846,6 +5859,13 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
+  hono-problem-details@0.12.0(@standard-schema/spec@1.1.0)(hono@5.0.0-rc.1)(zod@4.6.7):
+    dependencies:
+      hono: 5.0.0-rc.1
+    optionalDependencies:
+      '@standard-schema/spec': 1.1.0
+      zod: 4.6.7
+
   hono@5.0.0-rc.1: {}
 
   ieee754@1.2.1: {}
@@ -6537,8 +6557,6 @@ snapshots:
     optionalDependencies:
       cpu-features: 0.0.10
       nan: 2.29.0
-
-  statuses@2.0.2: {}
 
   std-env@4.3.0: {}
 

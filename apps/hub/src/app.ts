@@ -1,16 +1,15 @@
 import { catchORPCErrorCode, type WithEffectContext } from "@orpc/experimental-effect";
 import "@orpc/experimental-effect/extensions/effect";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { implement, ORPCError } from "@orpc/server";
-import {
-  contract,
-  PROBLEM_JSON,
-  RUNNER_CONNECT_PATH,
-  RUNNER_NOT_FOUND,
-  toProblemDetails,
-} from "contract";
+import { implement } from "@orpc/server";
+import { contract, RUNNER_CONNECT_PATH, RUNNER_NOT_FOUND } from "contract";
 import { type Context, Effect } from "effect";
 import { Hono } from "hono";
+import {
+  PROBLEM_JSON_CONTENT_TYPE,
+  problemDetails,
+  problemDetailsHandler,
+} from "hono-problem-details";
 import { sql } from "kysely";
 
 import { Auth, getOrganization, requireKey, requireMember } from "./auth/auth.ts";
@@ -18,6 +17,7 @@ import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
 import { Db } from "./db/database.ts";
 import type { ApikeyId, RunnerId } from "./db/types.ts";
 import { RunnerConnections, type HubServices } from "./platform.ts";
+import { toProblemDetails } from "./problem-details.ts";
 import { findRunnerByKey, registerRunner, removeRunner } from "./runner-registration.ts";
 import { listRunners } from "./runners.ts";
 
@@ -171,13 +171,9 @@ export function createApp<Bindings extends object>(platform: HubPlatform<Binding
     ),
   );
 
-  // Paths outside the API answer as the API does.
-  app.notFound(() =>
-    Response.json(toProblemDetails(new ORPCError("NOT_FOUND")), {
-      status: 404,
-      headers: { "content-type": PROBLEM_JSON },
-    }),
-  );
+  // Paths outside the API, and failures outside oRPC, answer as the API does.
+  app.notFound(() => problemDetails({ status: 404 }).getResponse());
+  app.onError(problemDetailsHandler({ onUnhandledError: (error) => console.error(error) }));
 
   app.get(RUNNER_CONNECT_PATH, async (c) => {
     const runner = await platform.run(c.env, decideRunnerUpgrade(c.req.raw));
@@ -198,7 +194,7 @@ export function createApp<Bindings extends object>(platform: HubPlatform<Binding
     );
     if (!matched) return c.notFound();
     // oRPC labels every JSON body `application/json`; its error bodies are Problem Details.
-    if (response.status >= 400) response.headers.set("content-type", PROBLEM_JSON);
+    if (response.status >= 400) response.headers.set("content-type", PROBLEM_JSON_CONTENT_TYPE);
     return response;
   });
 

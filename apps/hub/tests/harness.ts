@@ -23,7 +23,7 @@ import WebSocket from "ws";
 import { DB_SCHEMA, openDatabase } from "../src/db/database.ts";
 import { setUpOrganization } from "../src/setup.ts";
 
-/** The hub's API as a caller sees it over JSON, with dates as ISO strings. */
+/** The hub's API as a caller sees it through the contract's link. */
 export type HubClient = ContractRouterClient<typeof contract>;
 
 /** Which hub the suite runs against: the Worker in workerd, or the Node process its image runs. */

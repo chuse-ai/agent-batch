@@ -56,7 +56,7 @@ export const NotFound = error("NOT_FOUND");
 
 /**
  * Every call of the API, whose bodies are all JSON. oRPC's client reads only `application/json` as
- * JSON by itself, and errors arrive as `application/problem+json`.
+ * JSON by itself, and errors arrive as Problem Details.
  */
 const api = oc.meta(openapi({ responseBodyHint: "json" }));
 /** Calls made by a signed-in member or with an API key. */

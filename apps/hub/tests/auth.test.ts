@@ -23,12 +23,29 @@ test("calls without a member's session or a key are refused", async () => {
 
 test("API errors are RFC 9457 Problem Details", async () => {
   const refused = await system.hub.fetch("/runners");
-  expect(refused.headers.get("content-type")).toBe("application/problem+json");
+  expect(refused.headers.get("content-type")).toMatch(/^application\/problem\+json/);
   expect(await refused.json()).toEqual({ type: "about:blank", title: "Unauthorized", status: 401 });
 
   const missing = await system.hub.fetch("/no-such-path");
-  expect(missing.headers.get("content-type")).toBe("application/problem+json");
+  expect(missing.headers.get("content-type")).toMatch(/^application\/problem\+json/);
   expect(await missing.json()).toEqual({ type: "about:blank", title: "Not Found", status: 404 });
+
+  // Invalid input names its problems, so a caller can correct the request.
+  const { key } = await system.owner().apiKeys.create({
+    name: "invalid input",
+    permissions: { runner: ["register"] },
+  });
+  const invalid = await system.hub.fetch("/runners/register", {
+    method: "POST",
+    headers: { "x-api-key": key, "content-type": "application/json" },
+    body: "{}",
+  });
+  expect(await invalid.json()).toEqual({
+    type: "about:blank",
+    title: "Bad Request",
+    status: 400,
+    detail: expect.stringContaining("name"),
+  });
 });
 
 test("a member creates and lists keys, and a revoked key is refused at once", async () => {
