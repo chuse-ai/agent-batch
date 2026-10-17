@@ -3,9 +3,8 @@ import path from "node:path";
 
 import { Kysely, PostgresDialect } from "kysely";
 import { FileMigrationProvider, Migrator } from "kysely/migration";
-import { Pool } from "pg";
 
-import { DB_SCHEMA } from "./database.ts";
+import { DB_SCHEMA, openPool } from "./database.ts";
 
 /**
  * Applies all pending migrations to the database at `connectionString`, from `migrationFolder`. Runs
@@ -16,7 +15,7 @@ export async function migrateDatabase(
   migrationFolder = path.join(import.meta.dirname, "../../migrations"),
 ) {
   await using db = new Kysely<unknown>({
-    dialect: new PostgresDialect({ pool: new Pool({ connectionString }) }),
+    dialect: new PostgresDialect({ pool: openPool(connectionString) }),
   });
   const migrator = new Migrator({
     db,

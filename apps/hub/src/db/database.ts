@@ -1,4 +1,5 @@
 import { type Cause, Context, Effect, Layer } from "effect";
+import ensureError from "ensure-error";
 import { Kysely, PostgresDialect } from "kysely";
 import { Pool } from "pg";
 
@@ -34,8 +35,21 @@ export class Db extends Context.Service<
  */
 export function openDatabase(connectionString: string): Kysely<Database> {
   return new Kysely<Database>({
-    dialect: new PostgresDialect({ pool: new Pool({ connectionString }) }),
+    dialect: new PostgresDialect({ pool: openPool(connectionString) }),
   });
+}
+
+/**
+ * A connection pool to the hub's database. An idle connection that fails, as when Postgres restarts,
+ * is reported on the pool; without a listener Node would end the process. The pool drops that
+ * connection, and the next query opens a new one.
+ */
+export function openPool(connectionString: string): Pool {
+  const pool = new Pool({ connectionString });
+  pool.on("error", (error) => {
+    console.error("A database connection failed:", ensureError(error).message);
+  });
+  return pool;
 }
 
 /** Opens a Kysely instance on the hub's database for the scope, closing its connections with it. */
