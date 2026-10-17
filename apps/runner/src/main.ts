@@ -24,6 +24,8 @@ const runner = await startRunner({
   hubUrl,
   registrationKey,
   dataDir: process.env.RUNNER_DATA_DIR ?? "data",
+  maxJobs:
+    process.env.RUNNER_MAX_JOBS === undefined ? undefined : Number(process.env.RUNNER_MAX_JOBS),
   register: command === "register",
   onRemoved: () => {
     // FIXME: re-registering belongs to the CLI. Once it exists, this message names its command

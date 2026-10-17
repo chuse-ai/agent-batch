@@ -1,8 +1,9 @@
 import type { JobSubmission } from "contract";
 import { afterAll, beforeAll, expect, inject, test } from "vite-plus/test";
+import * as z from "zod/mini";
 
 import { DB_SCHEMA, openDatabase } from "../src/db/database.ts";
-import type { JobId } from "../src/db/types.ts";
+import { JobId } from "../src/db/types.ts";
 import { OWNER, startSystem } from "./harness.ts";
 
 const system = startSystem();
@@ -38,10 +39,25 @@ test("a submitted job answers 201 and reads back as queued, with a key or a memb
 
   const response = await submit(key, JSON.stringify(SUBMISSION));
   expect(response.status).toBe(201);
-  const job = (await response.json()) as { id: string; createdAt: string };
-  expect(job).toEqual({ id: expect.any(String), state: "queued", createdAt: expect.any(String) });
+  const job = z.parse(
+    z.looseObject({ id: z.string(), createdAt: z.string() }),
+    await response.json(),
+  );
+  expect(job).toEqual({
+    id: expect.any(String),
+    state: "queued",
+    createdAt: expect.any(String),
+    startedAt: null,
+    endedAt: null,
+  });
 
-  const read = { id: job.id, state: "queued", createdAt: new Date(job.createdAt) };
+  const read = {
+    id: job.id,
+    state: "queued",
+    createdAt: new Date(job.createdAt),
+    startedAt: null,
+    endedAt: null,
+  };
   expect(await client.jobs.get({ id: job.id })).toEqual(read);
   expect(await system.owner().jobs.get({ id: job.id })).toEqual(read);
 });
@@ -81,7 +97,7 @@ test("a job keeps the key that submitted it and the member who created the key, 
       .withSchema(DB_SCHEMA)
       .selectFrom("job")
       .select(["submitterKeyId", "submitterKeyName", "submitterMemberId"])
-      .where("id", "=", id as JobId)
+      .where("id", "=", JobId(id))
       .executeTakeFirst(),
   ).toEqual({
     submitterKeyId: keyId,

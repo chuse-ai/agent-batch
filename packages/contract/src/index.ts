@@ -1,10 +1,20 @@
-import { error, oc, type } from "@orpc/contract";
+import { error, oc } from "@orpc/contract";
 import { openapi } from "@orpc/openapi";
-import isValidFilename from "valid-filename";
 import { en } from "zod/locales";
 import * as z from "zod/mini";
 
+import {
+  inputFilesSchema,
+  jobIdSchema,
+  outputContractSchema,
+  promptSchema,
+  textSchema,
+} from "./job.ts";
+
 export * from "./problem-details.ts";
+export * from "./json-rpc.ts";
+export { type OutputContract } from "./job.ts";
+export * from "./runner-protocol.ts";
 
 // `zod/mini` leaves messages out unless asked; without them every problem reads "Invalid input".
 z.config(en());
@@ -14,8 +24,8 @@ export const runnerSchema = z.object({
   id: z.string(),
   name: z.string(),
   /**
-   * When the hub last heard from the Runner: its latest subscription, or a heartbeat the hub has
-   * recorded. A connected Runner's is at most one heartbeat timeout old.
+   * When the hub last heard from the Runner: its hello, or the latest sync or report the hub
+   * recorded. A connected Runner's is at most one sync interval old.
    */
   lastSeenAt: z.date(),
 });
@@ -55,62 +65,27 @@ export const jobStateSchema = z.enum([
 ]);
 export type JobState = z.infer<typeof jobStateSchema>;
 
+/** Any JSON value, such as a job's result: what its Output contract's schema accepts. */
+export type { JsonValue } from "type-fest";
+
 /** A job as the hub reports it. */
 export const jobSchema = z.object({
-  id: z.string(),
+  id: jobIdSchema,
   state: jobStateSchema,
   createdAt: z.date(),
+  /** When the job's agent started on its Runner, once it has. */
+  startedAt: z.nullable(z.date()),
+  /** When the job's agent finished, once it has. */
+  endedAt: z.nullable(z.date()),
+  /** The job's result, once it has succeeded. */
+  result: z.optional(z.unknown()),
 });
 export type Job = z.infer<typeof jobSchema>;
-
-/**
- * Text as a job keeps it. JSON can carry a lone UTF-16 surrogate, which is not Unicode text and which
- * neither UTF-8 storage nor canonical JSON accepts, and NUL, which Postgres text cannot hold.
- */
-const textSchema = z
-  .string()
-  .check(
-    z.refine(
-      (text) => text.isWellFormed() && !text.includes("\0"),
-      "Must be Unicode text without NUL",
-    ),
-  );
-
-/** File systems limit a file name to 255 bytes of UTF-8; `valid-filename` counts UTF-16 units. */
-const MAX_NAME_BYTES = 255;
-
-/** An Input file's name: one file name, without folders, valid wherever a Runner writes it. */
-const fileNameSchema = textSchema.check(
-  z.refine(isValidFilename),
-  z.refine((name) => new TextEncoder().encode(name).length <= MAX_NAME_BYTES),
-);
-
-/** An Input file's content, given inline as UTF-8 text. */
-const inputFileSchema = z.object({ content: textSchema });
-
-/**
- * Files written into the job's Workspace before its agent starts, by file name, as GitHub's Gists
- * take them: the agent finds them all in one folder, and no two can share a name. Zod reports a bad
- * key without the key's own messages, so the record says what a name must be.
- */
-const inputFilesSchema = z.record(fileNameSchema, inputFileSchema, {
-  error: (issue) =>
-    issue.code === "invalid_key"
-      ? `Must be a file name that is valid on Linux, macOS and Windows, of at most ${MAX_NAME_BYTES} bytes`
-      : undefined,
-});
-
-/**
- * The result a job must produce: a JSON Schema (2020-12 unless `$schema` says otherwise) describing
- * a single value, not a list, and referring to nothing outside itself.
- */
-const outputContractSchema = z.object({ schema: z.record(z.string(), z.unknown()) });
-export type OutputContract = z.infer<typeof outputContractSchema>;
 
 /** A job as a caller submits it. */
 export const jobSubmissionSchema = z.object({
   /** What the agent is asked to do. */
-  prompt: textSchema.check(z.minLength(1)),
+  prompt: promptSchema,
   /** Defaults to none, so a submission without them is the same job as one with an empty list. */
   inputFiles: z._default(inputFilesSchema, {}),
   outputContract: outputContractSchema,
@@ -222,32 +197,18 @@ export const RUNNER_CONNECT_PATH = "/runners/connect";
 /**
  * The `code` in the body of the hub's 401 when it no longer knows a Runner's key: the Runner was
  * removed, or the hub was reset. A Runner stops only on this answer and retries any other refusal,
- * which may come from a proxy in front of the hub or from a hub that cannot reach its database. The
- * refusal belongs to the Runner protocol, not the API, so it is not a Problem Details document.
+ * which may come from a proxy in front of the hub or from a hub that cannot reach its database.
  */
 export const RUNNER_NOT_FOUND = "runnerNotFound";
 
 /** How often a Runner sends a heartbeat. */
 export const HEARTBEAT_INTERVAL_MS = 30_000;
-/** After this long without heartbeats (three missed), each side treats the other as gone. */
+/** After this long without pongs (three missed), a Runner treats the hub as gone and reconnects. */
 export const HEARTBEAT_TIMEOUT_MS = 3 * HEARTBEAT_INTERVAL_MS;
 /**
  * A heartbeat on the wire: the Runner sends `HEARTBEAT_PING` as a text message, and the hub answers
- * `HEARTBEAT_PONG`; on Workers the runtime answers without waking the hub. Neither is an oRPC
- * message, so oRPC ignores both.
+ * `HEARTBEAT_PONG`; on Workers the runtime answers without waking the hub. Neither is a JSON-RPC
+ * message, so both are answered before the protocol sees a message.
  */
 export const HEARTBEAT_PING = "ping";
 export const HEARTBEAT_PONG = "pong";
-
-/** What the hub tells a Runner to do. None exist yet; jobs will be the first. */
-export type Command = never;
-
-/** What a Runner calls on the hub over its WebSocket. */
-export const runnerProtocol = {
-  /**
-   * Registers the Runner and streams the hub's commands to it while the socket stays open; a Runner
-   * subscribes again whenever the stream ends. The output is declared with `type` because the hub
-   * answers with oRPC's hibernating iterator, which a validating `eventIterator` schema would wrap.
-   */
-  commands: oc.input(z.object({ name: z.string() })).output(type<AsyncIteratorObject<Command>>()),
-};

@@ -1,9 +1,9 @@
-import { Clock, Context, Effect, FiberMap, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
 
 import { databaseAndAuthLayer } from "../auth/auth.ts";
 import type { Db } from "../db/database.ts";
-import type { RunnerId } from "../db/types.ts";
 import { RunnerConnections } from "../platform.ts";
+import { hintLiveRunners } from "../runners.ts";
 import { authSettings, type HubSettings } from "../settings.ts";
 import { RunnerSockets } from "./runner-sockets.ts";
 
@@ -20,25 +20,24 @@ export function nodeServices(settings: HubSettings, connectionString: string) {
   // One Better Auth instance serves every request: unlike on Workers, connections and promises may
   // outlive the request that made them.
   const databaseAndAuth = databaseAndAuthLayer(connectionString, authSettings(settings));
-  const sockets = Layer.effect(
+  const socketsLayer = Layer.effect(
     NodeRunnerSockets,
     Effect.gen(function* () {
       const services = yield* Effect.context<Db>();
-      const clock = yield* Clock.Clock;
-      // Each Runner's watching fiber, interrupted when the runtime is disposed.
-      const watches = yield* FiberMap.make<RunnerId>();
-      const watch = yield* FiberMap.runtime(watches)();
       return yield* Effect.acquireRelease(
-        Effect.sync(() => new RunnerSockets(watch, services, clock, settings.heartbeatTimeoutMs)),
-        (sockets) => Effect.sync(() => sockets.closeAll()),
+        Effect.sync(() => new RunnerSockets(services)),
+        (opened) => Effect.sync(() => opened.closeAll()),
       );
     }),
   ).pipe(Layer.provide(databaseAndAuth));
   const connections = Layer.effect(
     RunnerConnections,
     NodeRunnerSockets.use((sockets) =>
-      Effect.succeed({ drop: (runnerId) => Effect.sync(() => sockets.drop(runnerId)) }),
+      Effect.succeed({
+        drop: (runnerId) => Effect.sync(() => sockets.drop(runnerId)),
+        hintLive: hintLiveRunners(async (runnerId) => sockets.requestSync(runnerId)),
+      }),
     ),
-  ).pipe(Layer.provide(sockets));
-  return Layer.mergeAll(databaseAndAuth, sockets, connections);
+  ).pipe(Layer.provide(socketsLayer));
+  return Layer.mergeAll(databaseAndAuth, socketsLayer, connections);
 }

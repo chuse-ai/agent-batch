@@ -1,17 +1,23 @@
 import { createHash } from "node:crypto";
 
 import canonicalize from "canonicalize";
-import { IdempotencyKeyReused, NotFound, type JobSubmission } from "contract";
+import { IdempotencyKeyReused, NotFound, type Job, type JobSubmission } from "contract";
 import { Effect, Struct } from "effect";
 import { compileSchema, isJsonError } from "json-schema-library";
 import { validate as isUuid, v7 as uuidv7 } from "uuid";
 
 import { getOrganization, keyMetadataSchema } from "./auth/auth.ts";
 import { Db } from "./db/database.ts";
-import type { InputFileName, JobId } from "./db/types.ts";
+import { ApikeyId, InputFileName, JobId, type JobRow, MemberId } from "./db/types.ts";
 
 /** What the hub reports of a job. */
-const JOB_COLUMNS = ["id", "state", "createdAt"] as const;
+const JOB_COLUMNS = ["id", "state", "createdAt", "startedAt", "endedAt", "result"] as const;
+
+/** A job as the API reports it: its result only once it has succeeded. */
+function toApiJob(job: Pick<JobRow, (typeof JOB_COLUMNS)[number]>): Job {
+  const { result, ...rest } = job;
+  return job.state === "succeeded" ? { ...rest, result } : rest;
+}
 
 /**
  * What is wrong with an Output contract's schema, as messages: text that is not Unicode, then
@@ -49,15 +55,19 @@ export function outputContractProblems(schema: Record<string, unknown>): string[
 
 /** Who submitted a job: the API key and the member who created it, copied as they were. */
 interface Submitter {
-  keyId: string;
+  keyId: ApikeyId;
   keyName: string | null;
-  memberId: string;
+  memberId: MemberId;
 }
 
 /** The submitter of a job sent with `key`, as Better Auth verified it. */
 export function submitterOf(key: { id: string; name: string | null; metadata: unknown }) {
   const { createdBy } = keyMetadataSchema.parse(key.metadata);
-  return { keyId: key.id, keyName: key.name, memberId: createdBy } satisfies Submitter;
+  return {
+    keyId: ApikeyId(key.id),
+    keyName: key.name,
+    memberId: MemberId(createdBy),
+  } satisfies Submitter;
 }
 
 /**
@@ -88,7 +98,7 @@ export function submitJob(submission: JobSubmission, submitter: Submitter) {
         const inserted = await trx
           .insertInto("job")
           .values({
-            id: uuidv7() as JobId,
+            id: JobId(uuidv7()),
             organizationId: organization.id,
             state: "queued",
             prompt: submission.prompt,
@@ -121,7 +131,7 @@ export function submitJob(submission: JobSubmission, submitter: Submitter) {
             .values(
               inputFiles.map(([name, file]) => ({
                 jobId: inserted.id,
-                name: name as InputFileName,
+                name: InputFileName(name),
                 content: file.content,
               })),
             )
@@ -131,7 +141,7 @@ export function submitJob(submission: JobSubmission, submitter: Submitter) {
       }),
     );
     if (job.contentHash !== contentHash) return yield* Effect.fail(new IdempotencyKeyReused());
-    return Struct.pick(job, JOB_COLUMNS);
+    return toApiJob(Struct.pick(job, JOB_COLUMNS));
   });
 }
 
@@ -145,6 +155,6 @@ export function getJob(jobId: JobId) {
       db.selectFrom("job").select(JOB_COLUMNS).where("id", "=", jobId).executeTakeFirst(),
     );
     if (!job) return yield* Effect.fail(new NotFound());
-    return job;
+    return toApiJob(job);
   });
 }

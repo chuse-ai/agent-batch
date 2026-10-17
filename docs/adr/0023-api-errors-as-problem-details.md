@@ -6,7 +6,7 @@ oRPC supports this through its own hooks and plugins: the handler's error body e
 
 `detail` tells a caller what the contract makes public. Invalid input lists its problems, as oRPC's validation recipe does; an error the contract declares for the call shows its own message; any other error answers with its title alone, so the hub's internals, such as its own output failing its schema, stay private.
 
-The Runner protocol is not part of the API: both ends are ours. The hub's refusal of a Runner it does not know keeps its own small body, a 401 with `{ "code": "runnerNotFound" }`.
+The Runner protocol is not part of the API: both ends are ours. The hub's refusals of a Runner before its socket opens, as unknown (401) or for offering no protocol version it supports (400, ADR 0026), are Problem Details too, each with a `code`, so a Runner reads every refusal one way.
 
 ## Considered options
 

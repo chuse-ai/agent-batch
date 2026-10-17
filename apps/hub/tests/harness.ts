@@ -11,7 +11,8 @@ import {
   contract,
   createProblemDetailsLink,
   RUNNER_CONNECT_PATH,
-  type RegisteredRunner,
+  RUNNER_PROTOCOL_VERSION,
+  registeredRunnerSchema,
 } from "contract";
 import getPort from "get-port";
 import { sql } from "kysely";
@@ -19,6 +20,7 @@ import { startRunner, type Runner as RunnerProcess } from "runner";
 import { expect, inject, vi } from "vite-plus/test";
 import { createTestHarness } from "wrangler";
 import WebSocket from "ws";
+import * as z from "zod/mini";
 
 import { DB_SCHEMA, openDatabase } from "../src/db/database.ts";
 import { setUpOrganization } from "../src/setup.ts";
@@ -164,11 +166,14 @@ export function startSystem(
   }
 
   /**
-   * Opens a Runner's WebSocket as a Runner does, sending `key` if given: the open socket, or the
-   * hub's response refusing it.
+   * Opens a Runner's WebSocket as a Runner does, sending `key` if given and offering `versions` of
+   * the protocol: the open socket, or the hub's response refusing it.
    */
-  function openSocket(key?: string): Promise<WebSocket | Response> {
-    const socket = new WebSocket(new URL(RUNNER_CONNECT_PATH, url).href, {
+  function openSocket(
+    key?: string,
+    versions: string[] = [RUNNER_PROTOCOL_VERSION],
+  ): Promise<WebSocket | Response> {
+    const socket = new WebSocket(new URL(RUNNER_CONNECT_PATH, url).href, versions, {
       headers: key ? { "x-api-key": key } : {},
     });
     return new Promise((resolve, reject) => {
@@ -187,9 +192,12 @@ export function startSystem(
     });
   }
 
-  /** Asks to open a Runner's WebSocket, sending `key` if given, and returns the hub's answer. */
-  async function connect(key?: string): Promise<Response> {
-    const answer = await openSocket(key);
+  /**
+   * Asks to open a Runner's WebSocket, sending `key` if given and offering `versions`, and returns
+   * the hub's answer.
+   */
+  async function connect(key?: string, versions?: string[]): Promise<Response> {
+    const answer = await openSocket(key, versions);
     if (answer instanceof Response) return answer;
     answer.close(1000);
     return new Response(null, { status: 101 });
@@ -249,9 +257,10 @@ export function startSystem(
         heartbeatIntervalMs: options.heartbeatIntervalMs,
         ...runnerOptions,
       });
-      const registration = JSON.parse(
-        await readFile(path.join(runnerDataDir, "runner.json"), "utf8"),
-      ) as RegisteredRunner;
+      const registration = z.parse(
+        registeredRunnerSchema,
+        JSON.parse(await readFile(path.join(runnerDataDir, "runner.json"), "utf8")),
+      );
       return registration.id;
     },
     /** Stops the Runner, closing its connection. */

@@ -1,15 +1,15 @@
-import { HEARTBEAT_TIMEOUT_MS } from "contract";
-import { Cause, Config, ConfigProvider, Effect, Exit, Option, Redacted } from "effect";
+import { Cause, Config, ConfigProvider, Effect, Exit, Option, Redacted, Schema } from "effect";
 
 import type { AuthSettings } from "./auth/options.ts";
 
 // The hub's settings, defined once for Workers and Docker: on Workers they come from the Worker's
 // environment, in Docker from the process's. Each platform adds its own database connection.
 
-/** How long a Runner may go without a heartbeat; tests set it shorter. */
-export const heartbeatTimeoutMs = Config.Int("HEARTBEAT_TIMEOUT_MS").pipe(
-  Config.withDefault(HEARTBEAT_TIMEOUT_MS),
-);
+/**
+ * How often Runners sync with the hub when nothing prompts them sooner, told to each Runner in the
+ * answer to its hello (ADR 0026), as Buildkite's server gives its agents their polling interval;
+ * tests set it shorter.
+ */
 
 export const hubSettings = Config.all({
   /** Signs members' sessions. */
@@ -18,9 +18,10 @@ export const hubSettings = Config.all({
   hubUrl: Config.String("HUB_URL"),
   /** The request header carrying the client's address, for rate limits; unset, Better Auth's own. */
   clientIpHeader: Config.String("CLIENT_IP_HEADER").pipe(Config.option),
+  /** The proxies in front of the hub, as IPs or CIDRs, whose entries in a forwarded chain are skipped. */
+  trustedProxies: Config.Array(Schema.String, "TRUSTED_PROXIES").pipe(Config.withDefault([])),
   /** Whether Better Auth's rate limits apply; tests turn them off. */
   authRateLimit: Config.Boolean("AUTH_RATE_LIMIT").pipe(Config.withDefault(true)),
-  heartbeatTimeoutMs,
 });
 export type HubSettings = Config.Success<typeof hubSettings>;
 
@@ -30,6 +31,7 @@ export function authSettings(settings: HubSettings): Omit<AuthSettings, "db"> {
     secret: Redacted.value(settings.secret),
     baseURL: settings.hubUrl,
     ipAddressHeaders: Option.getOrUndefined(Option.map(settings.clientIpHeader, (h) => [h])),
+    trustedProxies: [...settings.trustedProxies],
     rateLimit: settings.authRateLimit,
   };
 }
@@ -53,7 +55,8 @@ export function readConfig<A>(config: Config.Config<A>, env: object): A {
   );
   if (Exit.isSuccess(exit)) return exit.value;
   // A missing or malformed setting fails with a ConfigError whose cause says which one.
-  const { cause } = Cause.squash(exit.cause) as { cause?: unknown };
+  const failure: unknown = Cause.squash(exit.cause);
+  const cause = failure instanceof Error ? failure.cause : undefined;
   const detail = cause instanceof Error ? cause.message : Cause.pretty(exit.cause);
   throw new Error(`The hub is not configured: ${detail.replace(/\s+/g, " ")}`);
 }

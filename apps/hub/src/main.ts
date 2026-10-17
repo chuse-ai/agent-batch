@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { Config, Effect, ManagedRuntime, Option, Redacted } from "effect";
+import ensureError from "ensure-error";
 
 import { createApp, decideRunnerUpgrade } from "./app.ts";
 import { migrateDatabase } from "./db/migrate.ts";
@@ -27,7 +28,7 @@ let settings: Config.Success<typeof nodeSettings>;
 try {
   settings = readConfig(nodeSettings, process.env);
 } catch (error) {
-  console.error((error as Error).message);
+  console.error(ensureError(error).message);
   process.exit(1);
 }
 const databaseUrl = Redacted.value(settings.databaseUrl);
@@ -40,7 +41,7 @@ try {
     password: Option.getOrUndefined(Option.map(settings.adminPassword, Redacted.value)),
   });
 } catch (error) {
-  console.error(error instanceof Error ? error.message : error);
+  console.error(ensureError(error).message);
   process.exit(1);
 }
 

@@ -10,7 +10,15 @@ export default defineConfig({
   },
   lint: {
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
-    rules: { "vite-plus/prefer-vite-plus-imports": "error" },
+    categories: { correctness: "error", suspicious: "error" },
+    rules: {
+      "vite-plus/prefer-vite-plus-imports": "error",
+      // An assertion that narrows is a claim the compiler cannot check; parse or narrow instead.
+      "typescript/no-unsafe-type-assertion": "error",
+      "typescript/no-non-null-assertion": "error",
+      // Zod Mini names its default wrapper `_default`, as `default` is reserved.
+      "no-underscore-dangle": ["error", { allow: ["_default"] }],
+    },
     overrides: [
       {
         // A pending timer keeps a Durable Object from hibernating, so it is billed for as long as the

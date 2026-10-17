@@ -65,6 +65,12 @@ export interface AuthSettings {
    * Auth's default, `x-forwarded-for`.
    */
   ipAddressHeaders?: string[] | undefined;
+  /**
+   * The proxies in front of the hub, as IPs or CIDRs. Better Auth reads a forwarded chain from the
+   * right, skipping these, so a client cannot name its own address; with none, only a chain of one
+   * address counts.
+   */
+  trustedProxies: string[];
   /** Whether Better Auth's rate limits apply; tests turn them off. */
   rateLimit: boolean;
 }
@@ -96,9 +102,12 @@ export function authOptions(settings: AuthSettings) {
         // first auth call; the schema comes from migrations. See better-auth/better-auth#11651.
         validateSchema: false,
       },
-      // A proxy that rewrites X-Forwarded-For (Railway does) would put every client into one bucket,
-      // so the header carrying the client's address is a deployment setting.
-      ipAddress: { ipAddressHeaders: settings.ipAddressHeaders },
+      // Which header carries the client's address, and which proxies may have written it, depend on
+      // the deployment: Cloudflare sets `cf-connecting-ip`, Railway `x-real-ip`.
+      ipAddress: {
+        ipAddressHeaders: settings.ipAddressHeaders,
+        trustedProxies: settings.trustedProxies,
+      },
     },
     // The hub's own routes manage API keys, adding which permissions may be granted and closing a
     // removed Runner's connection; Better Auth's would skip both. Its server-side calls still work.
@@ -157,6 +166,7 @@ export function offlineAuthOptions(db: Kysely<any>) {
     secret: generateRandomString(64),
     baseURL: "http://localhost",
     ipAddressHeaders: [],
+    trustedProxies: [],
     rateLimit: true,
   });
 }

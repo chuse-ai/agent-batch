@@ -1,54 +1,33 @@
-import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/websocket";
-import type { ContractRouterClient } from "@orpc/contract";
-import { HEARTBEAT_PING, HEARTBEAT_PONG, type runnerProtocol } from "contract";
-import { afterAll, beforeAll, expect, test } from "vite-plus/test";
+import { HEARTBEAT_PING, HEARTBEAT_PONG } from "contract";
+import { afterAll, assert, beforeAll, expect, test } from "vite-plus/test";
 
 import { startSystem } from "./harness.ts";
 
-// The Runner's first heartbeat is 30 s away, so a 2 s liveness timeout lets the hub's alarm find it
-// silent within seconds.
-const system = startSystem({ hubVars: { HEARTBEAT_TIMEOUT_MS: "2000" } });
+const system = startSystem();
 
 beforeAll(() => system.start());
 afterAll(() => system.stop());
 
-// Longer than Vitest's default 5 s timeout: the alarm fires after 2 s, the Runner waits 3 s before
-// subscribing again, and the poll allows for both.
-test("a runner that falls silent is dropped, and seen again once it reconnects", async () => {
-  const runnerId = await system.startRunner();
-  await expect.poll(() => system.findRunner(runnerId)).toBeDefined();
-  const subscribedAt = await system.lastSeen(runnerId);
-
-  // Only a new subscription can move the time this far: the Runner sent no heartbeat to record.
-  await expect
-    .poll(() => system.lastSeen(runnerId), { timeout: 10_000 })
-    .toBeGreaterThanOrEqual(subscribedAt + 2_000);
-}, 20_000);
-
-// Longer than Vitest's default 5 s timeout: the Runner sends heartbeats for 4 s, then the alarm needs
-// up to 2 s to find it silent.
-test("a runner that sent heartbeats and then stopped is dropped, last seen at its last heartbeat", async () => {
+test("a runner's sync records it as seen", async () => {
   const { runnerId, socket } = await system.connectRunner();
-  const closeCode = new Promise<number>((resolve) =>
-    socket.addEventListener("close", (event) => resolve(event.code)),
-  );
-  const hub: ContractRouterClient<typeof runnerProtocol> = createORPCClient(
-    // The harness returns `ws`'s WebSocket: the same API as the standard one, typed separately.
-    new RPCLink({ connect: () => socket as unknown as WebSocket }),
-  );
-  await hub.commands({ name: "silent runner" });
+  const before = await system.lastSeen(runnerId);
+  const replies: string[] = [];
+  socket.addEventListener("message", (event) => {
+    // `ws` types a message as text or binary; the protocol is text (ADR 0026).
+    assert(typeof event.data === "string", "the hub sent a binary message");
+    replies.push(event.data);
+  });
 
-  // Twice the liveness timeout, so the alarm has found heartbeats and moved on at least once.
-  const heartbeats = setInterval(() => socket.send(HEARTBEAT_PING), 500);
-  await new Promise((resolve) => setTimeout(resolve, 4_000));
-  clearInterval(heartbeats);
-  const stoppedAt = Date.now();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  socket.send(
+    JSON.stringify({ jsonrpc: "2.0", id: 1, method: "sync", params: { held: [], free: 0 } }),
+  );
 
-  expect(await closeCode).toBe(1001);
-  await expect.poll(() => system.lastSeen(runnerId)).toBeGreaterThan(stoppedAt - 1_000);
-  expect(await system.lastSeen(runnerId)).toBeLessThan(stoppedAt + 1_000);
-}, 15_000);
+  await expect.poll(() => replies.length).toBe(1);
+  expect(JSON.parse(replies[0] ?? "")).toMatchObject({ id: 1, result: { placements: [] } });
+  expect(await system.lastSeen(runnerId)).toBeGreaterThan(before);
+  socket.close(1000);
+});
 
 test("the hub answers a runner's heartbeat", async () => {
   const { socket } = await system.connectRunner();

@@ -17,9 +17,8 @@ export function toProblemDetails(error: AnyORPCError): ProblemDetails {
 
 /** The status oRPC's handler answers `code` with: codes it does not know answer 500. */
 function statusOf(code: string): number {
-  return Object.hasOwn(COMMON_ERROR_STATUS_MAP, code)
-    ? COMMON_ERROR_STATUS_MAP[code as keyof typeof COMMON_ERROR_STATUS_MAP]
-    : 500;
+  const statuses: Record<string, number | undefined> = COMMON_ERROR_STATUS_MAP;
+  return statuses[code] ?? 500;
 }
 
 /**

@@ -16,10 +16,12 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("state", sql`agent_batch."jobState"`, (col) => col.notNull())
     .addColumn("prompt", "text", (col) => col.notNull())
     .addColumn("outputContract", "jsonb", (col) => col.notNull())
+    // Null when the submission carried none; the unique constraint below ignores nulls.
     .addColumn("idempotencyKey", "text")
     // SHA-256 of the submission's RFC 8785 canonical JSON without the key, in hex: replays compare it.
     .addColumn("contentHash", "text", (col) => col.notNull())
     .addColumn("submitterKeyId", "text", (col) => col.notNull())
+    // Null when the key has no name, which Better Auth allows.
     .addColumn("submitterKeyName", "text")
     .addColumn("submitterMemberId", "text", (col) => col.notNull())
     .addColumn("createdAt", "timestamptz", (col) => col.notNull())

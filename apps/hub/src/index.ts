@@ -1,9 +1,11 @@
 import { Effect, Layer } from "effect";
+import ensureError from "ensure-error";
 import { HTTPException } from "hono/http-exception";
 
 import { createApp } from "./app.ts";
 import { databaseAndAuthLayer } from "./auth/auth.ts";
 import { RunnerConnections } from "./platform.ts";
+import { hintLiveRunners } from "./runners.ts";
 import { authSettings, hubSettings, readConfig, type HubSettings } from "./settings.ts";
 
 export { RunnerConnection } from "./runner-connection.ts";
@@ -21,7 +23,7 @@ function workersLayer(env: Env) {
     // and sign sessions with a development secret; a hub missing either answers no request. Wrangler
     // refuses to deploy without them, so this catches a secret removed from a live hub: its callers
     // learn only that it is unavailable, and the operator finds which setting in the logs.
-    console.error((error as Error).message);
+    console.error(ensureError(error).message);
     throw new HTTPException(503);
   }
   return Layer.mergeAll(
@@ -29,6 +31,9 @@ function workersLayer(env: Env) {
     Layer.succeed(RunnerConnections, {
       drop: (runnerId) =>
         Effect.tryPromise(() => env.RUNNER_CONNECTION.getByName(runnerId).dropConnections()),
+      hintLive: hintLiveRunners((runnerId) =>
+        env.RUNNER_CONNECTION.getByName(runnerId).requestSync(),
+      ),
     }),
   );
 }

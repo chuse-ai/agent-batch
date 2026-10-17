@@ -1,10 +1,10 @@
 import { NotFound } from "contract";
-import { Effect } from "effect";
+import { Effect, Predicate } from "effect";
 
 import { Auth, getOrganization } from "./auth/auth.ts";
 import { RUNNER_KEY_CONFIG } from "./auth/options.ts";
 import { Db } from "./db/database.ts";
-import type { ApikeyId, RunnerId } from "./db/types.ts";
+import { ApikeyId, RunnerId } from "./db/types.ts";
 
 // A Runner starts with a key shared by many Runners and registers once, receiving a key of its own
 // that it keeps and connects with, as GitHub Actions and Buildkite runners do. The hub records which
@@ -26,7 +26,7 @@ export function registerRunner(name: string) {
         .where("role", "=", "owner")
         .executeTakeFirstOrThrow(),
     );
-    const runnerId = crypto.randomUUID() as RunnerId;
+    const runnerId = RunnerId(crypto.randomUUID());
     // The key first: the Runner's row references it.
     const key = yield* auth.call((betterAuth) =>
       betterAuth.api.createApiKey({
@@ -42,7 +42,7 @@ export function registerRunner(name: string) {
     yield* database.query((db) =>
       db
         .insertInto("runner")
-        .values({ id: runnerId, name, lastSeenAt: new Date(), keyId: key.id as ApikeyId })
+        .values({ id: runnerId, name, lastSeenAt: new Date(), keyId: ApikeyId(key.id) })
         .execute(),
     );
     return { id: runnerId, key: key.key };
@@ -67,10 +67,11 @@ export function removeRunner(headers: Headers, runnerId: RunnerId) {
   return Effect.gen(function* () {
     const database = yield* Db;
     const auth = yield* Auth;
-    const runner = yield* database.query((db) =>
-      db.selectFrom("runner").select("keyId").where("id", "=", runnerId).executeTakeFirst(),
-    );
-    if (!runner) return yield* Effect.fail(new NotFound());
+    const runner = yield* database
+      .query((db) =>
+        db.selectFrom("runner").select("keyId").where("id", "=", runnerId).executeTakeFirst(),
+      )
+      .pipe(Effect.filterOrFail(Predicate.isNotUndefined, () => new NotFound()));
     yield* auth.call((betterAuth) =>
       betterAuth.api.deleteApiKey({
         headers,

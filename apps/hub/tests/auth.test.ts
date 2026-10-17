@@ -101,7 +101,7 @@ test("removing a Runner refuses its key and takes it off the list", async () => 
   expect(await system.findRunner(runnerId)).toBeUndefined();
   const reconnect = await system.connect(key);
   expect(reconnect.status).toBe(401);
-  expect(await reconnect.json()).toEqual({ code: RUNNER_NOT_FOUND });
+  expect(await reconnect.json()).toMatchObject({ status: 401, code: RUNNER_NOT_FOUND });
   socket.close(1000);
 });
 

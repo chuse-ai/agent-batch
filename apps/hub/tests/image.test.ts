@@ -5,7 +5,7 @@ import path from "node:path";
 import { text } from "node:stream/consumers";
 
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
-import { RUNNER_CONNECT_PATH, RUNNER_NOT_FOUND } from "contract";
+import { RUNNER_CONNECT_PATH, RUNNER_NOT_FOUND, RUNNER_PROTOCOL_VERSION } from "contract";
 import { GenericContainer, Network, Wait } from "testcontainers";
 import { describe, expect, inject, test } from "vite-plus/test";
 import WebSocket from "ws";
@@ -51,17 +51,21 @@ describe.skipIf(inject("hub") !== "node")("the hub's Docker image", () => {
     });
     expect(signIn.status).toBe(200);
 
-    const socket = new WebSocket(`${url.replace("http", "ws")}${RUNNER_CONNECT_PATH}`, {
-      headers: { "x-api-key": "not a key" },
-    });
+    const socket = new WebSocket(
+      `${url.replace("http", "ws")}${RUNNER_CONNECT_PATH}`,
+      [RUNNER_PROTOCOL_VERSION],
+      { headers: { "x-api-key": "not a key" } },
+    );
     socket.on("error", () => {});
-    const refusal = await new Promise<{ status?: number; body: string }>((resolve) => {
+    const refusal = await new Promise<{ status?: number; body: unknown }>((resolve) => {
       socket.once("unexpected-response", (_request, response) => {
-        void text(response).then((body) => resolve({ status: response.statusCode, body }));
+        void text(response).then((body) =>
+          resolve({ status: response.statusCode, body: JSON.parse(body) }),
+        );
       });
     });
     socket.terminate();
-    expect(refusal).toEqual({ status: 401, body: JSON.stringify({ code: RUNNER_NOT_FOUND }) });
+    expect(refusal).toMatchObject({ status: 401, body: { code: RUNNER_NOT_FOUND } });
 
     // Docker sends SIGTERM, then kills the container after the timeout; a graceful stop is quicker.
     const stopping = Date.now();

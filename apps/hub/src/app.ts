@@ -2,7 +2,14 @@ import { catchORPCErrorCode, type WithEffectContext } from "@orpc/experimental-e
 import "@orpc/experimental-effect/extensions/effect";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { implement, ValidationError } from "@orpc/server";
-import { contract, RUNNER_CONNECT_PATH, RUNNER_NOT_FOUND } from "contract";
+import {
+  contract,
+  PROTOCOL_UNSUPPORTED,
+  RUNNER_CONNECT_PATH,
+  RUNNER_NOT_FOUND,
+  RUNNER_PROTOCOL_VERSIONS,
+  selectProtocolVersion,
+} from "contract";
 import { type Context, Effect } from "effect";
 import { Hono } from "hono";
 import {
@@ -22,7 +29,7 @@ import {
 } from "./auth/auth.ts";
 import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
 import { Db } from "./db/database.ts";
-import type { ApikeyId, JobId, RunnerId } from "./db/types.ts";
+import { ApikeyId, JobId, RunnerId } from "./db/types.ts";
 import { getJob, outputContractProblems, submitJob, submitterOf } from "./jobs.ts";
 import { RunnerConnections, type HubServices } from "./platform.ts";
 import { toProblemDetails } from "./problem-details.ts";
@@ -48,7 +55,7 @@ const router = os.router({
     delete: os.runners.delete.effect(function* ({ input, context }) {
       yield* requireMember(context.headers);
       // The ID enters the hub here.
-      const runnerId = input.id as RunnerId;
+      const runnerId = RunnerId(input.id);
       yield* removeRunner(context.headers, runnerId);
       yield* RunnerConnections.use((connections) => connections.drop(runnerId));
     }),
@@ -114,12 +121,19 @@ const router = os.router({
         });
         return yield* Effect.fail(errors.BAD_REQUEST({ cause }));
       }
-      return yield* submitJob(input, submitterOf(key));
+      const job = yield* submitJob(input, submitterOf(key));
+      // Runners learn of the job at their next sync anyway; the hint only makes it sooner.
+      yield* RunnerConnections.use((connections) => connections.hintLive).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => console.error("Hinting Runners to sync failed", cause)),
+        ),
+      );
+      return job;
     }),
     get: os.jobs.get.effect(function* ({ input, context }) {
       yield* requireKeyOrMember(context.headers, { job: ["read"] });
       // The ID enters the hub here.
-      return yield* getJob(input.id as JobId);
+      return yield* getJob(JobId(input.id));
     }),
   },
 });
@@ -144,11 +158,39 @@ export interface HubPlatform<Bindings> {
   acceptRunner(env: Bindings, request: Request, runnerId: RunnerId): Promise<Response>;
 }
 
+/**
+ * A refusal of a Runner's connection: Problem Details (ADR 0023) with a `code` the Runner acts on,
+ * and whatever else it needs, such as the versions the hub supports.
+ */
+function refuseRunner(
+  status: number,
+  detail: string,
+  extensions: Record<string, unknown>,
+  headers: Record<string, string> = {},
+): Response {
+  const response = problemDetails({ status, detail, extensions }).getResponse();
+  return new Response(response.body, {
+    status,
+    headers: { ...headers, ...Object.fromEntries(response.headers) },
+  });
+}
+
 /** The hub's answer to a Runner whose key it does not know, on which the Runner stops. */
 function runnerNotFound(): Response {
-  return Response.json(
+  return refuseRunner(
+    401,
+    "The hub does not know this Runner's key",
     { code: RUNNER_NOT_FOUND },
-    { status: 401, headers: { "www-authenticate": AUTH_CHALLENGE } },
+    { "www-authenticate": AUTH_CHALLENGE },
+  );
+}
+
+/** The hub's answer to a Runner offering no protocol version the hub supports (ADR 0026). */
+function protocolUnsupported(): Response {
+  return refuseRunner(
+    400,
+    `The hub supports none of the protocol versions offered; it supports ${RUNNER_PROTOCOL_VERSIONS.join(", ")}`,
+    { code: PROTOCOL_UNSUPPORTED, supported: RUNNER_PROTOCOL_VERSIONS },
   );
 }
 
@@ -162,6 +204,10 @@ export function decideRunnerUpgrade(request: Request) {
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
     return Effect.succeed(new Response(null, { status: 426, headers: { upgrade: "websocket" } }));
   }
+  // The version first, before any database is reached or a Durable Object wakes.
+  if (selectProtocolVersion(request.headers.get("sec-websocket-protocol")) === undefined) {
+    return Effect.succeed(protocolUnsupported());
+  }
   return authenticateRunner(request.headers);
 }
 
@@ -169,7 +215,7 @@ export function decideRunnerUpgrade(request: Request) {
 function authenticateRunner(headers: Headers) {
   return Effect.gen(function* () {
     const key = yield* requireKey(headers, { runner: ["connect"] });
-    return (yield* findRunnerByKey(key.id as ApikeyId)) ?? runnerNotFound();
+    return (yield* findRunnerByKey(ApikeyId(key.id))) ?? runnerNotFound();
   }).pipe(
     // Better Auth answers a key it could not check, such as while the database is unreachable, as it
     // answers an unknown key. Only a hub that reaches its database tells a Runner it is unknown;

@@ -81,7 +81,7 @@ export const getOrganization = Effect.gen(function* () {
 export function requireMember(headers: Headers) {
   return Effect.gen(function* () {
     const auth = yield* Auth;
-    const session = yield* auth.call((betterAuth) => betterAuth.api.getSession({ headers }));
+    const session = yield* auth.call((instance) => instance.api.getSession({ headers }));
     if (!session) return yield* Effect.fail(new Unauthorized());
     return session.user;
   });
@@ -96,8 +96,8 @@ export function requireKey(headers: Headers, permissions: Record<string, string[
     const key = headers.get("x-api-key");
     if (!key) return yield* Effect.fail(new Unauthorized());
     const auth = yield* Auth;
-    const result = yield* auth.call((betterAuth) =>
-      betterAuth.api.verifyApiKey({ body: { key, permissions } }),
+    const result = yield* auth.call((instance) =>
+      instance.api.verifyApiKey({ body: { key, permissions } }),
     );
     if (!result.valid || !result.key) return yield* Effect.fail(new Unauthorized());
     return result.key;

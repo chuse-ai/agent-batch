@@ -8,7 +8,8 @@ On Workers, set them in `wrangler.jsonc` and as Wrangler secrets; for `wrangler 
 
 - `BETTER_AUTH_SECRET` (required): signs members' sessions. Generate one with `openssl rand -base64 32`.
 - `HUB_URL` (required): the hub's public URL, the same setting a Runner dials. Better Auth uses it as its base URL, for its links, its trusted origin and whether session cookies are `Secure`. Without either, the hub answers every request with 503 and says what to set.
-- `CLIENT_IP_HEADER`: the request header carrying the client's IP address, for Better Auth's rate limits; `cf-connecting-ip` on Workers. Unset, Better Auth uses its default, `x-forwarded-for`.
+- `CLIENT_IP_HEADER`: the request header carrying the client's IP address, for Better Auth's rate limits: `cf-connecting-ip` on Workers, `x-real-ip` on Railway. Unset, Better Auth reads `x-forwarded-for`, and a request whose address it cannot resolve shares one rate-limit bucket per path.
+- `TRUSTED_PROXIES`: the proxies in front of the hub, as IPs or CIDRs separated by commas. A forwarded chain is read from the right past these, so a client cannot name its own address; unset, only a chain of one address counts.
 
 In Docker, also:
 

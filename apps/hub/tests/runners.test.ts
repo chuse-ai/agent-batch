@@ -13,7 +13,7 @@ test("the hub lists no runners before any connect", async () => {
   expect(await system.owner().runners.list()).toEqual([]);
 });
 
-test("a runner that connects is listed under its host's name, seen when it subscribed", async () => {
+test("a runner that connects is listed under its host's name, seen when it said hello", async () => {
   const before = Date.now();
   const runnerId = await system.startRunner();
 
@@ -57,4 +57,17 @@ test("a removed runner stops when started again, and joins anew with register", 
   const newRunnerId = await system.startRunner({ register: true });
   expect(newRunnerId).not.toBe(runnerId);
   await expect.poll(() => system.findRunner(newRunnerId)).toBeDefined();
+});
+
+test("a runner offering no protocol version the hub supports is refused, told which it supports", async () => {
+  const registration = system.client({ "x-api-key": await system.createRegistrationKey() });
+  const { key } = await registration.runners.register({ name: "old runner" });
+
+  const answer = await system.connect(key, ["agent-batch.v0"]);
+
+  expect(answer.status).toBe(400);
+  expect(await answer.json()).toMatchObject({
+    code: "protocolUnsupported",
+    supported: ["agent-batch.v1"],
+  });
 });
