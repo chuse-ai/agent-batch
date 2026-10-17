@@ -52,6 +52,14 @@ const protocol = new RPCHandler(
  * about Runners lives in plain modules, so a hub outside Workers replaces only this class. Only
  * Workers bound to its namespace, which only the hub's configuration declares, can reach it: `fetch`
  * accepts the Runner's WebSocket, and `dropConnections` closes it when the Runner is removed.
+ *
+ * It must stay able to hibernate between messages. A Durable Object is billed for every second it
+ * sits in memory unable to hibernate, and a Runner's socket stays open for days, so a pending
+ * `setTimeout` or `setInterval`, unfinished I/O, or an outbound connection left open, such as a
+ * database connection kept between messages, would bill it around the clock while nothing visibly
+ * breaks. So sockets are accepted with `acceptWebSocket`, never `accept()`; each database connection
+ * is closed when its work ends; and lint forbids timers in this module, where the storage alarm
+ * schedules work instead.
  */
 export class RunnerConnection extends DurableObject<Env> {
   /** How long the Runner may go without a heartbeat; tests set `HEARTBEAT_TIMEOUT_MS` shorter. */
@@ -125,7 +133,8 @@ export class RunnerConnection extends DurableObject<Env> {
 
   /**
    * Runs `effect` with a database connection of its own, closed when it ends: Workers forbid using a
-   * connection in any request but the one that opened it.
+   * connection in any request but the one that opened it, and one left open would keep this object
+   * from hibernating.
    */
   #withDatabase<A, E>(effect: Effect.Effect<A, E, Db>): Promise<A> {
     return Effect.runPromise(

@@ -65,8 +65,12 @@ The first jobs of a batch, run before the rest are released.
 _Avoid_: preflight, pilot, trial run
 
 **Event**:
-One recorded happening in a job's life, such as a state change, agent output or a message; a job's events, in order, are what callers poll and watch live.
+One entry in a job's history: a message, tool call or tool result from the job's agent, or something the hub records about the job, such as a state change or a limit notice; a job's events, in order, are its history, kept during and after the run.
 _Avoid_: log line, update, notification
+
+**Current activity**:
+What a running job is doing at this moment, such as waiting on a model or running a tool, and since when; it is replaced as the job moves on and is not part of its history.
+_Avoid_: live view, status
 
 **Hub**:
 The single central service that every caller and runner connects to; it accepts jobs, keeps the record of every job and runner, decides where each job runs, and relays each job's events.

@@ -1,6 +1,6 @@
 # Hono and oRPC, contract-first, on the newest major versions
 
-The job API and the runner protocol are oRPC contracts in a shared `contract` package, with schemas in Zod Mini. The hub implements them; the TypeScript client and the dashboard consume them with full types and no code generation, and the HTTP API is served as REST through oRPC's OpenAPI handler, which also produces an OpenAPI document for other languages. Hono hosts the API, the runner connection route and, later, Better Auth.
+The job API is an oRPC contract in a shared `contract` package, with schemas in Zod Mini; the runner protocol's method schemas live there too, but it is JSON-RPC over the Runner's socket, not oRPC (ADR 0026). The hub implements them; the TypeScript client and the dashboard consume them with full types and no code generation, and the HTTP API is served as REST through oRPC's OpenAPI handler, which also produces an OpenAPI document for other languages. Hono hosts the API, the runner connection route and, later, Better Auth.
 
 We start on the newest major line of each dependency even before it is stable, pinning exact versions while pre-release: oRPC 2 changed its wire format, so clients on version 1 could not talk to a version 2 hub, and starting on the line going forward avoids a coordinated migration later.
 
