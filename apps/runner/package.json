@@ -14,11 +14,13 @@
     "check": "vp check"
   },
   "dependencies": {
+    "@effect/platform-node-shared": "catalog:",
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
     "@orpc/openapi": "catalog:",
     "contract": "workspace:*",
     "effect": "catalog:",
+    "ensure-error": "catalog:",
     "ws": "catalog:",
     "zod": "catalog:"
   },

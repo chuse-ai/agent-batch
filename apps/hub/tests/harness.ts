@@ -237,8 +237,9 @@ export function startSystem(
       owner = client({ cookie: ownerCookie });
     },
     async stop() {
-      await stopRunner();
-      await running.stop();
+      // Both at once: a Runner that does not stop then fails the hook without keeping the hub's
+      // process, and with it the test run, alive.
+      await Promise.all([stopRunner(), running.stop()]);
     },
     createRegistrationKey,
     connect,

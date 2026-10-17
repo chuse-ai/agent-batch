@@ -1,5 +1,5 @@
 import type { DesiredState, JobContent, JobReport, Placement, PlacementRef } from "contract";
-import { Effect, Exit, Fiber, Scope } from "effect";
+import { Effect, Fiber, type Scope } from "effect";
 
 // The Runner's jobs: each placement the hub gives it runs as one supervised fiber (ADR 0022), and
 // what becomes of it is reported to the hub with the next sync. The hub's answer to every sync is
@@ -21,19 +21,22 @@ function runAgent(job: JobContent): Effect.Effect<unknown> {
   return Effect.succeed({ echo: job.prompt });
 }
 
-/** Runs the Runner's jobs, up to `maxJobs` at once, and collects their reports. */
+/**
+ * Runs the Runner's jobs, up to `maxJobs` at once, in `scope`, and collects their reports. Closing
+ * the scope stops every job.
+ */
 export class JobRunner {
   readonly #maxJobs: number;
   /** Called when a job ends, so the Runner reports it and takes more work. */
   readonly #onChange: () => void;
   readonly #held = new Map<string, HeldJob>();
   #reports: JobReport[] = [];
-  readonly #scope: Scope.Closeable;
+  readonly #scope: Scope.Scope;
 
-  constructor(maxJobs: number, onChange: () => void) {
+  constructor(maxJobs: number, scope: Scope.Scope, onChange: () => void) {
     this.#maxJobs = maxJobs;
+    this.#scope = scope;
     this.#onChange = onChange;
-    this.#scope = Effect.runSync(Scope.make());
   }
 
   /**
@@ -72,11 +75,6 @@ export class JobRunner {
       if (!placement.job) continue;
       this.#start(placement, placement.job);
     }
-  }
-
-  /** Stops every job, for a Runner that is stopping. */
-  async stop(): Promise<void> {
-    await Effect.runPromise(Scope.close(this.#scope, Exit.void));
   }
 
   #start(placement: Placement, job: JobContent): void {

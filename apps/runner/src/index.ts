@@ -19,13 +19,14 @@ import {
   RUNNER_NOT_FOUND,
   RUNNER_PROTOCOL_VERSIONS,
   runnerMethods,
-  type DesiredState,
-  type ProtocolClient,
   type RegisteredRunner,
   registeredRunnerSchema,
   socketRefusalSchema,
   type SocketRefusal,
 } from "contract";
+import { Cause, Data, Effect, Exit, Fiber, Latch, Random, Schedule, Scope } from "effect";
+import * as Socket from "effect/socket/Socket";
+import ensureError from "ensure-error";
 import WebSocket from "ws";
 import * as z from "zod/mini";
 
@@ -38,10 +39,11 @@ declare module "ws" {
   }
 }
 
-// Connection timings follow partysocket's defaults (ADR 0008). Opening a socket may take 4 s. The
-// first attempt goes at once and each retry waits 3 s, growing 1.3 times per attempt up to 10 s; only
-// a connection that stays open for 5 s starts the delays over, so a hub that accepts and then drops
-// Runners is not redialled at a fixed pace.
+// Connection timings (ADR 0008). Opening a socket may take 4 s. The first attempt goes at once and
+// each retry waits about 3 s, growing 1.3 times per attempt up to about 10 s; each wait varies by up
+// to a fifth either way, as gRPC's connection backoff does, so Runners dropped together do not redial
+// together. Only a connection that stays open for 5 s starts the delays over, so a hub that accepts
+// and then drops Runners is not redialled at a fixed pace.
 const CONNECT_TIMEOUT_MS = 4_000;
 /** How long a closing socket waits for the hub's answer before dropping the connection itself. */
 const CLOSE_TIMEOUT_MS = 4_000;
@@ -49,7 +51,11 @@ const RECONNECT_DELAY_MS = 3_000;
 const RECONNECT_DELAY_GROWTH = 1.3;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 const MIN_UPTIME_MS = 5_000;
-/** How long the hub may take to answer a request before the Runner treats the connection as dead. */
+/**
+ * How long the hub may take to answer a request before the Runner treats the connection as dead. The
+ * JSON-RPC library keeps this deadline rather than Effect: it cannot cancel a request, so only its
+ * own timeout also forgets the request.
+ */
 const REQUEST_TIMEOUT_MS = 30_000;
 /** How far either side of the sync interval a sync may fall, so Runners' syncs spread out. */
 const SYNC_JITTER = 0.1;
@@ -67,6 +73,9 @@ export interface RunnerOptions {
   heartbeatIntervalMs?: number;
   /** Discards the Runner's own key and registers again, as the `register` command does. */
   register?: boolean;
+}
+
+export interface StartRunnerOptions extends RunnerOptions {
   /**
    * Called when the hub answers that it does not know the Runner's own key, because the Runner was
    * removed or the hub was reset; the Runner has stopped by then, since retrying cannot succeed.
@@ -75,7 +84,7 @@ export interface RunnerOptions {
 }
 
 export interface Runner {
-  /** Closes the connection to the hub, so the hub drops it at once, and stops reconnecting. */
+  /** Stops the Runner: closes its connection, so the hub drops it at once, and stops its jobs. */
   stop(): Promise<void>;
 }
 
@@ -87,13 +96,65 @@ export interface Runner {
  */
 const DEFAULT_MAX_JOBS = 8;
 
+/**
+ * The Runner as a program: registers it on its first start, then runs it until it is interrupted, or
+ * until it fails with `Removed` once the hub no longer knows it. Its jobs stop before it ends.
+ */
+export function runRunner(options: RunnerOptions): Effect.Effect<never, Removed> {
+  const hubUrl = new URL(options.hubUrl);
+  return Effect.promise(() => loadOrRegister(hubUrl, options)).pipe(
+    Effect.flatMap((registration) => runRegistered(hubUrl, registration, options)),
+  );
+}
+
 /** Starts a Runner that stays connected to the hub until stopped, registering it on its first start. */
-export async function startRunner(options: RunnerOptions): Promise<Runner> {
+export async function startRunner(options: StartRunnerOptions): Promise<Runner> {
   const hubUrl = new URL(options.hubUrl);
   const registration = await loadOrRegister(hubUrl, options);
-  const connection = new HubConnection(hubUrl, registration.key, options);
-  connection.start();
-  return connection;
+  const loop = Effect.runFork(
+    runRegistered(hubUrl, registration, options).pipe(
+      Effect.catchTag("Removed", () => Effect.sync(() => options.onRemoved?.())),
+    ),
+  );
+  return {
+    async stop() {
+      await Effect.runPromise(Fiber.interrupt(loop));
+    },
+  };
+}
+
+/**
+ * Runs a registered Runner: its jobs, and the connection that keeps them in sync with the hub. The
+ * jobs live in this scope rather than a connection's, so they outlive reconnects but not the Runner:
+ * however it ends, removed, interrupted or by a defect, its jobs stop first.
+ */
+function runRegistered(
+  hubUrl: URL,
+  registration: RegisteredRunner,
+  options: RunnerOptions,
+): Effect.Effect<never, Removed> {
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const syncNow = yield* Latch.make(false);
+      const jobs = new JobRunner(options.maxJobs ?? DEFAULT_MAX_JOBS, yield* Effect.scope, () =>
+        syncNow.openUnsafe(),
+      );
+      return yield* keepConnected({
+        url: socketUrl(hubUrl),
+        key: registration.key,
+        heartbeatIntervalMs: options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS,
+        jobs,
+        syncNow,
+      });
+    }),
+  );
+}
+
+/** The hub's WebSocket URL for Runners: the hub's URL, over `wss:` for `https:`. */
+function socketUrl(hubUrl: URL): URL {
+  const url = new URL(RUNNER_CONNECT_PATH, hubUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url;
 }
 
 /**
@@ -123,251 +184,223 @@ async function loadOrRegister(hubUrl: URL, options: RunnerOptions): Promise<Regi
   return registration;
 }
 
+/** What a connection needs: where and as whom to connect, and the jobs it keeps in sync. */
+interface ConnectionContext {
+  url: URL;
+  /** The Runner's own key, from which the hub takes its identity. */
+  key: string;
+  heartbeatIntervalMs: number;
+  jobs: JobRunner;
+  /** Opened when the hub asks for a sync or a job ends, so the next sync goes at once. */
+  syncNow: Latch.Latch;
+}
+
+/** The hub no longer knows this Runner: it was removed, or the hub was reset. Nothing retries it. */
+export class Removed extends Data.TaggedError("Removed") {}
+
+/** A connection ended: the hub refused it, closed it, or stopped answering. */
+class Dropped extends Data.TaggedError("Dropped")<{ reason: string }> {}
+
+/** The hub's refusal of the socket, read before the socket is dropped. */
+interface Refusal {
+  status: number;
+  body: SocketRefusal | undefined;
+}
+
 /**
- * Keeps this Runner connected to the hub and in sync with it (ADR 0026): on each new socket it says
+ * Keeps the Runner connected to the hub and in sync with it (ADR 0026): on each new socket it says
  * hello, then syncs, and from then on syncs at the interval the hub gave it, when the hub hints, and
  * when a job ends, reporting what became of its jobs. Every answer is the desired state of its jobs,
- * which the job runner is brought to. The heartbeat timer sends pings and drops a connection whose
- * pongs stopped; the socket is reopened with growing delays.
- *
- * The heartbeat is our own because nothing below provides one: on Workers, the hub's runtime answers
- * and records only a text message without waking the hub, and the protocol has no request the hub
- * makes of an idle Runner.
+ * which the job runner is brought to. A connection that drops is reopened with growing delays; one
+ * that stayed open long enough starts the delays over (ADR 0022).
  */
-class HubConnection implements Runner {
-  readonly #hubUrl: URL;
-  /** The Runner's own key, from which the hub takes its identity. */
-  readonly #key: string;
-  readonly #heartbeatIntervalMs: number;
-  readonly #onRemoved: (() => void) | undefined;
-  readonly #jobs: JobRunner;
+function keepConnected(context: ConnectionContext): Effect.Effect<never, Removed> {
+  const delays = Schedule.min([
+    Schedule.exponential(RECONNECT_DELAY_MS, RECONNECT_DELAY_GROWTH),
+    Schedule.spaced(MAX_RECONNECT_DELAY_MS),
+  ]).pipe(Schedule.jittered);
+  const attempt = Effect.gen(function* () {
+    const opened = { at: Number.POSITIVE_INFINITY };
+    const ended = yield* connectAndSync(context, opened).pipe(Effect.scoped, Effect.flip);
+    if (ended instanceof Dropped) console.error(ended.reason);
+    // A connection that lasted succeeds, ending the retries, so the delays start over.
+    if (ended instanceof Removed || Date.now() - opened.at < MIN_UPTIME_MS) yield* ended;
+  });
+  const untilOneLasts = Effect.retry(attempt, {
+    schedule: delays,
+    while: (error) => error instanceof Dropped,
+  });
+  // After a connection that lasted, the next waits the first delay.
+  const afterOneLasted = Schedule.spaced(RECONNECT_DELAY_MS).pipe(Schedule.jittered);
+  return Effect.repeat(untilOneLasts, afterOneLasted).pipe(
+    // Neither schedule ends, so a drop cannot get past them; one that did would be a bug.
+    Effect.catchIf((error) => error instanceof Dropped, Effect.die),
+    Effect.andThen(Effect.die(new Error("The Runner's reconnect schedule ended"))),
+  );
+}
 
-  #heartbeats: ReturnType<typeof setInterval> | undefined;
-  #socket: WebSocket | undefined;
-  #hub: ProtocolClient<typeof runnerMethods> | undefined;
-  #nextSync: ReturnType<typeof setTimeout> | undefined;
-  #reconnect: ReturnType<typeof setTimeout> | undefined;
-  #syncIntervalMs = 0;
-  /** Whether a sync or report is in flight; another asked for meanwhile follows it. */
-  #syncing = false;
-  #syncAgain = false;
-  #lastPongAt = 0;
-  #stopped = false;
-  /** Connection attempts since the last one that stayed open long enough; -1 before the first. */
-  #retryCount = -1;
-
-  constructor(
-    hubUrl: URL,
-    key: string,
-    options: Pick<RunnerOptions, "heartbeatIntervalMs" | "onRemoved" | "maxJobs">,
-  ) {
-    this.#hubUrl = hubUrl;
-    this.#key = key;
-    this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
-    this.#onRemoved = options.onRemoved;
-    this.#jobs = new JobRunner(options.maxJobs ?? DEFAULT_MAX_JOBS, () => this.#requestSync());
-  }
-
-  start(): void {
-    this.#heartbeats = setInterval(() => this.#sendHeartbeat(), this.#heartbeatIntervalMs);
-    this.#connect();
-  }
-
-  async stop(): Promise<void> {
-    this.#stopped = true;
-    clearInterval(this.#heartbeats);
-    clearTimeout(this.#reconnect);
-    const socket = this.#socket;
-    this.#disconnect();
-    await this.#jobs.stop();
-    // Closing waits for the hub's answer for at most `CLOSE_TIMEOUT_MS`, then drops the connection.
-    socket?.close(1000, "Runner stopped");
-    if (socket && socket.readyState !== WebSocket.CLOSED) {
-      await new Promise((resolve) => socket.addEventListener("close", resolve, { once: true }));
-    }
-  }
-
-  /** Sends a heartbeat, or drops the connection if the hub stopped answering them. */
-  #sendHeartbeat(): void {
-    if (this.#socket?.readyState !== WebSocket.OPEN) return;
-    if (Date.now() - this.#lastPongAt <= HEARTBEAT_TIMEOUT_MS) {
-      this.#socket.send(HEARTBEAT_PING);
-      return;
-    }
-    console.error("The hub stopped answering heartbeats; reconnecting");
-    // The hub is not answering, so the connection is dropped at once rather than closed politely.
-    const socket = this.#socket;
-    this.#disconnect();
-    socket.terminate();
-    this.#scheduleReconnect();
-  }
-
-  /** Drops the client and its socket, leaving the socket to the caller, and stops syncing on it. */
-  #disconnect(): void {
-    clearTimeout(this.#nextSync);
-    this.#nextSync = undefined;
-    this.#hub?.rejectAllPendingRequests("The connection closed");
-    this.#hub = undefined;
-    this.#socket = undefined;
-    this.#syncing = false;
-    this.#syncAgain = false;
-  }
-
-  /** How long to wait before the next connection attempt, as partysocket computes it. */
-  #retryDelay(): number {
-    const attempt = this.#retryCount + 1;
-    if (attempt <= 0) return 0;
-    return Math.min(
-      RECONNECT_DELAY_MS * RECONNECT_DELAY_GROWTH ** (attempt - 1),
-      MAX_RECONNECT_DELAY_MS,
+/**
+ * One connection: opens a socket to the hub, notes in `opened` when it opened, and runs on it the
+ * heartbeat, the reading of what the hub sends, and the syncs, until one of them fails. Never
+ * succeeds.
+ */
+function connectAndSync(
+  context: ConnectionContext,
+  opened: { at: number },
+): Effect.Effect<never, Removed | Dropped, Scope.Scope> {
+  const refusal: Refusal = { status: 0, body: undefined };
+  return Effect.gen(function* () {
+    const scope = yield* Effect.scope;
+    const socket = yield* Socket.fromWebSocket(openSocket(context, refusal), {
+      openTimeout: CONNECT_TIMEOUT_MS,
+    });
+    const writer = yield* socket.writer;
+    // The reader is ready once the socket is open.
+    const reader = yield* socket.reader;
+    opened.at = Date.now();
+    const pong = { at: Date.now() };
+    const hub = createProtocolClient(
+      runnerMethods,
+      hubNotifications,
+      { syncNow: () => context.syncNow.openUnsafe() },
+      // In the connection's scope: a write after the socket closed would otherwise wait forever.
+      (message) => Effect.runSync(Effect.forkIn(writer.write(message), scope)),
     );
-  }
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => hub.rejectAllPendingRequests("The connection closed")),
+    );
 
-  #scheduleReconnect(): void {
-    if (this.#stopped || this.#reconnect) return;
-    this.#reconnect = setTimeout(() => {
-      this.#reconnect = undefined;
-      this.#connect();
-    }, this.#retryDelay());
-  }
+    /** A request of the hub, dropped when not answered in time or at all. */
+    const request = <Name extends keyof typeof runnerMethods>(
+      name: Name,
+      params: Parameters<typeof hub.request<Name>>[1],
+    ) =>
+      Effect.tryPromise({
+        try: () => hub.request(name, params, REQUEST_TIMEOUT_MS),
+        catch: (error) =>
+          new Dropped({ reason: `Syncing with the hub failed: ${ensureError(error).message}` }),
+      });
 
-  /** Opens a socket to the hub, offering the protocol versions this Runner speaks. */
-  #connect(): void {
-    if (this.#stopped || this.#socket) return;
-    this.#retryCount += 1;
-    const url = new URL(RUNNER_CONNECT_PATH, this.#hubUrl);
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    // A socket that does not open in time closes, which ends the attempt.
-    const socket = new WebSocket(url, [...RUNNER_PROTOCOL_VERSIONS], {
-      headers: { "x-api-key": this.#key },
-      handshakeTimeout: CONNECT_TIMEOUT_MS,
-      closeTimeout: CLOSE_TIMEOUT_MS,
-    });
-    this.#socket = socket;
-    // The hub answers 401 with `RUNNER_NOT_FOUND` to a key it no longer knows: the Runner was
-    // removed, or the hub was reset. Retrying cannot succeed, so the Runner stops, as a GitHub Actions
-    // runner does only on its server's `invalid_client`. A hub supporting none of the versions
-    // offered says which it supports; either side upgrading resolves that, so the Runner says so and
-    // retries. Other refusals, such as a proxy's or a hub's that cannot reach its database, end the
-    // attempt, and the Runner tries again.
-    socket.on("unexpected-response", (_request, response) => {
-      // The body is read before the socket is dropped, which would discard it.
-      void text(response)
-        .catch(() => "")
-        .then((body) => {
-          socket.terminate();
-          const refusal = parseRefusal(body);
-          if (response.statusCode === 401 && refusal?.code === RUNNER_NOT_FOUND) {
-            void this.stop().then(() => this.#onRemoved?.());
-            return;
-          }
-          if (refusal?.code === PROTOCOL_UNSUPPORTED) {
-            console.error(
-              `The hub supports none of this Runner's protocol versions (${RUNNER_PROTOCOL_VERSIONS.join(", ")}); it supports ${refusal.supported?.join(", ") ?? "none it names"}. Upgrade whichever is older.`,
-            );
-          }
-        });
-    });
-    let minUptimeTimer: ReturnType<typeof setTimeout> | undefined;
-    socket.addEventListener("open", () => {
-      this.#lastPongAt = Date.now();
-      minUptimeTimer = setTimeout(() => (this.#retryCount = 0), MIN_UPTIME_MS);
-      this.#hub = createProtocolClient(
-        runnerMethods,
-        hubNotifications,
-        { syncNow: () => this.#requestSync() },
-        (message) => socket.send(message),
-      );
-      void this.#hello();
-    });
-    socket.addEventListener("message", (event) => {
-      if (event.data === HEARTBEAT_PONG) this.#lastPongAt = Date.now();
-      else if (typeof event.data === "string") this.#hub?.receive(event.data);
-    });
-    socket.addEventListener("error", (event) => {
-      if (!this.#stopped) console.error("The connection to the hub failed", event.message);
-    });
-    socket.addEventListener("close", () => {
-      clearTimeout(minUptimeTimer);
-      if (this.#socket === socket) {
-        this.#disconnect();
-        this.#scheduleReconnect();
+    /** Passes what the hub sends to the client, noting its pongs. */
+    const reading = Effect.forever(
+      Effect.gen(function* () {
+        for (const message of yield* reader.pull) {
+          if (message === HEARTBEAT_PONG) pong.at = Date.now();
+          else if (typeof message === "string") hub.receive(message);
+        }
+      }),
+    );
+
+    /**
+     * Sends a heartbeat, or drops the connection when the hub stopped answering them. The heartbeat
+     * is the Runner's own because nothing below provides one: on Workers the hub's runtime answers a
+     * text message without waking the hub, and the protocol has no request the hub makes of an idle
+     * Runner.
+     */
+    const heartbeat = Effect.suspend((): Effect.Effect<void, Dropped | Socket.SocketError> =>
+      Date.now() - pong.at > HEARTBEAT_TIMEOUT_MS
+        ? Effect.fail(new Dropped({ reason: "The hub stopped answering heartbeats; reconnecting" }))
+        : writer.write(HEARTBEAT_PING),
+    ).pipe(Effect.repeat(Schedule.spaced(context.heartbeatIntervalMs)));
+
+    /**
+     * Says hello, then syncs: at the interval the hub gave, with jitter, or as soon as the hub hints
+     * or a job ends. A sync reports what became of jobs, if anything did, and brings the job runner
+     * to the desired state the hub answers with.
+     */
+    const syncing = Effect.gen(function* () {
+      const { syncIntervalMs } = yield* request("hello", { name: hostname() });
+      for (;;) {
+        yield* context.syncNow.close;
+        const reports = context.jobs.takeReports();
+        const load = context.jobs.load();
+        const desired = yield* (
+          reports.length > 0 ? request("report", { ...load, jobs: reports }) : request("sync", load)
+        ).pipe(
+          // The reports go again with the next sync on the next socket, also when the connection
+          // dropping interrupts the request.
+          Effect.onError(() => Effect.sync(() => context.jobs.returnReports(reports))),
+        );
+        context.jobs.reconcile(desired);
+        const jitter = yield* Random.nextBetween(1 - SYNC_JITTER, 1 + SYNC_JITTER);
+        yield* Effect.race(Effect.sleep(syncIntervalMs * jitter), context.syncNow.await);
       }
     });
-  }
 
-  /** Says hello on a new socket, learning the sync interval, then syncs. */
-  async #hello(): Promise<void> {
-    const hub = this.#hub;
-    if (!hub) return;
-    try {
-      const { syncIntervalMs } = await hub.request(
-        "hello",
-        { name: hostname() },
-        REQUEST_TIMEOUT_MS,
-      );
-      this.#syncIntervalMs = syncIntervalMs;
-    } catch (error) {
-      this.#fail("Hello to the hub failed", error);
-      return;
-    }
-    this.#requestSync();
-  }
+    yield* Effect.all([reading, heartbeat, syncing], { concurrency: "unbounded", discard: true });
+    return yield* Effect.never;
+  }).pipe(
+    Effect.mapError((error) =>
+      Socket.isSocketError(error) ? refusedOrDropped(refusal, error) : error,
+    ),
+  );
+}
 
-  /** Syncs as soon as the sync or report in flight, if any, is answered. */
-  #requestSync(): void {
-    if (!this.#hub) return;
-    if (this.#syncing) {
-      this.#syncAgain = true;
-      return;
-    }
-    void this.#sync();
+/**
+ * Why a socket did not open, as the Runner reads it. The hub answers 401 with `RUNNER_NOT_FOUND` to
+ * a key it no longer knows: the Runner was removed, or the hub was reset. Retrying cannot succeed,
+ * so the Runner stops, as a GitHub Actions runner does only on its server's `invalid_client`. A hub
+ * supporting none of the versions offered says which it supports; either side upgrading resolves
+ * that, so the Runner says so and retries. Other refusals, such as a proxy's or a hub's that cannot
+ * reach its database, end the attempt, and the Runner tries again.
+ */
+function refusedOrDropped(refusal: Refusal, error: Socket.SocketError): Removed | Dropped {
+  if (refusal.status === 401 && refusal.body?.code === RUNNER_NOT_FOUND) return new Removed();
+  if (refusal.body?.code === PROTOCOL_UNSUPPORTED) {
+    const supported = refusal.body.supported?.join(", ") ?? "none it names";
+    return new Dropped({
+      reason: `The hub supports none of this Runner's protocol versions (${RUNNER_PROTOCOL_VERSIONS.join(", ")}); it supports ${supported}. Upgrade whichever is older.`,
+    });
   }
+  return new Dropped({ reason: `The connection to the hub failed: ${error.message}` });
+}
 
-  /**
-   * Reports what became of jobs, if anything did, or syncs, and brings the job runner to the desired
-   * state the hub answers with; then schedules the next sync.
-   */
-  async #sync(): Promise<void> {
-    const hub = this.#hub;
-    if (!hub) return;
-    this.#syncing = true;
-    clearTimeout(this.#nextSync);
-    const reports = this.#jobs.takeReports();
-    const load = this.#jobs.load();
-    try {
-      const desired: DesiredState =
-        reports.length > 0
-          ? await hub.request("report", { ...load, jobs: reports }, REQUEST_TIMEOUT_MS)
-          : await hub.request("sync", load, REQUEST_TIMEOUT_MS);
-      this.#jobs.reconcile(desired);
-    } catch (error) {
-      // The reports go again with the next sync on the next socket.
-      this.#jobs.returnReports(reports);
-      this.#fail("Syncing with the hub failed", error);
-      return;
-    } finally {
-      if (this.#hub === hub) this.#syncing = false;
-    }
-    if (this.#hub !== hub) return;
-    if (this.#syncAgain) {
-      this.#syncAgain = false;
-      void this.#sync();
-      return;
-    }
-    const jitter = 1 + (Math.random() * 2 - 1) * SYNC_JITTER;
-    this.#nextSync = setTimeout(() => this.#requestSync(), this.#syncIntervalMs * jitter);
-  }
-
-  /** Drops a connection the hub stopped answering on, and reconnects. */
-  #fail(what: string, error: unknown): void {
-    if (this.#stopped) return;
-    console.error(what, error instanceof Error ? error.message : error);
-    const socket = this.#socket;
-    this.#disconnect();
-    socket?.terminate();
-    this.#scheduleReconnect();
-  }
+/**
+ * Opens the socket, offering the protocol versions this Runner speaks, and reads the hub's refusal
+ * into `refusal` if there is one, before the socket is dropped. A stopping Runner's socket closes,
+ * waiting for the hub's answer for at most `CLOSE_TIMEOUT_MS`; a failed connection's is dropped.
+ */
+function openSocket(
+  context: ConnectionContext,
+  refusal: Refusal,
+): Effect.Effect<WebSocket, never, Scope.Scope> {
+  return Effect.acquireRelease(
+    Effect.sync(() => {
+      const socket = new WebSocket(context.url, [...RUNNER_PROTOCOL_VERSIONS], {
+        headers: { "x-api-key": context.key },
+        handshakeTimeout: CONNECT_TIMEOUT_MS,
+        closeTimeout: CLOSE_TIMEOUT_MS,
+      });
+      // Failures reach the Runner through Effect's socket, whose own listener hears only the first
+      // and is gone once the socket is released (Effect-TS/effect#9463); without this, a later one
+      // would end the process.
+      socket.on("error", () => {});
+      socket.on("unexpected-response", (_request, response) => {
+        // The body is read before the socket is dropped, which would discard it.
+        void text(response)
+          .catch(() => "")
+          .then((body) => {
+            refusal.status = response.statusCode ?? 0;
+            refusal.body = parseRefusal(body);
+            socket.terminate();
+          });
+      });
+      return socket;
+    }),
+    (socket, exit) =>
+      Effect.callback<void>((resume) => {
+        if (socket.readyState === WebSocket.CLOSED) {
+          resume(Effect.void);
+          return;
+        }
+        socket.once("close", () => resume(Effect.void));
+        // A stopping Runner closes politely, so the hub drops it at once. A connection that failed
+        // is dropped at once rather than closed politely: the hub may not be answering.
+        const stopping = Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause);
+        if (stopping && socket.readyState === WebSocket.OPEN) socket.close(1000, "Runner stopped");
+        else socket.terminate();
+      }),
+  );
 }
 
 /** The hub's refusal in `body`, if it is one the Runner knows how to read. */
