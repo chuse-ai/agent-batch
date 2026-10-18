@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "target": "esnext",
+    // Only runtimes we choose run the hub, Node 26 and workerd (ADR 0024).
     "lib": ["esnext"],
     "module": "es2022",
     "noEmit": true,

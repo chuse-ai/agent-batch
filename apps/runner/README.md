@@ -1,6 +1,6 @@
 # runner
 
-A Node process that connects out to the hub and runs many jobs' agents at once (ADR 0019). The CLI bundles it and calls `startRunner`; after `vp pack`, `vp run start` starts one from the environment:
+A Node process that connects out to the hub and runs many jobs' agents at once (ADR 0019). It runs on its user's Node, from 22.19, so it uses only what Node 22 has (ADR 0024). The CLI bundles it and calls `startRunner`; after `vp pack`, `vp run start` starts one from the environment:
 
 - `HUB_URL`: the hub's URL.
 - `RUNNER_REGISTRATION_KEY`: an API key granted `runner: ["register"]`, shared by Runners. A Runner uses it on its first start to register and receive a key of its own (ADR 0008).

@@ -34,6 +34,22 @@ jobs:
             exit 1
           fi
 
+  # What users run on their own Node (the CLI, and the Runner and contract it bundles) supports Node 22
+  # from the lowest release `engines.node` allows (ADR 0024); the hub runs only on Node 26 and workerd.
+  node-22:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+        with:
+          cache: true
+          node-version: 22.19.0
+      - run: vp run --filter runner --filter agent-batch test
+      # The hub in workerd, with the tests and the Runners they start on Node 22. The `node` project
+      # would run the hub itself on the tests' Node.
+      - run: vp test --project workers
+        working-directory: apps/hub
+
   hub-image:
     runs-on: ubuntu-latest
     steps:
