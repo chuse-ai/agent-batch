@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,6 +16,8 @@ import { assert, expect, test } from "vite-plus/test";
 import { WebSocketServer } from "ws";
 import * as z from "zod/mini";
 
+import { callTool, scriptedModel } from "./harness.ts";
+
 // A job's outcome must reach the hub even when the connection drops while the Runner reports it, or
 // the job looks stuck. The hub here is a stand-in, since the real one cannot be made to drop a
 // connection between receiving a report and answering it.
@@ -26,7 +29,7 @@ test("a report the hub never answered goes again on the next connection", async 
     job: { prompt: "hello", inputFiles: {}, outputContract: { schema: {} } },
   };
   const hub = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-  await new Promise((resolve) => hub.once("listening", resolve));
+  await once(hub, "listening");
   let connections = 0;
   const reportedAgain = new Promise<JobReport[]>((resolve) => {
     hub.on("connection", (socket) => {
@@ -55,10 +58,14 @@ test("a report the hub never answered goes again on the next connection", async 
   await writeFile(path.join(dataDir, "runner.json"), JSON.stringify(registration));
   const address = hub.address();
   if (address === null || typeof address === "string") throw new Error("no port");
+  const { faux, models, model } = scriptedModel();
+  faux.setResponses([callTool("submit_result", { value: {} })]);
   const runner = await startRunner({
     hubUrl: `http://127.0.0.1:${address.port}`,
     registrationKey: "unused",
     dataDir,
+    models,
+    model,
   });
   try {
     const reports = await reportedAgain;

@@ -1,3 +1,5 @@
+import { setTimeout } from "node:timers/promises";
+
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from "contract";
 import { afterAll, assert, beforeAll, expect, test } from "vite-plus/test";
 
@@ -18,7 +20,8 @@ test("a runner's sync records it as seen", async () => {
     replies.push(event.data);
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  // The hub stamps a sighting to the millisecond and only moves it forward, so its clock must move.
+  await setTimeout(20);
   socket.send(
     JSON.stringify({ jsonrpc: "2.0", id: 1, method: "sync", params: { held: [], free: 0 } }),
   );

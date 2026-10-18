@@ -96,6 +96,8 @@ export type Load = z.infer<typeof loadSchema>;
 const outcomeSchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("running"), startedAt: z.iso.datetime() }),
   z.object({ state: z.literal("succeeded"), result: z.unknown(), endedAt: z.iso.datetime() }),
+  // Why a job failed reaches the hub with structured failure reasons.
+  z.object({ state: z.literal("failed"), endedAt: z.iso.datetime() }),
 ]);
 export type Outcome = z.infer<typeof outcomeSchema>;
 

@@ -5,6 +5,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 
+import { createModels, type JsonObject, type Message } from "@earendil-works/pi-ai";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxText,
+  fauxToolCall,
+} from "@earendil-works/pi-ai/providers/faux";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import {
@@ -54,6 +61,38 @@ const HUB_SETTINGS = {
   // Every test request comes from the same address, so Better Auth's limits would trip.
   AUTH_RATE_LIMIT: "false",
 };
+
+/**
+ * A scripted model for a Runner's jobs, through pi-ai's faux provider: a test gives `faux` the
+ * responses the model makes, in order, across all jobs; with none left, a job's model call fails.
+ */
+export function scriptedModel() {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const { provider, id } = faux.getModel();
+  return { faux, models, model: { provider, modelId: id, thinkingLevel: "off" as const } };
+}
+
+/** The model's call of `tool` with `args`. */
+export function callTool(tool: string, args: JsonObject) {
+  return fauxAssistantMessage(fauxToolCall(tool, args), { stopReason: "toolUse" });
+}
+
+/** The model's reply in prose, which ends its turn. */
+export function reply(prose: string) {
+  return fauxAssistantMessage(fauxText(prose));
+}
+
+/** The text of the last tool result the model was given, and whether it was an error. */
+export function lastToolResult(messages: Message[]) {
+  const result = messages.findLast((message) => message.role === "toolResult");
+  if (!result) throw new Error("The model was given no tool result");
+  return {
+    text: result.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+    isError: result.isError,
+  };
+}
 
 /** Deletes all rows from the hub's tables, keeping the schema and the record of applied migrations. */
 export async function clearDatabase(connectionString: string) {
@@ -132,6 +171,7 @@ export function startSystem(
   let ownerCookie: string;
   let runner: RunnerProcess | undefined;
   let runnerDataDir: string | undefined;
+  const scripted = scriptedModel();
 
   /** Sends a request to the hub over HTTP, for a path on it. */
   function hubFetch(pathname: string, init?: RequestInit): Promise<Response> {
@@ -220,6 +260,14 @@ export function startSystem(
     signIn,
     /** A client signed in as `OWNER`. */
     owner: () => owner,
+    /** Creates an API key allowed to submit and read jobs, and returns a client sending it. */
+    async clientWithNewJobsKey() {
+      const { key } = await owner.apiKeys.create({
+        name: "jobs",
+        permissions: { job: ["create", "read"] },
+      });
+      return client({ "x-api-key": key });
+    },
     /** The session cookie of `OWNER`. */
     ownerCookie: () => ownerCookie,
     async start() {
@@ -255,6 +303,8 @@ export function startSystem(
         hubUrl: url,
         registrationKey: await createRegistrationKey(),
         dataDir: runnerDataDir,
+        models: scripted.models,
+        model: scripted.model,
         heartbeatIntervalMs: options.heartbeatIntervalMs,
         ...runnerOptions,
       });
@@ -266,6 +316,8 @@ export function startSystem(
     },
     /** Stops the Runner, closing its connection. */
     stopRunner,
+    /** The scripted model the Runner's jobs run on. */
+    model: scripted.faux,
     /**
      * Registers a Runner and opens its socket to the hub directly with its own key, without a Runner's
      * reconnects and heartbeats.

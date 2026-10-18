@@ -1,0 +1,108 @@
+import { once } from "node:events";
+
+import type { JobSubmission } from "contract";
+import { afterAll, beforeAll, expect, test } from "vite-plus/test";
+
+import { callTool, lastToolResult, reply, startSystem } from "./harness.ts";
+
+// What a job's agent works with and how it ends the job, driven by a scripted model: the Input files
+// in its Workspace, and `submit_result`, which takes only a result matching the Output contract.
+
+const system = startSystem();
+
+beforeAll(async () => {
+  await system.start();
+  await system.startRunner();
+});
+afterAll(() => system.stop());
+
+const SUBMISSION = {
+  prompt: "Summarise the quarter.",
+  inputFiles: { "q3.md": { content: "Revenue grew 4%." } },
+  outputContract: {
+    schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
+  },
+} satisfies JobSubmission;
+
+/** Submits `submission` with a new key and waits for the job to end; returns the job. */
+async function runJob(submission: JobSubmission) {
+  const client = await system.clientWithNewJobsKey();
+  const { id } = await client.jobs.submit(submission);
+  await expect
+    .poll(async () => (await client.jobs.get({ id })).state, { timeout: 10_000 })
+    .toMatch(/^(succeeded|failed)$/);
+  return client.jobs.get({ id });
+}
+
+test("the agent finds the Input files in inputs/ and submits a result read from them", async () => {
+  system.model.setResponses([
+    callTool("read", { path: "/inputs/q3.md" }),
+    (context) =>
+      callTool("submit_result", { value: { summary: lastToolResult(context.messages).text } }),
+  ]);
+
+  expect(await runJob(SUBMISSION)).toMatchObject({
+    state: "succeeded",
+    result: { summary: expect.stringContaining("Revenue grew 4%.") },
+  });
+});
+
+test("a result that does not match the Output contract goes back to the agent, which corrects it", async () => {
+  let rejection: ReturnType<typeof lastToolResult> | undefined;
+  system.model.setResponses([
+    callTool("submit_result", { value: { summary: 4 } }),
+    (context) => {
+      rejection = lastToolResult(context.messages);
+      return callTool("submit_result", { value: { summary: "Revenue grew 4%." } });
+    },
+  ]);
+
+  expect(await runJob(SUBMISSION)).toMatchObject({
+    state: "succeeded",
+    result: { summary: "Revenue grew 4%." },
+  });
+  expect(rejection).toMatchObject({
+    isError: true,
+    text: expect.stringContaining("Output contract"),
+  });
+});
+
+test("the agent can submit the result as a JSON file it wrote in its Workspace", async () => {
+  system.model.setResponses([
+    callTool("write", { path: "/out/result.json", content: '{"summary":"Revenue grew 4%."}' }),
+    callTool("submit_result", { path: "/out/result.json" }),
+  ]);
+
+  expect(await runJob(SUBMISSION)).toMatchObject({
+    state: "succeeded",
+    result: { summary: "Revenue grew 4%." },
+  });
+});
+
+test("an agent that stops without an accepted result fails the job", async () => {
+  system.model.setResponses([reply("The quarter went well.")]);
+
+  expect((await runJob(SUBMISSION)).state).toBe("failed");
+});
+
+// Last, since it stops the Runner.
+test("a runner stopped during a job's model call stops at once, leaving the job running", async () => {
+  let calling = false;
+  system.model.setResponses([
+    // As a provider's request does, the call ends when the Runner aborts it.
+    async (_context, options) => {
+      calling = true;
+      if (options?.signal) await once(options.signal, "abort");
+      return reply("Too late.");
+    },
+  ]);
+  const client = await system.clientWithNewJobsKey();
+  const { id } = await client.jobs.submit(SUBMISSION);
+  await expect.poll(() => calling, { timeout: 10_000 }).toBe(true);
+
+  const before = Date.now();
+  await system.stopRunner();
+
+  expect(Date.now() - before).toBeLessThan(2_000);
+  expect((await client.jobs.get({ id })).state).toBe("running");
+});

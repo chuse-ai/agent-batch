@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 
+import type { Models } from "@earendil-works/pi-ai";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import {
@@ -30,6 +31,7 @@ import ensureError from "ensure-error";
 import WebSocket from "ws";
 import * as z from "zod/mini";
 
+import type { AgentModel } from "./agent.ts";
 import { JobRunner } from "./jobs.ts";
 
 // TODO: remove once `@types/ws` declares `closeTimeout`, added in `ws` 8.19.
@@ -65,8 +67,12 @@ export interface RunnerOptions {
   hubUrl: string | URL;
   /** The key Runners share to register; a Runner uses it once, to receive a key of its own. */
   registrationKey: string;
-  /** Where the Runner keeps what must survive restarts, such as its own key. */
+  /** Where the Runner keeps what must survive restarts, such as its own key and its jobs' files. */
   dataDir: string;
+  /** The models the Runner's agents can run on, with their providers' keys. */
+  models: Models;
+  /** The model every job runs on. */
+  model: AgentModel;
   /** How many jobs the Runner runs at once. */
   maxJobs?: number;
   /** How often to send a heartbeat; tests set it shorter. */
@@ -92,7 +98,7 @@ export interface Runner {
  * How many jobs a Runner runs at once unless `RUNNER_MAX_JOBS` says otherwise. A low placeholder:
  * an agent loop mostly waits on a model, so a machine holds many, and the Runner is to derive its
  * allowance from the host's memory and a measured loop's footprint, admitting less under memory
- * pressure, once a real loop runs.
+ * pressure.
  */
 const DEFAULT_MAX_JOBS = 8;
 
@@ -136,8 +142,16 @@ function runRegistered(
   return Effect.scoped(
     Effect.gen(function* () {
       const syncNow = yield* Latch.make(false);
-      const jobs = new JobRunner(options.maxJobs ?? DEFAULT_MAX_JOBS, yield* Effect.scope, () =>
-        syncNow.openUnsafe(),
+      const agent = {
+        jobsDir: path.join(options.dataDir, "jobs"),
+        models: options.models,
+        model: options.model,
+      };
+      const jobs = new JobRunner(
+        options.maxJobs ?? DEFAULT_MAX_JOBS,
+        agent,
+        yield* Effect.scope,
+        () => syncNow.openUnsafe(),
       );
       return yield* keepConnected({
         url: socketUrl(hubUrl),

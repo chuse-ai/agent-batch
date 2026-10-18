@@ -22,8 +22,17 @@ allowBuilds:
   cpu-features: false
   protobufjs: false
   ssh2: false
+  # The Runner's dependencies. pi-ai's Google SDK has a no-op install script. just-bash's optional
+  # native codecs back its `zstd` and `xz` commands; node-liblzma ships no prebuilt binary, so
+  # building it would need a C++ toolchain wherever the Runner is installed.
+  "@google/genai": false
+  "@mongodb-js/zstd": false
+  node-liblzma: false
 catalog:
   "@better-auth/api-key": 1.7.8
+  "@earendil-works/chord": ^1.3.0
+  "@earendil-works/pi-ai": ^1.3.0
+  "@earendil-works/pi-durable": ^1.3.0
   "@effect/platform-node-shared": ^4.0.5
   "@hono/node-server": ^2.1.5
   "@orpc/client": 2.0.0-beta.43
@@ -48,6 +57,7 @@ catalog:
   hono-problem-details: ^0.12.0
   json-rpc-2.0: ^1.8.1
   json-schema-library: ^11.6.6
+  just-bash: ^3.6.0
   kanel: ^4.0.4
   kanel-kysely: ^4.0.0
   kysely: ^0.29.6

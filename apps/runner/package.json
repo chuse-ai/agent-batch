@@ -11,9 +11,13 @@
     "build": "vp pack",
     "dev": "vp pack --watch",
     "start": "node dist/main.mjs",
+    "test": "vp test",
     "check": "vp check"
   },
   "dependencies": {
+    "@earendil-works/chord": "catalog:",
+    "@earendil-works/pi-ai": "catalog:",
+    "@earendil-works/pi-durable": "catalog:",
     "@effect/platform-node-shared": "catalog:",
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
@@ -21,6 +25,8 @@
     "contract": "workspace:*",
     "effect": "catalog:",
     "ensure-error": "catalog:",
+    "json-schema-library": "catalog:",
+    "just-bash": "catalog:",
     "ws": "catalog:",
     "zod": "catalog:"
   },

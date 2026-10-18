@@ -57,14 +57,14 @@ interface ReportRow {
 function reportRow(report: JobReport, n: number): ReportRow {
   const { jobId, generation, outcome } = report;
   const row = { jobId: JobId(jobId), generation, state: outcome.state, n };
-  return outcome.state === "running"
-    ? { ...row, startedAt: outcome.startedAt, endedAt: null, result: null }
-    : {
-        ...row,
-        startedAt: null,
-        endedAt: outcome.endedAt,
-        result: outcome.result === undefined ? null : JSON.stringify(outcome.result),
-      };
+  if (outcome.state === "running") {
+    return { ...row, startedAt: outcome.startedAt, endedAt: null, result: null };
+  }
+  const result =
+    outcome.state === "succeeded" && outcome.result !== undefined
+      ? JSON.stringify(outcome.result)
+      : null;
+  return { ...row, startedAt: null, endedAt: outcome.endedAt, result };
 }
 
 /**
@@ -141,7 +141,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
         .where((eb) =>
           eb.or([
             eb.and([eb("r.state", "=", "running"), eb("j.state", "=", "queued")]),
-            eb.and([eb("r.state", "=", "succeeded"), eb("j.state", "in", unfinished)]),
+            eb.and([eb("r.state", "in", ["succeeded", "failed"]), eb("j.state", "in", unfinished)]),
           ]),
         )
         .execute();
