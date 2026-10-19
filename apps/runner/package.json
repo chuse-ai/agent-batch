@@ -11,13 +11,14 @@
     "build": "vp pack",
     "dev": "vp pack --watch",
     "start": "node dist/main.mjs",
-    "test": "vp test",
     "check": "vp check"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "catalog:",
     "@earendil-works/chord": "catalog:",
     "@earendil-works/pi-ai": "catalog:",
     "@earendil-works/pi-durable": "catalog:",
+    "@earendil-works/pi-env": "catalog:",
     "@effect/platform-node-shared": "catalog:",
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
@@ -26,7 +27,6 @@
     "effect": "catalog:",
     "ensure-error": "catalog:",
     "json-schema-library": "catalog:",
-    "just-bash": "catalog:",
     "ws": "catalog:",
     "zod": "catalog:"
   },

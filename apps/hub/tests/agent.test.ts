@@ -36,7 +36,7 @@ async function runJob(submission: JobSubmission) {
 
 test("the agent finds the Input files in inputs/ and submits a result read from them", async () => {
   system.model.setResponses([
-    callTool("read", { path: "/inputs/q3.md" }),
+    callTool("read", { path: "inputs/q3.md" }),
     (context) =>
       callTool("submit_result", { value: { summary: lastToolResult(context.messages).text } }),
   ]);
@@ -69,8 +69,8 @@ test("a result that does not match the Output contract goes back to the agent, w
 
 test("the agent can submit the result as a JSON file it wrote in its Workspace", async () => {
   system.model.setResponses([
-    callTool("write", { path: "/out/result.json", content: '{"summary":"Revenue grew 4%."}' }),
-    callTool("submit_result", { path: "/out/result.json" }),
+    callTool("write", { path: "out/result.json", content: '{"summary":"Revenue grew 4%."}' }),
+    callTool("submit_result", { path: "out/result.json" }),
   ]);
 
   expect(await runJob(SUBMISSION)).toMatchObject({

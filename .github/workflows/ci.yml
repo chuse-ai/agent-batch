@@ -20,6 +20,17 @@ jobs:
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
         with:
           cache: true
+      # What the Runner's job sandbox needs on Ubuntu (ADR 0027), so tests that run jobs run them as the
+      # Runner does. GitHub's image already keeps the runner user's systemd manager running (linger),
+      # which the per-job memory limit uses.
+      - &job-sandbox
+        name: Job sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat ripgrep
+          # Ubuntu 24.04 and later deny bubblewrap the user namespaces it needs; the runner's README
+          # gives the narrower AppArmor profile for real hosts.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: vp run ready
       # The migrations must create everything Better Auth needs.
       - run: vp run --no-cache hub#db:draft-auth-migration --check
@@ -44,6 +55,7 @@ jobs:
         with:
           cache: true
           node-version: 22.19.0
+      - *job-sandbox
       - run: vp run --filter runner --filter agent-batch test
       # The hub in workerd, with the tests and the Runners they start on Node 22. The `node` project
       # would run the hub itself on the tests' Node.

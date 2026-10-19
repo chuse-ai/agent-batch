@@ -1,3 +1,4 @@
+import path from "node:path";
 import { parseArgs } from "node:util";
 
 import type { Models } from "@earendil-works/pi-ai";
@@ -8,7 +9,7 @@ import { MODEL_THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-sch
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
 import { Config, Effect, Option, Redacted } from "effect";
 
-import { runRunner } from "./index.ts";
+import { DEFAULT_SANDBOX_SETTINGS, runRunner } from "./index.ts";
 
 // Runs a Runner from the environment; `register` discards its own key and registers it again. A stop
 // signal interrupts it: it closes its connection, so the hub drops it at once, and stops its jobs.
@@ -50,6 +51,17 @@ const runnerSettings = Config.all({
   thinkingLevel: Config.Literals(MODEL_THINKING_LEVELS, "RUNNER_THINKING_LEVEL").pipe(
     Config.withDefault(DEFAULT_THINKING_LEVEL),
   ),
+  // Separated as `PATH` is, by `:` (`;` on Windows).
+  extraReadPaths: Config.String("RUNNER_JOB_READ_PATHS").pipe(
+    Config.map((paths) => paths.split(path.delimiter).filter(Boolean)),
+    Config.withDefault(DEFAULT_SANDBOX_SETTINGS.extraReadPaths),
+  ),
+  jobMemoryLimit: Config.NonEmptyString("RUNNER_JOB_MEMORY_LIMIT").pipe(
+    Config.withDefault(DEFAULT_SANDBOX_SETTINGS.jobMemoryLimit),
+  ),
+  runWithoutSandbox: Config.Boolean("RUNNER_RUN_WITHOUT_SANDBOX").pipe(
+    Config.withDefault(DEFAULT_SANDBOX_SETTINGS.runWithoutSandbox),
+  ),
 });
 
 /** Tells the operator why the Runner cannot start, and ends it with a failing exit code. */
@@ -78,8 +90,14 @@ Effect.gen(function* () {
       thinkingLevel: settings.thinkingLevel,
     },
     maxJobs: Option.getOrUndefined(settings.maxJobs),
+    sandbox: {
+      extraReadPaths: settings.extraReadPaths,
+      jobMemoryLimit: settings.jobMemoryLimit,
+      runWithoutSandbox: settings.runWithoutSandbox,
+    },
     register: command === "register",
   }).pipe(
+    Effect.catchTag("SandboxUnavailable", (error) => refuse(error.message)),
     Effect.catchTag("Removed", () =>
       // FIXME: re-registering belongs to the CLI. Once it exists, this message names its command
       // (such as `agent-batch runner register`) and `register` moves out of this entry point.

@@ -21,13 +21,14 @@ import { Effect } from "effect";
 import ensureError from "ensure-error";
 import { compileSchema } from "json-schema-library";
 
-import { WorkspaceEnv } from "./workspace.ts";
+import type { JobEnvironments } from "./sandbox.ts";
 
 // Runs a job's agent with pi-durable: one Harness and SQLite journal per job, so purging a job
 // deletes its file (pi-durable cannot delete a conversation) and the journal holds exactly the
-// job's entries in order. The agent has pi-durable's coding tools on the job's Workspace and
-// `submit_result`, which checks the result against the Output contract, as the hub checks the
-// contract itself (ADR 0025), and ends the run once a result is accepted (ADR 0009).
+// job's entries in order. The agent has pi-durable's coding tools on the job's Workspace, in
+// the job's sandbox (ADR 0027), and `submit_result`, which checks the result against the Output
+// contract, as the hub checks the contract itself (ADR 0025), and ends the run once a result is
+// accepted (ADR 0009).
 
 /** The model every job runs on until jobs choose their own, as Pi names it (ADR 0013). */
 export interface AgentModel {
@@ -36,10 +37,11 @@ export interface AgentModel {
   thinkingLevel: ModelThinkingLevel;
 }
 
-/** How the Runner runs every job's agent: where jobs keep their files, and on which model. */
+/** How the Runner runs every job's agent: where jobs keep their files, in which sandbox, and on which model. */
 export interface AgentSettings {
-  /** The directory holding one directory per job: its journal and its Workspace. */
+  /** The directory holding one directory per job: its journal, its Workspace and its temp directory. */
   jobsDir: string;
+  environments: JobEnvironments;
   models: Models;
   model: AgentModel;
 }
@@ -60,10 +62,17 @@ const AcceptedResult = defineDoc<{ result?: JsonValue }>({
   initial: () => ({}),
 });
 
-/** Where a job's files are on the Runner: its journal, and its Workspace with the Input files. */
+/**
+ * Where a job's files are on the Runner: its journal, its Workspace with the Input files, and its
+ * temp directory. Absolute, since the agent sees them at these paths.
+ */
 function jobPaths(jobsDir: string, jobId: string) {
-  const dir = path.join(jobsDir, jobId);
-  return { journal: path.join(dir, "journal.sqlite"), workspace: path.join(dir, "workspace") };
+  const dir = path.resolve(jobsDir, jobId);
+  return {
+    journal: path.join(dir, "journal.sqlite"),
+    workspace: path.join(dir, "workspace"),
+    temp: path.join(dir, "tmp"),
+  };
 }
 
 /**
@@ -80,9 +89,14 @@ async function writeInputFiles(workspace: string, files: JobContent["inputFiles"
   }
 }
 
-/** What the agent is told about the job, beside its Prompt. */
-const INSTRUCTIONS = `You are running a job unattended; nobody will answer questions. Your Workspace, where your files are and your commands run, is /; the job's Input files, if any, are in /inputs.
+/**
+ * What the agent is told about the job, beside its Prompt. The
+ * sandbox's `/tmp` is the job's own but held in memory, which counts against the job's memory limit.
+ */
+function instructions(paths: { workspace: string }) {
+  return `You are running a job unattended; nobody will answer questions. Your Workspace, where your files are and your commands run, is ${paths.workspace}; the job's Input files, if any, are in ${path.join(paths.workspace, "inputs")}. For temporary files, use the directory in $TMPDIR, not /tmp.
 When the work is complete, call submit_result once with the complete result: as \`value\`, or, for a large result or one a script produced, as the \`path\` of a JSON file in the Workspace. The result is checked against the job's Output contract; if it is rejected, correct it and submit again. A reply in prose does not complete the job.`;
+}
 
 function submitResultTool(schema: Record<string, unknown>) {
   const contract = compileSchema(schema);
@@ -176,7 +190,11 @@ export function runAgent(
     // The Workspace exists before its Input files: they are written only when the job's
     // conversation is created.
     yield* Effect.promise(() => mkdir(paths.workspace, { recursive: true }));
-    const env = new WorkspaceEnv(`job:${jobId}`, paths.workspace);
+    // Released after the Harness closes, so no tool call is left on a stopped daemon.
+    const { env } = yield* Effect.acquireRelease(
+      Effect.sync(() => options.environments.open(paths)),
+      (opened) => Effect.promise(() => opened.close()),
+    );
     const harness = yield* Effect.acquireRelease(
       Effect.promise(async () =>
         Harness.open(
@@ -192,8 +210,8 @@ export function runAgent(
         agent: {
           model: { provider: options.model.provider, modelId: options.model.modelId },
           thinkingLevel: options.model.thinkingLevel,
-          instructions: INSTRUCTIONS,
-          cwd: "/",
+          instructions: instructions(paths),
+          cwd: paths.workspace,
         },
         init: () => writeInputFiles(paths.workspace, job.inputFiles),
       }),

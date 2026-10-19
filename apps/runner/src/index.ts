@@ -33,6 +33,14 @@ import * as z from "zod/mini";
 
 import type { AgentModel } from "./agent.ts";
 import { JobRunner } from "./jobs.ts";
+import {
+  type JobEnvironments,
+  prepareJobEnvironments,
+  type SandboxSettings,
+  SandboxUnavailable,
+} from "./sandbox.ts";
+
+export { SandboxUnavailable };
 
 // TODO: remove once `@types/ws` declares `closeTimeout`, added in `ws` 8.19.
 declare module "ws" {
@@ -75,6 +83,8 @@ export interface RunnerOptions {
   model: AgentModel;
   /** How many jobs the Runner runs at once. */
   maxJobs?: number;
+  /** How jobs' sandboxes are made; `DEFAULT_SANDBOX_SETTINGS` unless given. */
+  sandbox?: SandboxSettings;
   /** How often to send a heartbeat; tests set it shorter. */
   heartbeatIntervalMs?: number;
   /** Discards the Runner's own key and registers again, as the `register` command does. */
@@ -103,22 +113,37 @@ export interface Runner {
 const DEFAULT_MAX_JOBS = 8;
 
 /**
+ * Jobs' sandboxes unless the Runner is told otherwise: no folders readable beyond the system's, and
+ * a configurable 1 GiB memory cap per job where the host supports it (ADR 0027).
+ */
+export const DEFAULT_SANDBOX_SETTINGS: SandboxSettings = {
+  extraReadPaths: [],
+  jobMemoryLimit: "1G",
+  runWithoutSandbox: false,
+};
+
+/**
  * The Runner as a program: registers it on its first start, then runs it until it is interrupted, or
  * until it fails with `Removed` once the hub no longer knows it. Its jobs stop before it ends.
  */
-export function runRunner(options: RunnerOptions): Effect.Effect<never, Removed> {
+export function runRunner(
+  options: RunnerOptions,
+): Effect.Effect<never, Removed | SandboxUnavailable> {
   const hubUrl = new URL(options.hubUrl);
-  return Effect.promise(() => loadOrRegister(hubUrl, options)).pipe(
-    Effect.flatMap((registration) => runRegistered(hubUrl, registration, options)),
-  );
+  return Effect.gen(function* () {
+    const environments = yield* prepareEnvironments(options);
+    const registration = yield* Effect.promise(() => loadOrRegister(hubUrl, options));
+    return yield* runRegistered(hubUrl, registration, options, environments);
+  });
 }
 
 /** Starts a Runner that stays connected to the hub until stopped, registering it on its first start. */
 export async function startRunner(options: StartRunnerOptions): Promise<Runner> {
   const hubUrl = new URL(options.hubUrl);
+  const environments = await Effect.runPromise(prepareEnvironments(options));
   const registration = await loadOrRegister(hubUrl, options);
   const loop = Effect.runFork(
-    runRegistered(hubUrl, registration, options).pipe(
+    runRegistered(hubUrl, registration, options, environments).pipe(
       Effect.catchTag("Removed", () => Effect.sync(() => options.onRemoved?.())),
     ),
   );
@@ -138,12 +163,14 @@ function runRegistered(
   hubUrl: URL,
   registration: RegisteredRunner,
   options: RunnerOptions,
+  environments: JobEnvironments,
 ): Effect.Effect<never, Removed> {
   return Effect.scoped(
     Effect.gen(function* () {
       const syncNow = yield* Latch.make(false);
       const agent = {
         jobsDir: path.join(options.dataDir, "jobs"),
+        environments,
         models: options.models,
         model: options.model,
       };
@@ -161,6 +188,30 @@ function runRegistered(
         syncNow,
       });
     }),
+  );
+}
+
+/**
+ * Finds what the host offers jobs, and tells the operator what they run without: a sandbox, where
+ * the operator allowed that, or a memory cap. Fails with `SandboxUnavailable` when jobs cannot run
+ * in a sandbox and the operator has not allowed running without one.
+ */
+function prepareEnvironments(
+  options: RunnerOptions,
+): Effect.Effect<JobEnvironments, SandboxUnavailable> {
+  return prepareJobEnvironments(options.sandbox ?? DEFAULT_SANDBOX_SETTINGS).pipe(
+    Effect.tap((environments) =>
+      Effect.sync(() => {
+        if (environments.unsandboxedBecause) {
+          console.error(
+            `Jobs run without a sandbox, as allowed: ${environments.unsandboxedBecause}`,
+          );
+        }
+        if (environments.uncappedBecause) {
+          console.error(`Jobs run without a memory limit: ${environments.uncappedBecause}`);
+        }
+      }),
+    ),
   );
 }
 
