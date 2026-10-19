@@ -1,21 +1,25 @@
 import path from "node:path";
 
-import { Config, Effect, ManagedRuntime, Option, Redacted } from "effect";
+import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
+import { Config, Effect, Layer, Option, Redacted } from "effect";
 import ensureError from "ensure-error";
 
 import { createApp, decideRunnerUpgrade } from "./app.ts";
 import { migrateDatabase } from "./db/migrate.ts";
 import { NodeRunnerSockets, nodeServices } from "./node/layers.ts";
 import { startServer, stopServer } from "./node/server.ts";
-import { hubSettings, readConfig } from "./settings.ts";
+import type { HubServices } from "./platform.ts";
+import { hubSettings } from "./settings.ts";
 import { setUpOrganization } from "./setup.ts";
 
 // The hub as a Node process, which its Docker image runs (ADR 0014). It runs as a single process:
 // two would split Runners' connections between them. On start it migrates the database and sets up
 // the Organization and its owner from `ADMIN_EMAIL` and `ADMIN_PASSWORD` unless it exists (ADR 0015),
-// then serves until `SIGINT` or `SIGTERM`, as Effect's example of `ManagedRuntime` with Hono does.
+// then serves until `SIGINT` or `SIGTERM`. It runs as Effect's example of an application entry point
+// does, a layer started with `Layer.launch` under `NodeRuntime.runMain`, which the Runner's entry
+// point uses too: a signal interrupts it, and the server stops before the services it runs on.
 
-/** The Node hub's settings: the hub's own, its database and port, and the owner to set up. */
+/** The Node hub's settings, read from the environment by Effect's default `Config` source. */
 const nodeSettings = Config.all({
   hub: hubSettings,
   databaseUrl: Config.Redacted("DATABASE_URL"),
@@ -24,50 +28,68 @@ const nodeSettings = Config.all({
   adminPassword: Config.Redacted("ADMIN_PASSWORD").pipe(Config.option),
 });
 
-let settings: Config.Success<typeof nodeSettings>;
-try {
-  settings = readConfig(nodeSettings, process.env);
-} catch (error) {
-  console.error(ensureError(error).message);
-  process.exit(1);
-}
-const databaseUrl = Redacted.value(settings.databaseUrl);
-
-try {
-  // Migrations sit beside `src` and `dist` alike, so the path holds before and after building.
-  await migrateDatabase(databaseUrl, path.join(import.meta.dirname, "../migrations"));
-  await setUpOrganization(databaseUrl, {
-    email: Option.getOrUndefined(settings.adminEmail),
-    password: Option.getOrUndefined(Option.map(settings.adminPassword, Redacted.value)),
+/** Tells the operator why the hub cannot start, and ends it with a failing exit code. */
+function refuse(message: string) {
+  return Effect.sync(() => {
+    console.error(message);
+    process.exitCode = 1;
   });
-} catch (error) {
-  console.error(ensureError(error).message);
-  process.exit(1);
 }
 
-const runtime = ManagedRuntime.make(nodeServices(settings.hub, databaseUrl));
-const app = createApp<object>({
-  run: (_env, effect) => runtime.runPromise(effect),
-  acceptRunner: () => {
-    // crossws takes every upgrade in the server's `upgrade` event before the app sees the request,
-    // so only requests the decision refuses reach the app's Runner route here.
-    throw new Error("The Node hub accepts Runners' sockets in its upgrade hook");
-  },
-});
-const sockets = await runtime.runPromise(NodeRunnerSockets.use(Effect.succeed));
-const server = await startServer(
-  app.fetch,
-  (request) => runtime.runPromise(decideRunnerUpgrade(request)),
-  sockets,
-  settings.port,
-);
+/**
+ * The hub's server on `port`, running each request on the services it is given. Stopping drains
+ * before it releases: the server stops before those services, so Runners' sockets close and the
+ * server finishes its requests first.
+ */
+function hubServer(port: number) {
+  return Layer.effectDiscard(
+    Effect.gen(function* () {
+      const run = Effect.runPromiseWith(yield* Effect.context<HubServices>());
+      const app = createApp<object>({
+        run: (_env, effect) => run(effect),
+        acceptRunner: () => {
+          // crossws takes every upgrade in the server's `upgrade` event before the app sees the
+          // request, so only requests the decision refuses reach the app's Runner route here.
+          throw new Error("The Node hub accepts Runners' sockets in its upgrade hook");
+        },
+      });
+      const sockets = yield* NodeRunnerSockets;
+      yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          startServer(app.fetch, (request) => run(decideRunnerUpgrade(request)), sockets, port),
+        ),
+        (server) =>
+          Effect.promise(() => {
+            sockets.closeAll();
+            return stopServer(server);
+          }),
+      );
+    }),
+  );
+}
 
-// Stopping drains before it releases: disposing the runtime interrupts any request still running on
-// it, so Runners' sockets close and the server finishes its requests first.
-const shutdown = async () => {
-  sockets.closeAll();
-  await stopServer(server);
-  await runtime.dispose();
-};
-process.once("SIGINT", () => void shutdown());
-process.once("SIGTERM", () => void shutdown());
+Effect.gen(function* () {
+  const settings = yield* nodeSettings;
+  const databaseUrl = Redacted.value(settings.databaseUrl);
+  yield* Effect.tryPromise({
+    try: async () => {
+      // Migrations sit beside `src` and `dist` alike, so the path holds before and after building.
+      await migrateDatabase(databaseUrl, path.join(import.meta.dirname, "../migrations"));
+      await setUpOrganization(databaseUrl, {
+        email: Option.getOrUndefined(settings.adminEmail),
+        password: Option.getOrUndefined(Option.map(settings.adminPassword, Redacted.value)),
+      });
+    },
+    catch: ensureError,
+  });
+  return yield* Layer.launch(
+    hubServer(settings.port).pipe(Layer.provide(nodeServices(settings.hub, databaseUrl))),
+  );
+}).pipe(
+  // A missing or malformed setting names itself, on one line as the Runner reports its own.
+  Effect.catchTag("ConfigError", (error) =>
+    refuse(`The hub is not configured: ${error.cause.message.replace(/\s+/g, " ")}`),
+  ),
+  Effect.catch((error) => refuse(error.message)),
+  NodeRuntime.runMain,
+);

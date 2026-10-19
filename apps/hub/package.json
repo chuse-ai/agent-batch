@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@better-auth/api-key": "catalog:",
+    "@effect/platform-node-shared": "catalog:",
     "@hono/node-server": "catalog:",
     "@orpc/experimental-effect": "catalog:",
     "@orpc/openapi": "catalog:",

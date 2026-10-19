@@ -1,9 +1,9 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 
 import type { Models } from "@earendil-works/pi-ai";
+import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import {
@@ -25,7 +25,19 @@ import {
   socketRefusalSchema,
   type SocketRefusal,
 } from "contract";
-import { Cause, Data, Effect, Exit, Fiber, Latch, Random, Schedule, Scope } from "effect";
+import {
+  Cause,
+  Data,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Latch,
+  Random,
+  Result,
+  Schedule,
+  Scope,
+} from "effect";
 import * as Socket from "effect/socket/Socket";
 import ensureError from "ensure-error";
 import WebSocket from "ws";
@@ -132,7 +144,7 @@ export function runRunner(
   const hubUrl = new URL(options.hubUrl);
   return Effect.gen(function* () {
     const environments = yield* prepareEnvironments(options);
-    const registration = yield* Effect.promise(() => loadOrRegister(hubUrl, options));
+    const registration = yield* loadOrRegister(hubUrl, options);
     return yield* runRegistered(hubUrl, registration, options, environments);
   });
 }
@@ -141,7 +153,7 @@ export function runRunner(
 export async function startRunner(options: StartRunnerOptions): Promise<Runner> {
   const hubUrl = new URL(options.hubUrl);
   const environments = await Effect.runPromise(prepareEnvironments(options));
-  const registration = await loadOrRegister(hubUrl, options);
+  const registration = await Effect.runPromise(loadOrRegister(hubUrl, options));
   const loop = Effect.runFork(
     runRegistered(hubUrl, registration, options, environments).pipe(
       Effect.catchTag("Removed", () => Effect.sync(() => options.onRemoved?.())),
@@ -226,27 +238,29 @@ function socketUrl(hubUrl: URL): URL {
  * The Runner's own key, kept in its data directory, or, on its first start, a new one from
  * registering with the shared key, as GitHub Actions and Buildkite runners do.
  */
-async function loadOrRegister(hubUrl: URL, options: RunnerOptions): Promise<RegisteredRunner> {
+function loadOrRegister(hubUrl: URL, options: RunnerOptions): Effect.Effect<RegisteredRunner> {
   const file = path.join(options.dataDir, "runner.json");
-  if (!options.register) {
-    try {
-      return z.parse(registeredRunnerSchema, JSON.parse(await readFile(file, "utf8")));
-    } catch (error) {
-      const absent = error instanceof Error && "code" in error && error.code === "ENOENT";
-      if (!absent) throw error;
-    }
-  }
-  const hub: ContractRouterClient<typeof contract> = createORPCClient(
-    createProblemDetailsLink(contract, {
-      origin: hubUrl.origin,
-      headers: { "x-api-key": options.registrationKey },
-    }),
-  );
-  const registration = await hub.runners.register({ name: hostname() });
-  await mkdir(options.dataDir, { recursive: true });
-  // Only the operating-system user running the Runner may read its key.
-  await writeFile(file, JSON.stringify(registration), { mode: 0o600 });
-  return registration;
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const register = Effect.gen(function* () {
+      const hub: ContractRouterClient<typeof contract> = createORPCClient(
+        createProblemDetailsLink(contract, {
+          origin: hubUrl.origin,
+          headers: { "x-api-key": options.registrationKey },
+        }),
+      );
+      const registration = yield* Effect.promise(() => hub.runners.register({ name: hostname() }));
+      yield* fs.makeDirectory(options.dataDir, { recursive: true });
+      // Only the operating-system user running the Runner may read its key.
+      yield* fs.writeFileString(file, JSON.stringify(registration), { mode: 0o600 });
+      return registration;
+    });
+    if (options.register) return yield* register;
+    return yield* fs.readFileString(file).pipe(
+      Effect.map((saved) => z.parse(registeredRunnerSchema, JSON.parse(saved))),
+      Effect.catchReason("PlatformError", "NotFound", () => register),
+    );
+  }).pipe(Effect.orDie, Effect.provide(NodeFileSystem.layer));
 }
 
 /** What a connection needs: where and as whom to connect, and the jobs it keeps in sync. */
@@ -470,10 +484,5 @@ function openSocket(
 
 /** The hub's refusal in `body`, if it is one the Runner knows how to read. */
 function parseRefusal(body: string): SocketRefusal | undefined {
-  try {
-    const parsed = z.safeParse(socketRefusalSchema, JSON.parse(body));
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
+  return Result.getOrUndefined(Result.try(() => z.parse(socketRefusalSchema, JSON.parse(body))));
 }

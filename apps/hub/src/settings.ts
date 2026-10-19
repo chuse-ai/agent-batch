@@ -1,4 +1,15 @@
-import { Cause, Config, ConfigProvider, Effect, Exit, Option, Redacted, Schema } from "effect";
+import {
+  Cause,
+  Config,
+  ConfigProvider,
+  Effect,
+  Exit,
+  Option,
+  Predicate,
+  Record,
+  Redacted,
+  Schema,
+} from "effect";
 
 import type { AuthSettings } from "./auth/options.ts";
 
@@ -41,18 +52,11 @@ export function authSettings(settings: HubSettings): Omit<AuthSettings, "db"> {
  * variables; throws an error saying what to set when it does not hold.
  */
 export function readConfig<A>(config: Config.Config<A>, env: object): A {
-  const variables = Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-  );
   // A Worker's environment is not the process's, so it is given explicitly, as Effect documents for
-  // runtimes without one.
-  const exit = Effect.runSyncExit(
-    Effect.gen(function* () {
-      return yield* config;
-    }).pipe(
-      Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord(variables)),
-    ),
-  );
+  // runtimes without one. It is copied first, as an interface such as the Worker's `Env` has no
+  // index signature for `Record` to take.
+  const variables = Record.filter({ ...env }, Predicate.isString);
+  const exit = Effect.runSyncExit(config.parse(ConfigProvider.fromEnvRecord(variables)));
   if (Exit.isSuccess(exit)) return exit.value;
   // A missing or malformed setting fails with a ConfigError whose cause says which one.
   const failure: unknown = Cause.squash(exit.cause);
