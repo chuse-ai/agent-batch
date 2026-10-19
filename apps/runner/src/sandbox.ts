@@ -403,11 +403,10 @@ function openJobEnvironment(options: {
         );
         wraps += 1;
       }
-      const daemonEnv = Object.entries({
-        ...keptEnvironment(),
-        AGENT_BATCH_DAEMON: daemon,
-        AGENT_BATCH_TEMP: dirs.temp,
-      }).map(([name, value]) => `${name}=${value}`);
+      const daemonEnv = Record.collect(
+        { ...keptEnvironment(), AGENT_BATCH_DAEMON: daemon, AGENT_BATCH_TEMP: dirs.temp },
+        (name, value) => `${name}=${value}`,
+      );
       const start = ["env", "-i", ...daemonEnv, "/bin/sh", "-c", START_DAEMON, inner];
       if (memoryLimit === undefined) return start;
       scope = `agent-batch-job-${randomUUID()}.scope`;

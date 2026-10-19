@@ -1,5 +1,5 @@
 import type { DesiredState, JobContent, JobReport, Placement, PlacementRef } from "contract";
-import { Effect, Fiber, Latch, type Scope } from "effect";
+import { Array, Effect, Fiber, Latch, type Scope } from "effect";
 import ensureError from "ensure-error";
 
 import { type AgentSettings, runAgent } from "./agent.ts";
@@ -48,7 +48,7 @@ export class JobRunner {
    */
   load(): { held: PlacementRef[]; free: number } {
     const jobs = [...this.#held.values()];
-    const running = jobs.filter((job) => !job.ended).length;
+    const running = Array.countBy(jobs, (job) => !job.ended);
     return { held: jobs.map((job) => job.placement), free: Math.max(0, this.#maxJobs - running) };
   }
 

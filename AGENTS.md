@@ -20,7 +20,7 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 - After changing a migration, run `vp run hub#db:types`; after upgrading Better Auth, run `vp run hub#db:draft-auth-migration`. CI fails on either otherwise.
 - A comment that records a decision stays until the decision is re-opened; changing the behaviour means re-opening the decision, not deleting the comment.
 - A name says what the code does, effects included; an abstract name is justified only where the difference it hides is one no caller cares about. A read-sounding name must not hide a write. Abstracting over how (a join behind `listRunners`) is fine; abstracting over what happens is not.
-- Before writing code by hand or adding a library, check whether Effect, or an Effect platform package already in use, does it.
+- Before writing code by hand or adding a library, check whether Effect, or an Effect platform package already in use, does it; for arrays and objects, use Effect's call where it reads better than plain JavaScript.
 - A caught value becomes an `Error` through `ensure-error` before it is logged or inspected.
 - A Node emitter the code holds, such as a socket, a pool, a server or a child process, gets an `error` listener when it is acquired and keeps it until it is destroyed: an unhandled `error` event ends the process, outside any fiber or promise.
 - Prefer optional over `null` unless there is a domain reason, such as the database's explicit `NULL` against no update. Never remap external data to swap `null` and `undefined`; keep the source's shape.

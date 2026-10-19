@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import canonicalize from "canonicalize";
 import { IdempotencyKeyReused, NotFound, type Job, type JobSubmission } from "contract";
-import { Effect, Struct } from "effect";
+import { Effect, Record, Struct } from "effect";
 import { compileSchema, isJsonError } from "json-schema-library";
 import { validate as isUuid, v7 as uuidv7 } from "uuid";
 
@@ -23,7 +23,7 @@ function toApiJob(job: Pick<JobRow, (typeof JOB_COLUMNS)[number]>): Job {
  * What is wrong with an Output contract's schema, as messages: text that is not Unicode, then
  * json-schema-library's own checks of the schema, then the hub's rules for a result.
  */
-export function outputContractProblems(schema: Record<string, unknown>): string[] {
+export function outputContractProblems(schema: Record.ReadonlyRecord<string, unknown>): string[] {
   // Parsed JSON holds no NaN, Infinity or cycles, so canonical JSON refuses it only for a lone
   // surrogate, as RFC 8785 requires; the contract checks the submission's other text itself. NUL in
   // the schema is left to Postgres, which refuses it in `jsonb`: no schema needs one, and finding it
@@ -124,12 +124,11 @@ export function submitJob(submission: JobSubmission, submitter: Submitter) {
             .where("idempotencyKey", "=", submission.idempotencyKey ?? null)
             .executeTakeFirstOrThrow();
         }
-        const inputFiles = Object.entries(submission.inputFiles);
-        if (inputFiles.length > 0) {
+        if (!Record.isEmptyRecord(submission.inputFiles)) {
           await trx
             .insertInto("inputFile")
             .values(
-              inputFiles.map(([name, file]) => ({
+              Record.collect(submission.inputFiles, (name, file) => ({
                 jobId: inserted.id,
                 name: InputFileName(name),
                 content: file.content,
