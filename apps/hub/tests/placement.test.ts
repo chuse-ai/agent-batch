@@ -5,7 +5,8 @@ import { afterAll, assert, beforeAll, expect, inject, test } from "vite-plus/tes
 
 import { DB_SCHEMA, openDatabase } from "../src/db/database.ts";
 import { JobId } from "../src/db/types.ts";
-import { callTool, startSystem } from "./harness.ts";
+import { startSystem } from "./harness.ts";
+import { callTool, untilAborted } from "./scripted-model.ts";
 
 const system = startSystem();
 
@@ -69,3 +70,51 @@ test("a job submitted while no runner is connected stays queued, and runs once o
     .poll(() => client.jobs.get({ id }), { timeout: 10_000 })
     .toMatchObject({ state: "succeeded", result: RESULT });
 });
+
+test("a Runner started again with fewer slots than its jobs continues only as many, and is given no new job meanwhile", async () => {
+  await system.stopRunner();
+  const client = await system.clientWithNewJobsKey();
+  // The scripted model counts every call it gets, including those beyond its scripted responses.
+  const calls = () => system.model.state.callCount;
+  const before = calls();
+  system.model.setResponses([untilAborted, untilAborted]);
+  await system.startRunner({ maxJobs: 2 });
+  const first = await client.jobs.submit(SUBMISSION);
+  const second = await client.jobs.submit(SUBMISSION);
+  await expect.poll(() => calls() - before, { timeout: 10_000 }).toBe(2);
+  const third = await client.jobs.submit(SUBMISSION);
+  await system.stopRunner();
+
+  // The job that continues first submits its result only once the test, having checked the rest,
+  // releases it.
+  const { promise: released, resolve: release } = Promise.withResolvers<void>();
+  const restarted = calls();
+  system.model.setResponses([
+    async () => {
+      await released;
+      return callTool("submit_result", { value: RESULT });
+    },
+    callTool("submit_result", { value: RESULT }),
+    callTool("submit_result", { value: RESULT }),
+  ]);
+  await system.startRunner({ maxJobs: 1 });
+  await expect.poll(() => calls() - restarted, { timeout: 10_000 }).toBe(1);
+  await setTimeout(1_000);
+  expect(calls() - restarted).toBe(1);
+  await using db = openDatabase(inject("databaseUrl"));
+  expect(
+    await db
+      .withSchema(DB_SCHEMA)
+      .selectFrom("job")
+      .select("runnerId")
+      .where("id", "=", JobId(third.id))
+      .executeTakeFirst(),
+  ).toEqual({ runnerId: null });
+
+  release();
+  for (const { id } of [first, second, third]) {
+    await expect
+      .poll(() => client.jobs.get({ id }), { timeout: 10_000 })
+      .toMatchObject({ state: "succeeded", result: RESULT });
+  }
+}, 30_000);

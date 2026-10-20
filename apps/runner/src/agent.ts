@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -50,8 +51,9 @@ export interface AgentSettings {
 export type AgentOutcome = { state: "succeeded"; result: unknown } | { state: "failed" };
 
 /**
- * The result `submit_result` accepted first, committed with the call so a restart keeps it; absent
- * until one is accepted, since `null` is itself a result.
+ * The result `submit_result` accepted first, committed in its own transaction before the call's
+ * result, so a restart keeps it even when the call itself was cut off; absent until one is accepted,
+ * since `null` is itself a result.
  */
 const AcceptedResult = defineDoc<{ result?: JsonValue }>({
   kind: "agent-batch.result",
@@ -75,11 +77,16 @@ function jobPaths(jobsDir: string, jobId: string) {
   };
 }
 
+/** Whether the job has a journal on this Runner, as a job that started here has. */
+export function hasJournal(jobsDir: string, jobId: string): boolean {
+  return existsSync(jobPaths(jobsDir, jobId).journal);
+}
+
 /**
  * Writes the Input files into the Workspace's `inputs/` folder, once, as the job's conversation is
- * created: a resumed job keeps the agent's edits to them. Their names are flat file names valid on
- * every platform: the contract's schema checked them again when the placement reached the
- * Runner, so none leaves the folder.
+ * created: a job that continues after its Runner restarts keeps the agent's edits to them. Their
+ * names are flat file names valid on every platform: the contract's schema checked them again
+ * when the placement reached the Runner, so none leaves the folder.
  */
 async function writeInputFiles(workspace: string, files: JobContent["inputFiles"]) {
   const inputs = path.join(workspace, "inputs");
@@ -152,7 +159,8 @@ function submitResultTool(schema: Record<string, unknown>) {
 /**
  * Runs `job`'s agent in `<jobsDir>/<jobId>` until it submits an accepted result or ends without
  * one. `dropped` completes when the hub drops the placement: the run is then aborted, which ends the
- * job's work; interruption, as when the Runner stops, only closes the journal, so the job can resume.
+ * job's work; interruption, as when the Runner stops, only closes the journal, so the job continues
+ * when the Runner starts again.
  */
 export function runAgent(
   jobId: string,
@@ -199,7 +207,15 @@ export function runAgent(
       Effect.promise(async () =>
         Harness.open(
           await openNodeSqliteStorage(paths.journal),
-          { models: options.models, registry, env: () => env },
+          {
+            models: options.models,
+            registry,
+            env: () => env,
+            // Partial answers and command output are saved once a second rather than every 100 ms
+            // (ADR 0016): the saves run on the thread all jobs share, and only a restart reads them,
+            // losing at most a second of the output of a command it cut off.
+            settings: { progress: { partialIntervalMs: 1_000, outputIntervalMs: 1_000 } },
+          },
           context,
         ),
       ),

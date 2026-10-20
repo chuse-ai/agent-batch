@@ -16,7 +16,7 @@ import { assert, expect, test } from "vite-plus/test";
 import { WebSocketServer } from "ws";
 import * as z from "zod/mini";
 
-import { callTool, scriptedModel } from "./harness.ts";
+import { callTool, scriptedModel } from "./scripted-model.ts";
 
 // A job's outcome must reach the hub even when the connection drops while the Runner reports it, or
 // the job looks stuck. The hub here is a stand-in, since the real one cannot be made to drop a

@@ -10,7 +10,7 @@ import { startRunner } from "runner";
 import { expect, test } from "vite-plus/test";
 import * as z from "zod/mini";
 
-import { scriptedModel } from "./harness.ts";
+import { scriptedModel } from "./scripted-model.ts";
 
 // A Runner is stopped while its socket to the hub is still connecting, as when an operator stops it
 // during a hub outage: the stop must return, and the process must survive.

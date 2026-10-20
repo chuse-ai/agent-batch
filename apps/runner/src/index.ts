@@ -149,7 +149,10 @@ export function runRunner(
   });
 }
 
-/** Starts a Runner that stays connected to the hub until stopped, registering it on its first start. */
+/**
+ * Starts a Runner that stays connected to the hub until stopped, registering it on its first start.
+ * Its process must exit on `SIGINT` and `SIGTERM` itself, as `initializeSandboxRuntime` explains.
+ */
 export async function startRunner(options: StartRunnerOptions): Promise<Runner> {
   const hubUrl = new URL(options.hubUrl);
   const environments = await Effect.runPromise(prepareEnvironments(options));

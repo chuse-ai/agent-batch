@@ -197,6 +197,12 @@ const NO_NETWORK = { allowedDomains: [], deniedDomains: [] };
  * Configures sandbox-runtime once per process: it keeps its configuration and network proxies in
  * module state. Every job's sandbox gets its own filesystem policy, so the one given here applies
  * to none of them; its network policy applies to all of them (`NO_NETWORK`).
+ *
+ * Initializing also adds sandbox-runtime's one-time `SIGINT` and `SIGTERM` listeners, which reset
+ * the sandbox but do not exit, and a listener on a signal turns off Node's exit on it. So the
+ * process hosting the Runner exits on those signals itself, as `NodeRuntime.runMain` makes
+ * `main.ts` do; otherwise it outlives the first one with its sandbox reset. This is not reported to
+ * sandbox-runtime yet (`registerCleanup` in 0.0.80).
  */
 let initialized: Promise<void> | undefined;
 function initializeSandboxRuntime(): Promise<void> {

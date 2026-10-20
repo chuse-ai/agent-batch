@@ -1,9 +1,8 @@
-import { once } from "node:events";
-
 import type { JobSubmission } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
-import { callTool, lastToolResult, reply, startSystem } from "./harness.ts";
+import { startSystem } from "./harness.ts";
+import { callTool, lastToolResult, reply, untilAborted } from "./scripted-model.ts";
 
 // What a job's agent works with and how it ends the job, driven by a scripted model: the Input files
 // in its Workspace, and `submit_result`, which takes only a result matching the Output contract.
@@ -89,11 +88,9 @@ test("an agent that stops without an accepted result fails the job", async () =>
 test("a runner stopped during a job's model call stops at once, leaving the job running", async () => {
   let calling = false;
   system.model.setResponses([
-    // As a provider's request does, the call ends when the Runner aborts it.
-    async (_context, options) => {
+    (...args) => {
       calling = true;
-      if (options?.signal) await once(options.signal, "abort");
-      return reply("Too late.");
+      return untilAborted(...args);
     },
   ]);
   const client = await system.clientWithNewJobsKey();

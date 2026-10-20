@@ -1,8 +1,8 @@
 import type { DesiredState, JobContent, JobReport, Placement, PlacementRef } from "contract";
-import { Array, Effect, Fiber, Latch, type Scope } from "effect";
+import { Array, Effect, Fiber, Latch, Order, type Scope } from "effect";
 import ensureError from "ensure-error";
 
-import { type AgentSettings, runAgent } from "./agent.ts";
+import { type AgentSettings, hasJournal, runAgent } from "./agent.ts";
 
 // The Runner's jobs: each placement the hub gives it runs as one supervised fiber (ADR 0022), and
 // what becomes of it is reported to the hub with the next sync. The hub's answer to every sync is
@@ -47,9 +47,10 @@ export class JobRunner {
    * report of its end already offers its slot.
    */
   load(): { held: PlacementRef[]; free: number } {
-    const jobs = [...this.#held.values()];
-    const running = Array.countBy(jobs, (job) => !job.ended);
-    return { held: jobs.map((job) => job.placement), free: Math.max(0, this.#maxJobs - running) };
+    return {
+      held: [...this.#held.values()].map((job) => job.placement),
+      free: Math.max(0, this.#maxJobs - this.#running()),
+    };
   }
 
   /** The reports collected since the last take, which the caller sends or returns. */
@@ -64,7 +65,10 @@ export class JobRunner {
     this.#reports = [...reports, ...this.#reports];
   }
 
-  /** Brings the jobs to `desired`: starts placements not held, stops held ones no longer listed. */
+  /**
+   * Brings the jobs to `desired`: stops held placements no longer listed, and starts those not held
+   * while slots are free.
+   */
   reconcile(desired: DesiredState): void {
     const listed = new Set(desired.placements.map(keyOf));
     for (const [key, job] of this.#held) {
@@ -72,11 +76,25 @@ export class JobRunner {
       this.#held.delete(key);
       job.dropped.openUnsafe();
     }
-    for (const placement of desired.placements) {
-      if (this.#held.has(keyOf(placement)) || placement.intent !== "run") continue;
+    // A Runner that starts with fewer slots than the jobs placed on it, as when its allowance was
+    // lowered, continues only as many as it has slots for, those with a journal first, since they
+    // have work to continue. The rest stay unheld: the hub sends them again with every answer, and
+    // the answer to the report of a job's end starts the next.
+    const waiting = desired.placements.filter(
+      (placement) => !this.#held.has(keyOf(placement)) && placement.intent === "run",
+    );
+    const lacksJournal = (placement: Placement) =>
+      !hasJournal(this.#agent.jobsDir, placement.jobId);
+    for (const placement of Array.sortWith(waiting, lacksJournal, Order.Boolean)) {
+      if (this.#running() >= this.#maxJobs) break;
       if (!placement.job) continue;
       this.#start(placement, placement.job);
     }
+  }
+
+  /** How many held jobs are running: an ended job occupies no slot. */
+  #running(): number {
+    return Array.countBy(this.#held.values(), (job) => !job.ended);
   }
 
   #start(placement: Placement, job: JobContent): void {

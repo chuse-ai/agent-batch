@@ -29,7 +29,7 @@ A key and value attached to a job when it is submitted, such as `customer = acme
 _Avoid_: tag, metadata, category
 
 **Job state**:
-Where a job is in its life: queued, running, paused, succeeded, failed or cancelled. Paused jobs can be resumed; succeeded, failed and cancelled are final. Why a job stopped is its reason, not a further state.
+Where a job is in its life: queued, running, paused, succeeded, failed or cancelled. Paused jobs can be resumed; succeeded, failed and cancelled are final. A running job whose Runner restarts stays running and continues where it left off; it is not resumed. Why a job stopped is its reason, not a further state.
 _Avoid_: status, phase
 
 **Usage record**:

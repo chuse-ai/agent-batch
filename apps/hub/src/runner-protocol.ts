@@ -158,6 +158,10 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
  * LOCKED`). Reports applied before this are seen; nothing ties the two statements together, since a
  * Runner has one request in flight and a lost answer makes it repeat reports that then change
  * nothing.
+ *
+ * The Runner's free slots count only the jobs it holds, so the unfinished jobs placed on it that it
+ * does not hold are subtracted first: it starts them on this answer, as a restarted Runner does with
+ * every job it ran. kube-scheduler likewise counts every pod assigned to a node, running or not.
  */
 function placeAndRead(runnerId: RunnerId, load: Load) {
   const now = new Date();
@@ -165,6 +169,16 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
   return Db.use((database) =>
     database.query(async (db): Promise<DesiredState> => {
       const rows = await db
+        .with("held", (qb) =>
+          qb
+            .selectFrom((eb) => jsonRows(eb, load.held))
+            .select((eb) => [
+              eb.cast<JobId>(eb.ref("row.value", "->>").key("jobId"), "uuid").as("jobId"),
+              eb
+                .cast<number>(eb.ref("row.value", "->>").key("generation"), "integer")
+                .as("generation"),
+            ]),
+        )
         .with("placed", (qb) =>
           qb
             .updateTable("job")
@@ -180,21 +194,36 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                 .where("state", "=", "queued")
                 .where("runnerId", "is", null)
                 .orderBy("id")
-                .limit(load.free)
+                .limit((limitEb) =>
+                  limitEb.fn<number>("greatest", [
+                    limitEb.lit(0),
+                    limitEb(
+                      limitEb.val(load.free),
+                      "-",
+                      limitEb
+                        .selectFrom("job as unheld")
+                        .select((countEb) => countEb.fn.countAll<number>().as("count"))
+                        .where("unheld.runnerId", "=", runnerId)
+                        .where("unheld.state", "in", unfinished)
+                        .where((heldEb) =>
+                          heldEb.not(
+                            heldEb.exists(
+                              heldEb
+                                .selectFrom("held")
+                                .select("held.jobId")
+                                .whereRef("held.jobId", "=", "unheld.id")
+                                .whereRef("held.generation", "=", "unheld.generation"),
+                            ),
+                          ),
+                        )
+                        .$asScalar(),
+                    ),
+                  ]),
+                )
                 .forUpdate()
                 .skipLocked(),
             )
             .returning(["id", "generation", "prompt", "outputContract"]),
-        )
-        .with("held", (qb) =>
-          qb
-            .selectFrom((eb) => jsonRows(eb, load.held))
-            .select((eb) => [
-              eb.cast<JobId>(eb.ref("row.value", "->>").key("jobId"), "uuid").as("jobId"),
-              eb
-                .cast<number>(eb.ref("row.value", "->>").key("generation"), "integer")
-                .as("generation"),
-            ]),
         )
         .with("wanted", (qb) =>
           qb
