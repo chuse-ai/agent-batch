@@ -1,7 +1,7 @@
 import { type Cause, Context, Effect, Layer } from "effect";
 import ensureError from "ensure-error";
 import { Kysely, PostgresDialect } from "kysely";
-import { Pool } from "pg";
+import { Pool, TypeOverrides, types } from "pg";
 
 import type { Database } from "./types.ts";
 
@@ -40,12 +40,26 @@ export function openDatabase(connectionString: string): Kysely<Database> {
 }
 
 /**
+ * How the hub reads Postgres values: as pg does, except that an `int8`, such as a count or a sum of
+ * integers, becomes a number, as pg-types' README suggests, and one beyond `Number.MAX_SAFE_INTEGER`
+ * fails its query instead of being rounded. A `numeric` stays a string.
+ */
+const typeParsers = new TypeOverrides();
+typeParsers.setTypeParser(types.builtins.INT8, (text) => {
+  const value = Number(text);
+  if (!Number.isSafeInteger(value)) {
+    throw new RangeError(`The int8 ${text} is beyond what a JavaScript number holds exactly`);
+  }
+  return value;
+});
+
+/**
  * A connection pool to the hub's database. An idle connection that fails, as when Postgres restarts,
  * is reported on the pool; without a listener Node would end the process. The pool drops that
  * connection, and the next query opens a new one.
  */
 export function openPool(connectionString: string): Pool {
-  const pool = new Pool({ connectionString });
+  const pool = new Pool({ connectionString, types: typeParsers });
   pool.on("error", (error) => {
     console.error("A database connection failed:", ensureError(error).message);
   });

@@ -15,7 +15,7 @@ export default interface RateLimitTable {
 
   count: ColumnType<number, number, number>;
 
-  lastRequest: ColumnType<string, string, string>;
+  lastRequest: ColumnType<number, number, number>;
 }
 
 export type RateLimit = Selectable<RateLimitTable>;

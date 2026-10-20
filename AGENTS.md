@@ -46,7 +46,7 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 - `executeTakeFirst()` adds no `LIMIT 1`; add `.limit(1)` to a non-unique lookup.
 - Filter a parent by its children with `EXISTS`, not a join and `GROUP BY`. In a grouped query every selected non-aggregate column is grouped or aggregated: Kysely type-checks what Postgres rejects.
 - An empty child collection is `[]`, never an object of nulls.
-- pg returns a `date` as a calendar string, a `timestamptz` as a `Date`, and a `numeric`, `SUM` and `AVG` included, as a string: convert with `Number()` before arithmetic.
+- pg returns a `date` as a calendar string and a `timestamptz` as a `Date`. The hub's pool reads an `int8`, `COUNT` and `SUM` of integers included, as a number, and fails the query beyond `Number.MAX_SAFE_INTEGER`; Kanel types it `number`. A `numeric`, `AVG` and `SUM` of an `int8` included, stays a string: compute money in SQL or store it as integer minor units, and convert with `Number()` only where an approximation is fine, such as for display.
 
 ## API
 
