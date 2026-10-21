@@ -25,7 +25,7 @@ export function nodeServices(settings: HubSettings, connectionString: string) {
     Effect.gen(function* () {
       const services = yield* Effect.context<Db>();
       return yield* Effect.acquireRelease(
-        Effect.sync(() => new RunnerSockets(services)),
+        Effect.sync(() => new RunnerSockets(services, settings.reportIntervalMs)),
         (opened) => Effect.sync(() => opened.closeAll()),
       );
     }),

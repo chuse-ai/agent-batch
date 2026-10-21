@@ -24,13 +24,13 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .createIndex("job_runnerId_unfinished_idx")
     .on("job")
     .columns(["runnerId"])
-    .where(sql.ref("state"), "in", sql`('queued', 'running')`)
+    .where(sql.ref("status"), "in", sql`('queued', 'running')`)
     .execute();
   await schema
     .createIndex("job_queued_unplaced_idx")
     .on("job")
     .columns(["id"])
-    .where(sql.ref("state"), "=", "queued")
+    .where(sql.ref("status"), "=", "queued")
     .where(sql.ref("runnerId"), "is", null)
     .execute();
 }

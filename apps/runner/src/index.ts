@@ -81,6 +81,8 @@ const MIN_UPTIME_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 /** How far either side of the sync interval a sync may fall, so Runners' syncs spread out. */
 const SYNC_JITTER = 0.1;
+/** About how many bytes of events, as JSON Lines, one report carries. */
+const MAX_REPORT_BYTES = 1024 * 1024;
 
 export interface RunnerOptions {
   /** The hub's URL; the Runner opens its WebSocket there, over `wss:` for `https:`. */
@@ -185,6 +187,7 @@ function runRegistered(
       const syncNow = yield* Latch.make(false);
       const agent = {
         jobsDir: path.join(options.dataDir, "jobs"),
+        fileSystem: yield* FileSystem.FileSystem,
         environments,
         models: options.models,
         model: options.model,
@@ -203,7 +206,7 @@ function runRegistered(
         syncNow,
       });
     }),
-  );
+  ).pipe(Effect.provide(NodeFileSystem.layer));
 }
 
 /**
@@ -273,7 +276,7 @@ interface ConnectionContext {
   key: string;
   heartbeatIntervalMs: number;
   jobs: JobRunner;
-  /** Opened when the hub asks for a sync or a job ends, so the next sync goes at once. */
+  /** Opened when the hub asks for a sync or a job starts or ends, so the next pass goes at once. */
   syncNow: Latch.Latch;
 }
 
@@ -291,10 +294,10 @@ interface Refusal {
 
 /**
  * Keeps the Runner connected to the hub and in sync with it (ADR 0026): on each new socket it says
- * hello, then syncs, and from then on syncs at the interval the hub gave it, when the hub hints, and
- * when a job ends, reporting what became of its jobs. Every answer is the desired state of its jobs,
- * which the job runner is brought to. A connection that drops is reopened with growing delays; one
- * that stayed open long enough starts the delays over (ADR 0022).
+ * hello and syncs, and from then on reports what becomes of its jobs and syncs, at the intervals
+ * the hub gave it, when the hub hints, and when a job starts or ends. Every answer is the desired
+ * state of its jobs, which the job runner is brought to. A connection that drops is reopened with
+ * growing delays; one that stayed open long enough starts the delays over (ADR 0022).
  */
 function keepConnected(context: ConnectionContext): Effect.Effect<never, Removed> {
   const delays = Schedule.min([
@@ -386,26 +389,44 @@ function connectAndSync(
     ).pipe(Effect.repeat(Schedule.spaced(context.heartbeatIntervalMs)));
 
     /**
-     * Says hello, then syncs: at the interval the hub gave, with jitter, or as soon as the hub hints
-     * or a job ends. A sync reports what became of jobs, if anything did, and brings the job runner
-     * to the desired state the hub answers with.
+     * Says hello and syncs, then reports and syncs. At the report interval the hub gave, or as soon
+     * as the hub hints or a job starts or ends, it reads its jobs' reports and sends any there are,
+     * or else syncs if prompted. Once per sync interval, with jitter, it reads every held job's
+     * report, changed or not, and sends them, or syncs when there are none: a report does all a sync
+     * does, so the one pass offers the Runner's slots and keeps it counted as connected, and whatever
+     * a hub lost without its position showing it, as in a failover, reaches it again within one
+     * interval. Both carry the Runner's load, and both answers are the desired state, which the job
+     * runner is brought to. Reports that leave events for later follow at once, and only a pass of
+     * every held job that leaves none sets the next one. A kubelet likewise checks every pod's
+     * status on a timer besides sending each change, though it compares with what the API server
+     * holds rather than sending again.
      */
     const syncing = Effect.gen(function* () {
-      const { syncIntervalMs } = yield* request("hello", { name: hostname() });
+      const { syncIntervalMs, reportIntervalMs } = yield* request("hello", { name: hostname() });
+      const nextSyncAt = Effect.map(
+        Random.nextBetween(1 - SYNC_JITTER, 1 + SYNC_JITTER),
+        (jitter) => Date.now() + syncIntervalMs * jitter,
+      );
+      // A new connection may follow a failover, so the jobs held before it report at once, after the
+      // sync whose answer gives the hub's position in each job's journal, which reports read from. A
+      // Runner that held none has just synced.
+      const heldBefore = context.jobs.load().held.length > 0;
+      context.jobs.reconcile(yield* request("sync", context.jobs.load()));
+      let syncAt = heldBefore ? Date.now() : yield* nextSyncAt;
       for (;;) {
-        yield* context.syncNow.close;
-        const reports = context.jobs.takeReports();
+        const prompted = yield* context.syncNow.close;
+        const all = Date.now() >= syncAt;
+        const { jobs, more } = yield* context.jobs.readAndRecordReports(MAX_REPORT_BYTES, all);
         const load = context.jobs.load();
-        const desired = yield* (
-          reports.length > 0 ? request("report", { ...load, jobs: reports }) : request("sync", load)
-        ).pipe(
-          // The reports go again with the next sync on the next socket, also when the connection
-          // dropping interrupts the request.
-          Effect.onError(() => Effect.sync(() => context.jobs.returnReports(reports))),
-        );
-        context.jobs.reconcile(desired);
-        const jitter = yield* Random.nextBetween(1 - SYNC_JITTER, 1 + SYNC_JITTER);
-        yield* Effect.race(Effect.sleep(syncIntervalMs * jitter), context.syncNow.await);
+        if (jobs.length > 0) {
+          context.jobs.reconcile(yield* request("report", { ...load, jobs }));
+        } else if (prompted || all) {
+          context.jobs.reconcile(yield* request("sync", load));
+        }
+        if (all && !more) syncAt = yield* nextSyncAt;
+        if (more) continue;
+        const wait = Math.max(0, Math.min(reportIntervalMs, syncAt - Date.now()));
+        yield* Effect.race(Effect.sleep(wait), context.syncNow.await);
       }
     });
 

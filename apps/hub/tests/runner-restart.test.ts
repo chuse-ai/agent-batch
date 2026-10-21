@@ -12,7 +12,7 @@ import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 import { startSystem } from "./harness.ts";
 
 // A Runner can die without running any of its own cleanup, as when the kernel's out-of-memory
-// killer or `kill -9` stops it. Started again on the same data directory, it continues its jobs from
+// killer or `kill -9` stops it. Started again on the same data directory, it recovers its jobs from
 // their journals. The Runner runs in a process of its own, `runner-restart.runner.ts`, so the test
 // can kill it so, together with the processes it started.
 
@@ -55,7 +55,7 @@ function startRunnerProcess(dataDir: string, registrationKey: string, phase: "be
 }
 
 test(
-  "a job whose Runner is killed mid-run continues when the Runner starts again, with each completed tool call run once",
+  "a job whose Runner is killed mid-run is recovered when the Runner starts again, with each completed tool call run once",
   () =>
     Effect.gen(function* () {
       const dataDir = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "runner-")));
@@ -66,7 +66,7 @@ test(
       const { id } = yield* Effect.promise(() =>
         client.jobs.submit({
           prompt: "Mark the file once.",
-          outputContract: {
+          resultContract: {
             schema: {
               type: "object",
               properties: { lines: { type: "integer" } },
@@ -82,8 +82,16 @@ test(
       yield* Effect.promise(() =>
         expect
           .poll(() => client.jobs.get({ id }), { timeout: 20_000 })
-          .toMatchObject({ state: "succeeded", result: { lines: 1 } }),
+          .toMatchObject({ status: "succeeded", result: { lines: 1 } }),
       );
+      // The job's events record its recovery by the restarted Runner, between its start and end.
+      const { events } = yield* Effect.promise(() => client.jobs.events({ id }));
+      const kinds = events.flatMap((event) => (event.type === "entry" ? [event.record.kind] : []));
+      expect(kinds.filter((kind) => kind.startsWith("agent-batch."))).toEqual([
+        "agent-batch.job.started",
+        "agent-batch.job.recovered",
+        "agent-batch.job.ended",
+      ]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices), Effect.runPromise),
   60_000,
 );

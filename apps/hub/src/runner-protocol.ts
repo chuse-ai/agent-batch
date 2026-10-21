@@ -1,21 +1,31 @@
 import {
   createProtocolServer,
   hubNotifications,
+  JOB_ENDED,
+  JOB_RECOVERED,
+  JOB_STARTED,
+  isoDate,
+  jobEndingSchema,
+  jobOpeningSchema,
   notification,
   runnerMethods,
   type DesiredState,
   type JobContent,
   type JobReport,
+  type JobActivity,
+  type JobUsage,
   type JsonValue,
   type Load,
   type Placement,
 } from "contract";
 import { type Context, Effect } from "effect";
-import { type ExpressionBuilder, sql } from "kysely";
+import { type Expression, type ExpressionBuilder, sql } from "kysely";
 import { jsonBuildObject } from "kysely/helpers/postgres";
+import * as z from "zod/mini";
 
 import { Db, DB_SCHEMA } from "./db/database.ts";
-import { type Database, JobId, type JobState, type RunnerId } from "./db/types.ts";
+import { type Database, JobId, type JobStatus, type RunnerId } from "./db/types.ts";
+import { FINAL_STATUSES } from "./jobs.ts";
 import { recordRunnerHello, recordRunnerSeen, SYNC_INTERVAL_MS } from "./runners.ts";
 
 // The hub's side of the Runner protocol (ADR 0026), shared by both hubs: each answers a Runner's
@@ -34,42 +44,92 @@ export interface RunnerMessageContext {
    * hello is always recorded.
    */
   recordSeen: boolean;
+  /** How often Runners report their jobs' new events, as the hub's deployment sets it. */
+  reportIntervalMs: number;
 }
+
+/** One model's or one tool's usage in a job's usage totals, as pi counts it. */
+type Usage = JobUsage["models"][string];
 
 /** Runs `effect` with the context's services. */
 function run<A, E>(context: RunnerMessageContext, effect: Effect.Effect<A, E, Db>): Promise<A> {
   return Effect.runPromise(Effect.provide(effect, context.services));
 }
 
-/** A report as the statement below reads it: the outcome's fields beside the placement's. */
+/** A job's report as the statement below reads it, with what the hub derives from its events. */
 interface ReportRow {
   jobId: JobId;
   generation: number;
-  state: JobState;
+  position: number;
+  /** The events as JSON Lines, each line ending in `\n`, or null when there are none. */
+  events: string | null;
+  firstId: number | null;
+  lastId: number | null;
+  /** The usage, absent when the report carries none. */
+  usage?: JobUsage;
+  /** The activity, absent when the report carries none. */
+  activity?: JobActivity;
+  /** The job's status and times, or null when the report carries no status. */
+  status: JobStatus | null;
   startedAt: string | null;
   endedAt: string | null;
-  /** The result as JSON text, or null when the report carries none. */
-  result: string | null;
-  /** The report's place in the order sent. */
-  n: number;
+  /** The result, absent unless the report carries a success; `null` is itself a result. */
+  result?: JsonValue;
 }
 
-function reportRow(report: JobReport, n: number): ReportRow {
-  const { jobId, generation, outcome } = report;
-  const row = { jobId: JobId(jobId), generation, state: outcome.state, n };
-  if (outcome.state === "running") {
-    return { ...row, startedAt: outcome.startedAt, endedAt: null, result: null };
-  }
-  const result =
-    outcome.state === "succeeded" && outcome.result !== undefined
-      ? JSON.stringify(outcome.result)
-      : null;
-  return { ...row, startedAt: null, endedAt: outcome.endedAt, result };
+function reportRow(report: JobReport): ReportRow {
+  const { jobId, generation, position, events, usage, activity } = report;
+  const row = {
+    jobId: JobId(jobId),
+    generation,
+    position,
+    // `JSON.stringify` writes no raw newline inside a string, so each event is one line.
+    events: events.length > 0 ? events.map((event) => `${JSON.stringify(event)}\n`).join("") : null,
+    firstId: events.at(0)?.id ?? null,
+    lastId: events.at(-1)?.id ?? null,
+    usage,
+    activity,
+  };
+  return { ...row, ...lifecycleOf(report) };
 }
 
 /**
- * A set of rows from the caller, as one JSON parameter the statement expands: each row's fields
- * are read with `->>` and cast to their types where the clause selects them.
+ * What a report says of its job's lifecycle, read from the Runner's own entries among its
+ * events: a start or recovery makes the job running, and its end makes it succeeded or failed, with
+ * its result. Each applies with the events that carry it, so a job ends only once every entry
+ * before its end is stored, and a hub that loses the end loses those events too and is sent both
+ * again. A job that failed without its journal recording an end says so in `failedAt`.
+ */
+function lifecycleOf(
+  report: JobReport,
+): Pick<ReportRow, "status" | "startedAt" | "endedAt" | "result"> {
+  const records = report.events.flatMap((event) => (event.type === "entry" ? [event.record] : []));
+  const started = records.find((record) => record.kind === JOB_STARTED);
+  const startedAt = started ? isoDate(z.parse(jobOpeningSchema, started.data).timestamp) : null;
+  const ended = records.find((record) => record.kind === JOB_ENDED);
+  if (ended) {
+    const ending = z.parse(jobEndingSchema, ended.data);
+    return {
+      status: ending.status,
+      startedAt,
+      endedAt: isoDate(ending.timestamp),
+      ...(ending.status === "succeeded" ? { result: ending.result } : {}),
+    };
+  }
+  if (report.failedAt) {
+    return { status: "failed", startedAt, endedAt: report.failedAt };
+  }
+  const opened = records.some(
+    (record) => record.kind === JOB_STARTED || record.kind === JOB_RECOVERED,
+  );
+  return { status: opened ? "running" : null, startedAt, endedAt: null };
+}
+
+/**
+ * A set of rows from the caller, as one JSON parameter the statement expands: each row's scalar
+ * fields are read with `->>` and cast to their types where the clause selects them, and its JSON
+ * values are read with `->`. `->` gives SQL null only for a key the row leaves out, so a JSON value
+ * that is absent is left out rather than null.
  */
 function jsonRows<Row extends object>(eb: ExpressionBuilder<Database, never>, rows: Row[]) {
   return eb
@@ -78,13 +138,19 @@ function jsonRows<Row extends object>(eb: ExpressionBuilder<Database, never>, ro
 }
 
 /**
- * Records what became of the Runner's placements, as reported. Of several reports for one
- * placement, the last decides the state; the earliest start and the latest end are kept, so a
- * report repeated after a lost answer changes nothing.
+ * Applies the Runner's reports in one statement, each to the job placed on the Runner under the
+ * reported generation. A job's usage applies when neither total is smaller than the stored
+ * one, as pi's totals only grow. Its events, its position, its activity and its status apply only
+ * when the report's position is the hub's, so a report repeated after a lost answer changes
+ * nothing, and only while the job has not ended, so a page of its events that says no more will
+ * come stays true; the answer then gives the Runner the position to read after. An end clears the
+ * activity. The job's progress row is locked while the statement reads it, so two reports of one
+ * job apply one after the other.
  */
 function applyReports(runnerId: RunnerId, reports: JobReport[]) {
-  const jobState = sql.id(DB_SCHEMA, "jobState");
-  const unfinished: JobState[] = ["queued", "running"];
+  const jobStatus = sql.id(DB_SCHEMA, "jobStatus");
+  const unfinished: JobStatus[] = ["queued", "running"];
+  const now = new Date();
   return Db.use((database) =>
     database.query(async (db) => {
       await db
@@ -93,55 +159,181 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
             .selectFrom((eb) => jsonRows(eb, reports.map(reportRow)))
             .select((eb) => {
               const field = (name: keyof ReportRow) => eb.ref("row.value", "->>").key(name);
+              const json = <Name extends "usage" | "activity" | "result">(name: Name) =>
+                eb.ref("row.value", "->").key(name);
               return [
                 eb.cast<JobId>(field("jobId"), "uuid").as("jobId"),
                 eb.cast<number>(field("generation"), "integer").as("generation"),
-                eb.cast<JobState>(field("state"), jobState).as("state"),
+                eb.cast<number>(field("position"), "bigint").as("position"),
+                eb.cast<string | null>(field("events"), "text").as("events"),
+                eb.cast<number | null>(field("firstId"), "bigint").as("firstId"),
+                eb.cast<number | null>(field("lastId"), "bigint").as("lastId"),
+                json("usage").as("usage"),
+                json("activity").as("activity"),
+                eb.cast<JobStatus | null>(field("status"), jobStatus).as("status"),
                 eb.cast<Date | null>(field("startedAt"), "timestamptz").as("startedAt"),
                 eb.cast<Date | null>(field("endedAt"), "timestamptz").as("endedAt"),
-                eb.cast<JsonValue | null>(field("result"), "jsonb").as("result"),
-                eb.cast<number>(field("n"), "integer").as("n"),
+                json("result").as("result"),
               ];
             }),
         )
-        // One row per placement reported: the last report's state and result, the earliest start
-        // and the latest end.
-        .with("latest", (qb) =>
+        // Each report of a job placed on the Runner under its generation, whether its position is
+        // the hub's, and what the job's progress row holds once the report applies.
+        .with("current", (qb) =>
           qb
-            .selectFrom("report")
-            .distinctOn(["jobId", "generation"])
-            .select((eb) => [
-              "jobId",
-              "generation",
-              "state",
-              "result",
-              eb.fn
-                .min("startedAt")
-                .over((ob) => ob.partitionBy(["jobId", "generation"]))
-                .as("startedAt"),
-              eb.fn
-                .max("endedAt")
-                .over((ob) => ob.partitionBy(["jobId", "generation"]))
-                .as("endedAt"),
-            ])
-            .orderBy(["jobId", "generation", "n desc"]),
+            .selectFrom("report as r")
+            .innerJoin("job as j", (join) =>
+              join
+                .onRef("j.id", "=", "r.jobId")
+                .onRef("j.generation", "=", "r.generation")
+                .on("j.runnerId", "=", runnerId),
+            )
+            .innerJoin("jobProgress as p", "p.jobId", "r.jobId")
+            // The reported totals: pi's usage for each model and each tool, added up exactly, as
+            // `numeric`.
+            .crossJoinLateral((eb) => {
+              const amountsOf = (map: "models" | "tools") =>
+                eb
+                  .selectFrom(
+                    eb
+                      .fn<{ value: Usage }>("jsonb_each", [eb.ref("r.usage", "->").key(map)])
+                      .as("amount"),
+                  )
+                  .select("amount.value");
+              return eb
+                .selectFrom(amountsOf("models").unionAll(amountsOf("tools")).as("amount"))
+                .select((sum) => [
+                  sum
+                    .cast<number>(
+                      sum.fn.coalesce(
+                        sum.fn.sum(
+                          sum.cast(sum.ref("amount.value", "->>").key("totalTokens"), "bigint"),
+                        ),
+                        sum.lit(0),
+                      ),
+                      "bigint",
+                    )
+                    .as("tokens"),
+                  sum.fn
+                    .coalesce(
+                      sum.fn.sum<string>(
+                        sum.cast(
+                          sum.ref("amount.value", "->>").key("cost").key("total"),
+                          "numeric",
+                        ),
+                      ),
+                      sum.lit(0),
+                    )
+                    .as("cost"),
+                ])
+                .as("totals");
+            })
+            .selectAll("r")
+            .select((eb) => {
+              const fresh = eb.and([
+                eb("p.position", "=", eb.ref("r.position")),
+                eb("j.status", "not in", FINAL_STATUSES),
+              ]);
+              const usageApplies = eb.and([
+                eb("r.usage", "is not", null),
+                eb("totals.tokens", ">=", eb.ref("p.totalTokens")),
+                eb("totals.cost", ">=", eb.ref("p.costUsd")),
+              ]);
+              const afterUsage = <T>(reported: Expression<T>, stored: Expression<T>) =>
+                eb.case().when(usageApplies).then(reported).else(stored).end();
+              return [
+                fresh.as("fresh"),
+                eb
+                  .case()
+                  .when(fresh)
+                  .then(eb.fn.coalesce("r.lastId", "p.position"))
+                  .else(eb.ref("p.position"))
+                  .end()
+                  .as("nextPosition"),
+                afterUsage(eb.ref("r.usage").$notNull(), eb.ref("p.usage")).as("nextUsage"),
+                afterUsage(eb.ref("totals.tokens"), eb.ref("p.totalTokens")).as("nextTotalTokens"),
+                afterUsage(eb.ref("totals.cost"), eb.ref("p.costUsd")).as("nextCostUsd"),
+                // An ended job is doing nothing, whatever its last report said.
+                eb
+                  .case()
+                  .when(eb.and([fresh, eb("r.status", "in", FINAL_STATUSES)]))
+                  .then(eb.lit(null))
+                  .when(eb.and([fresh, eb("r.activity", "is not", null)]))
+                  .then(eb.ref("r.activity"))
+                  .else(eb.ref("p.activity"))
+                  .end()
+                  .as("nextActivity"),
+              ];
+            })
+            .forUpdate("p"),
+        )
+        .with("progress", (qb) =>
+          qb
+            .updateTable("jobProgress as p")
+            .from("current as c")
+            .set((eb) => ({
+              position: eb.ref("c.nextPosition"),
+              usage: eb.ref("c.nextUsage"),
+              totalTokens: eb.ref("c.nextTotalTokens"),
+              costUsd: eb.ref("c.nextCostUsd"),
+              activity: eb.ref("c.nextActivity"),
+            }))
+            .whereRef("p.jobId", "=", "c.jobId")
+            // A report that changes nothing leaves the row as it is. The totals change with the usage.
+            .where((eb) =>
+              eb.or([
+                eb("c.nextPosition", "is distinct from", eb.ref("p.position")),
+                eb("c.nextUsage", "is distinct from", eb.ref("p.usage")),
+                eb("c.nextActivity", "is distinct from", eb.ref("p.activity")),
+              ]),
+            ),
+        )
+        .with("stored", (qb) =>
+          qb
+            .insertInto("jobEventChunk")
+            .columns(["jobId", "firstId", "lastId", "events", "storedAt"])
+            .expression((eb) =>
+              eb
+                .selectFrom("current")
+                .select((selectEb) => [
+                  "jobId",
+                  "firstId",
+                  "lastId",
+                  "events",
+                  selectEb.val(now).as("storedAt"),
+                ])
+                .where("fresh", "=", true)
+                .where("lastId", "is not", null)
+                .$narrowType<{ firstId: number; lastId: number; events: string }>(),
+            ),
+        )
+        .with("reported", (qb) =>
+          qb
+            .selectFrom("current")
+            .select(["jobId", "status", "startedAt", "endedAt", "result"])
+            .where("fresh", "=", true)
+            .where("status", "is not", null)
+            .$narrowType<{ status: JobStatus }>(),
         )
         .updateTable("job as j")
-        .from("latest as r")
+        .from("reported as r")
         .set((eb) => ({
-          state: eb.ref("r.state"),
+          status: eb.ref("r.status"),
           startedAt: eb.fn.coalesce("j.startedAt", "r.startedAt"),
-          endedAt: eb.fn.coalesce("r.endedAt", "j.endedAt"),
-          result: eb.fn.coalesce("r.result", "j.result"),
+          endedAt: eb.ref("r.endedAt"),
+          result: eb.ref("r.result"),
         }))
         .whereRef("j.id", "=", "r.jobId")
-        .where("j.runnerId", "=", runnerId)
-        .whereRef("j.generation", "=", "r.generation")
-        // Each outcome moves the job forward once; anything else is stale or repeated.
+        // Each status moves the job forward once; anything else is stale or repeated. An end applies
+        // to a queued job too: its start may come in the same report, or it failed before its
+        // journal opened.
         .where((eb) =>
           eb.or([
-            eb.and([eb("r.state", "=", "running"), eb("j.state", "=", "queued")]),
-            eb.and([eb("r.state", "in", ["succeeded", "failed"]), eb("j.state", "in", unfinished)]),
+            eb.and([eb("r.status", "=", "running"), eb("j.status", "=", "queued")]),
+            eb.and([
+              eb("r.status", "in", ["succeeded", "failed"]),
+              eb("j.status", "in", unfinished),
+            ]),
           ]),
         )
         .execute();
@@ -165,7 +357,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
  */
 function placeAndRead(runnerId: RunnerId, load: Load) {
   const now = new Date();
-  const unfinished: JobState[] = ["queued", "running"];
+  const unfinished: JobStatus[] = ["queued", "running"];
   return Db.use((database) =>
     database.query(async (db): Promise<DesiredState> => {
       const rows = await db
@@ -191,7 +383,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
               eb
                 .selectFrom("job")
                 .select("id")
-                .where("state", "=", "queued")
+                .where("status", "=", "queued")
                 .where("runnerId", "is", null)
                 .orderBy("id")
                 .limit((limitEb) =>
@@ -204,7 +396,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                         .selectFrom("job as unheld")
                         .select((countEb) => countEb.fn.countAll<number>().as("count"))
                         .where("unheld.runnerId", "=", runnerId)
-                        .where("unheld.state", "in", unfinished)
+                        .where("unheld.status", "in", unfinished)
                         .where((heldEb) =>
                           heldEb.not(
                             heldEb.exists(
@@ -223,22 +415,24 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                 .forUpdate()
                 .skipLocked(),
             )
-            .returning(["id", "generation", "prompt", "outputContract"]),
+            .returning(["id", "generation", "prompt", "resultContract"]),
         )
         .with("wanted", (qb) =>
           qb
             .selectFrom("job")
-            .select(["id", "generation", "prompt", "outputContract"])
+            .select(["id", "generation", "prompt", "resultContract"])
             .where("runnerId", "=", runnerId)
-            .where("state", "in", unfinished)
-            .unionAll((eb) =>
-              eb.selectFrom("placed").select(["id", "generation", "prompt", "outputContract"]),
+            .where("status", "in", unfinished)
+            .unionAll(
+              qb.selectFrom("placed").select(["id", "generation", "prompt", "resultContract"]),
             ),
         )
         .selectFrom("wanted")
+        .innerJoin("jobProgress", "jobProgress.jobId", "wanted.id")
         .select((eb) => [
           "id",
           "generation",
+          "jobProgress.position",
           eb
             .case()
             .when(
@@ -254,7 +448,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
             .else(
               jsonBuildObject({
                 prompt: eb.ref("prompt"),
-                outputContract: eb.ref("outputContract"),
+                resultContract: eb.ref("resultContract"),
                 inputFiles: eb
                   .selectFrom("inputFile")
                   .select((fileEb) =>
@@ -284,6 +478,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
           generation: row.generation,
           intent: "run",
           ...(row.job === null ? {} : { job: row.job }),
+          position: row.position,
         })),
       };
     }),
@@ -296,7 +491,7 @@ export const handleRunnerMessage = createProtocolServer<typeof runnerMethods, Ru
   {
     hello: async ({ name }, context) => {
       await run(context, recordRunnerHello(context.runnerId, name, new Date()));
-      return { syncIntervalMs: SYNC_INTERVAL_MS };
+      return { syncIntervalMs: SYNC_INTERVAL_MS, reportIntervalMs: context.reportIntervalMs };
     },
     sync: async (load, context) => {
       if (context.recordSeen) await run(context, recordRunnerSeen(context.runnerId, new Date()));

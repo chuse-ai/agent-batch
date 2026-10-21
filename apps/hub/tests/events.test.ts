@@ -1,0 +1,91 @@
+import { randomUUID } from "node:crypto";
+
+import type { JobEvent, JobSubmission } from "contract";
+import { afterAll, beforeAll, expect, test } from "vite-plus/test";
+
+import { type HubClient, startSystem } from "./harness.ts";
+import { callTool, untilAborted } from "./scripted-model.ts";
+
+// How callers read a job's events: in pages after the last event they have, during and after the
+// run, until a page says no more will come.
+
+const system = startSystem();
+
+beforeAll(async () => {
+  await system.start();
+  await system.startRunner();
+});
+afterAll(() => system.stop());
+
+const SUBMISSION = {
+  prompt: "Greet the reader.",
+  inputFiles: {},
+  resultContract: {
+    schema: {
+      type: "object",
+      properties: { greeting: { type: "string" } },
+      required: ["greeting"],
+    },
+  },
+} satisfies JobSubmission;
+
+/** A job's events from the start, read `limit` at a time until a page says no more will come. */
+async function readAll(client: HubClient, id: string, limit: number) {
+  const events: JobEvent[] = [];
+  for (;;) {
+    const page = await client.jobs.events({ id, after: events.at(-1)?.id ?? 0, limit });
+    events.push(...page.events);
+    if (page.done) return events;
+    // The job has ended, so a page that is not the last says more is stored.
+    expect(page.hasMore).toBe(true);
+  }
+}
+
+/** The kinds of `events`' entries, in order. */
+function kindsOf(events: JobEvent[]) {
+  return events.flatMap((event) => (event.type === "entry" ? [event.record.kind] : []));
+}
+
+test("a finished job's events, read in pages, run from its start to its end without gaps or repeats", async () => {
+  system.model.setResponses([
+    callTool("write", { path: "out/greeting.txt", content: "Hello" }),
+    callTool("submit_result", { value: { greeting: "Hello" } }),
+  ]);
+  const client = await system.clientWithNewJobsKey();
+  const { id } = await client.jobs.submit(SUBMISSION);
+  await expect
+    .poll(async () => (await client.jobs.get({ id })).status, { timeout: 10_000 })
+    .toBe("succeeded");
+
+  const events = await readAll(client, id, 100);
+  expect(await readAll(client, id, 2)).toEqual(events);
+  expect(events[0]).toMatchObject({ type: "conversation" });
+  expect(kindsOf(events)).toContain("pi.tool-result");
+  expect(kindsOf(events)[0]).toBe("agent-batch.job.started");
+  expect(events.at(-1)).toMatchObject({
+    type: "entry",
+    record: { kind: "agent-batch.job.ended", data: { status: "succeeded" } },
+  });
+});
+
+test("reading the events of a job the hub does not have fails with 404", async () => {
+  const client = await system.clientWithNewJobsKey();
+  await expect(client.jobs.events({ id: randomUUID() })).rejects.toMatchObject({
+    code: "NOT_FOUND",
+  });
+});
+
+// Last in the file: the job runs until the system stops.
+test("a running job's pages say more may come", async () => {
+  system.model.setResponses([untilAborted]);
+  const client = await system.clientWithNewJobsKey();
+  const { id } = await client.jobs.submit(SUBMISSION);
+  await expect
+    .poll(async () => kindsOf((await client.jobs.events({ id })).events), { timeout: 10_000 })
+    .toContain("agent-batch.job.started");
+
+  const { events } = await client.jobs.events({ id });
+  const page = await client.jobs.events({ id, after: events.at(-1)?.id ?? 0 });
+  expect(page).toMatchObject({ hasMore: false, done: false });
+  expect((await client.jobs.get({ id })).status).toBe("running");
+});

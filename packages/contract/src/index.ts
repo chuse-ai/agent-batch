@@ -6,14 +6,15 @@ import * as z from "zod/mini";
 import {
   inputFilesSchema,
   jobIdSchema,
-  outputContractSchema,
+  resultContractSchema,
   promptSchema,
   textSchema,
 } from "./job.ts";
+import { jobActivitySchema, jobEventSchema } from "./runner-protocol.ts";
 
 export * from "./problem-details.ts";
 export * from "./json-rpc.ts";
-export { type OutputContract } from "./job.ts";
+export { type ResultContract } from "./job.ts";
 export * from "./runner-protocol.ts";
 
 // `zod/mini` leaves messages out unless asked; without them every problem reads "Invalid input".
@@ -55,7 +56,7 @@ export const registeredRunnerSchema = z.object({ id: z.string(), key: z.string()
 export type RegisteredRunner = z.infer<typeof registeredRunnerSchema>;
 
 /** Where a job is in its life. A job is accepted as `queued`. */
-export const jobStateSchema = z.enum([
+export const jobStatusSchema = z.enum([
   "queued",
   "running",
   "paused",
@@ -63,20 +64,40 @@ export const jobStateSchema = z.enum([
   "failed",
   "cancelled",
 ]);
-export type JobState = z.infer<typeof jobStateSchema>;
+export type JobStatus = z.infer<typeof jobStatusSchema>;
 
-/** Any JSON value, such as a job's result: what its Output contract's schema accepts. */
+/** Any JSON value, such as a job's result: what its Result contract's schema accepts. */
 export type { JsonValue } from "type-fest";
 
 /** A job as the hub reports it. */
 export const jobSchema = z.object({
   id: jobIdSchema,
-  state: jobStateSchema,
+  status: jobStatusSchema,
   createdAt: z.date(),
   /** When the job's agent started on its Runner, once it has. */
   startedAt: z.nullable(z.date()),
   /** When the job's agent finished, once it has. */
   endedAt: z.nullable(z.date()),
+  /**
+   * The job's model usage so far, as pi counts it: every model call of the job's agent and its
+   * sub-agents, including those made inside tools. Zeros until the job runs.
+   */
+  usage: z.object({
+    /** Tokens of every kind, summed; cached input counts each time a model call reads it. */
+    totalTokens: z.int(),
+    cost: z.object({
+      /**
+       * pi's estimate at the models' prices, in US dollars, as decimal text without a fixed scale,
+       * such as `"0.012345"`.
+       */
+      totalUsd: z.string(),
+    }),
+  }),
+  /**
+   * What the job is doing, for each of its conversations doing anything, as its Runner last
+   * reported: present only while the job runs, and empty between steps.
+   */
+  activity: z.optional(jobActivitySchema),
   /** The job's result, once it has succeeded. */
   result: z.optional(z.unknown()),
 });
@@ -88,7 +109,7 @@ export const jobSubmissionSchema = z.object({
   prompt: promptSchema,
   /** Defaults to none, so a submission without them is the same job as one with an empty list. */
   inputFiles: z._default(inputFilesSchema, {}),
-  outputContract: outputContractSchema,
+  resultContract: resultContractSchema,
   /**
    * Makes submitting safe to retry: submitting again with the same key and the same job returns the
    * job already accepted, and with a different job is refused.
@@ -96,6 +117,24 @@ export const jobSubmissionSchema = z.object({
   idempotencyKey: z.optional(textSchema.check(z.minLength(1), z.maxLength(255))),
 });
 export type JobSubmission = z.infer<typeof jobSubmissionSchema>;
+
+/**
+ * A page of a job's events. A caller reads the next page after the last event's `id`: at once while
+ * `hasMore`, or after a few seconds when neither field is set, until `done`.
+ */
+export const jobEventsPageSchema = z.object({
+  /** The job's events after the position asked for, in ID order. */
+  events: z.array(jobEventSchema),
+  /** Whether more of the job's events are already stored after this page. */
+  hasMore: z.boolean(),
+  /**
+   * Whether no more events will come: the job has ended and this page reaches its last event. A job
+   * whose Host is lost may end without some of its events, so it says nothing will follow, not that
+   * every event is here.
+   */
+  done: z.boolean(),
+});
+export type JobEventsPage = z.infer<typeof jobEventsPageSchema>;
 
 /** A call made without a signed-in member or an API key holding the permission it needs. */
 export const Unauthorized = error("UNAUTHORIZED");
@@ -171,7 +210,7 @@ export const contract = {
   },
   jobs: {
     /**
-     * Submits a job, called with an API key holding `job: ["create"]`. The hub checks the Output
+     * Submits a job, called with an API key holding `job: ["create"]`. The hub checks the Result
      * contract's schema, refusing one that is invalid, describes a list or refers outside itself.
      */
     submit: forOrganization
@@ -185,6 +224,23 @@ export const contract = {
       .meta(openapi({ method: "GET", path: "/jobs/{id}" }))
       .input(z.object({ id: z.string() }))
       .output(jobSchema),
+    /**
+     * Reads a job's events in pages, during and after its run, called by a signed-in member or with
+     * an API key holding `job: ["read"]`. A page holds at most `limit` events and stops early after
+     * about 1 MiB of them, though it always holds at least one if there are any.
+     */
+    events: authenticated
+      .errors({ [NotFound.code]: NotFound })
+      .meta(openapi({ method: "GET", path: "/jobs/{id}/events" }))
+      .input(
+        z.object({
+          id: z.string(),
+          /** A position: the ID of the last event the caller has, 0 to read from the start. */
+          after: z._default(z.int().check(z.nonnegative()), 0),
+          limit: z._default(z.int().check(z.minimum(1), z.maximum(100)), 100),
+        }),
+      )
+      .output(jobEventsPageSchema),
   },
 };
 

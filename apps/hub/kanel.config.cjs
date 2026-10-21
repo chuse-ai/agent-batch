@@ -4,7 +4,10 @@ const { kyselyTypeFilter, makeKyselyHook } = require("kanel-kysely");
 const OUTPUT_PATH = "./src/db/generated";
 
 /** The contract's type for each JSON column, as ADR 0020 asks, by table and column. */
-const JSON_COLUMN_TYPES = { job: { outputContract: "OutputContract", result: "JsonValue" } };
+const JSON_COLUMN_TYPES = {
+  job: { resultContract: "ResultContract", result: "JsonValue" },
+  jobProgress: { usage: "JobUsage", activity: "JobActivity" },
+};
 
 /**
  * Columns holding another table's ID without referencing it, by table and column: the row's ID is

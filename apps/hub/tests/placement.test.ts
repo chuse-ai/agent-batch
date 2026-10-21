@@ -15,7 +15,7 @@ afterAll(() => system.stop());
 
 const SUBMISSION = {
   prompt: "Say hello.",
-  outputContract: {
+  resultContract: {
     schema: {
       type: "object",
       properties: { greeting: { type: "string" } },
@@ -24,7 +24,7 @@ const SUBMISSION = {
   },
 } satisfies Omit<JobSubmission, "inputFiles">;
 
-/** The result the scripted agent submits, which matches the Output contract. */
+/** The result the scripted agent submits, which matches the Result contract. */
 const RESULT = { greeting: "Hello." };
 
 test("a job submitted while a runner is connected succeeds, and its result is read from the hub", async () => {
@@ -38,11 +38,13 @@ test("a job submitted while a runner is connected succeeds, and its result is re
 
   await expect
     .poll(() => client.jobs.get({ id }), { timeout: 10_000 })
-    .toMatchObject({ state: "succeeded", result: RESULT });
+    .toMatchObject({ status: "succeeded", result: RESULT });
   const job = await client.jobs.get({ id });
   assert(job.startedAt !== null && job.endedAt !== null, "a succeeded job has its loop's times");
   expect(job.startedAt.getTime()).toBeGreaterThanOrEqual(before - 1_000);
   expect(job.endedAt.getTime()).toBeGreaterThanOrEqual(job.startedAt.getTime());
+  // The scripted model counts tokens but prices none, so only the tokens show its call.
+  expect(job.usage.totalTokens).toBeGreaterThan(0);
 
   // No API shows which Runner ran a job yet, so the test reads it where the hub keeps it.
   await using db = openDatabase(inject("databaseUrl"));
@@ -63,15 +65,15 @@ test("a job submitted while no runner is connected stays queued, and runs once o
 
   const { id } = await client.jobs.submit(SUBMISSION);
   await setTimeout(1_000);
-  expect((await client.jobs.get({ id })).state).toBe("queued");
+  expect((await client.jobs.get({ id })).status).toBe("queued");
 
   await system.startRunner();
   await expect
     .poll(() => client.jobs.get({ id }), { timeout: 10_000 })
-    .toMatchObject({ state: "succeeded", result: RESULT });
+    .toMatchObject({ status: "succeeded", result: RESULT });
 });
 
-test("a Runner started again with fewer slots than its jobs continues only as many, and is given no new job meanwhile", async () => {
+test("a Runner started again with fewer slots than its jobs recovers only as many, and is given no new job meanwhile", async () => {
   await system.stopRunner();
   const client = await system.clientWithNewJobsKey();
   // The scripted model counts every call it gets, including those beyond its scripted responses.
@@ -85,7 +87,7 @@ test("a Runner started again with fewer slots than its jobs continues only as ma
   const third = await client.jobs.submit(SUBMISSION);
   await system.stopRunner();
 
-  // The job that continues first submits its result only once the test, having checked the rest,
+  // The job recovered first submits its result only once the test, having checked the rest,
   // releases it.
   const { promise: released, resolve: release } = Promise.withResolvers<void>();
   const restarted = calls();
@@ -115,6 +117,6 @@ test("a Runner started again with fewer slots than its jobs continues only as ma
   for (const { id } of [first, second, third]) {
     await expect
       .poll(() => client.jobs.get({ id }), { timeout: 10_000 })
-      .toMatchObject({ state: "succeeded", result: RESULT });
+      .toMatchObject({ status: "succeeded", result: RESULT });
   }
 }, 30_000);

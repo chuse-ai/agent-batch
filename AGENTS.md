@@ -14,13 +14,14 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
 ## Conventions
 
-- Two Node floors (ADR 0024). What users run on their own Node, the CLI and the Runner and contract it bundles, supports Node 22 from 22.19: it uses only what Node 22 has (`lib: es2024`), and CI tests it on Node 22. The hub runs only on runtimes we choose, Node 26 and workerd, and may use anything they implement.
+- Two Node floors. What users run on their own Node, the CLI and the Runner and contract it bundles, supports Node 22 from 22.19: it uses only what Node 22 has (`lib: es2024`), and CI tests it on Node 22. The hub runs only on runtimes we choose, Node 26 and workerd, and may use anything they implement.
 - `CONTEXT.md`'s terms apply in code, comments and docs too, not only in the domain model; its _Avoid_ words, such as account, secret and token, mean something else here.
 - After `vp add`, check `package.json`: with `catalogMode: prefer`, it turns `workspace:*` dependencies into `catalog:` entries; set them back to `workspace:*`.
 - After changing a migration, run `vp run hub#db:types`; after upgrading Better Auth, run `vp run hub#db:draft-auth-migration`. CI fails on either otherwise.
 - A comment that records a decision stays until the decision is re-opened; changing the behaviour means re-opening the decision, not deleting the comment.
 - A name says what the code does, effects included; an abstract name is justified only where the difference it hides is one no caller cares about. A read-sounding name must not hide a write. Abstracting over how (a join behind `listRunners`) is fine; abstracting over what happens is not.
 - Before writing code by hand or adding a library, check whether Effect, or an Effect platform package already in use, does it; for arrays and objects, use Effect's call where it reads better than plain JavaScript.
+- A value becomes a branded ID once, where it enters: through the type's constructor (`Brand.nominal`), or, for a library's brand without one, such as pi-durable's IDs, a type guard that checks the value. Never an assertion or a lint suppression.
 - A caught value becomes an `Error` through `ensure-error` before it is logged or inspected.
 - A Node emitter the code holds, such as a socket, a pool, a server or a child process, gets an `error` listener when it is acquired and keeps it until it is destroyed: an unhandled `error` event ends the process, outside any fiber or promise.
 - Prefer optional over `null` unless there is a domain reason, such as the database's explicit `NULL` against no update. Never remap external data to swap `null` and `undefined`; keep the source's shape.
@@ -39,8 +40,8 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
 ## Queries
 
-- Prefer typed Kysely expressions over SQL text wherever Kysely can represent the query: CASE via `eb.case()`, arithmetic via `eb(lhs, op, rhs)`, window functions via `eb.fn.agg().over()`, `eb.fn.coalesce`, `eb.val` for a parameter and `eb.lit` only for an inline number, boolean or null, `eb.cast` for a SQL cast, `eb.fn("name", [...])` for any other function. Nested results follow ADR 0020.
-- Rows from the caller enter a statement as one JSON parameter expanded with `jsonb_array_elements`, each field read with `->>` and cast; not as a union of one select per row.
+- Prefer typed Kysely expressions over SQL text wherever Kysely can represent the query: CASE via `eb.case()`, arithmetic via `eb(lhs, op, rhs)`, window functions via `eb.fn.agg().over()`, `eb.fn.coalesce`, `eb.val` for a parameter and `eb.lit` only for an inline number, boolean or null, `eb.cast` for a SQL cast, `eb.fn("name", [...])` for any other function. Nested results are built in SQL: each relation through one correlated `jsonArrayFrom` or `jsonObjectFrom`, or, for many parents, children aggregated per parent in a CTE and joined; never several one-to-many relations joined and grouped together.
+- Rows from the caller enter a statement as one JSON parameter expanded with `jsonb_array_elements`, each scalar field read with `->>` and cast and each JSON value with `->`; not as a union of one select per row.
 - A `WITH` clause with `UNION ALL`: build each branch separately, pass `a.unionAll(b)` to `with()`, and keep the branches' column types identical.
 - Merge related queries when that is clear. On the Workers hub every round trip crosses Hyperdrive, so accept more involved Kysely to remove an avoidable one, keeping transaction, lock and error semantics.
 - `executeTakeFirst()` adds no `LIMIT 1`; add `.limit(1)` to a non-unique lookup.
@@ -50,7 +51,7 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
 ## API
 
-- The contract defines the caller-visible input, output and errors (ADR 0018); handlers stay thin and the logic lives in the hub's modules.
+- The contract defines the caller-visible input, output and errors; handlers stay thin and the logic lives in the hub's modules.
 - Each procedure's authorisation is chosen explicitly from what it requires; nothing is served from an unguarded base.
 - A route's method and full path are declared on the procedure and verified at runtime and in the generated OpenAPI document; contract nesting does not build the path.
 - An output schema's nullability follows its source: a not-null column passed through is non-null, a nullable one is `.nullable()`, a computed field that may be absent is `.optional()`; a `T | null | undefined` from a module is normalised before the contract.
@@ -58,7 +59,7 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
 ## Tests
 
-- Add a test only for behaviour a caller depends on (ADR 0003). A fix or a new edge case is not by itself a reason for one; a comment can record why code behaves as it does.
+- Add a test only for behaviour a caller depends on. A fix or a new edge case is not by itself a reason for one; a comment can record why code behaves as it does.
 - Assert through the interface under test. Read the database only for a persistence invariant that no public interface exposes.
 - Set up state through typed APIs where one exists, and through SQL only when none does or the scenario needs internal state.
 - Choose failure and recovery cases by likelihood and impact; no elaborate tests for speculative edges.

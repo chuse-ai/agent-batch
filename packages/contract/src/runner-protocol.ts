@@ -1,6 +1,6 @@
 import * as z from "zod/mini";
 
-import { inputFilesSchema, jobIdSchema, outputContractSchema, promptSchema } from "./job.ts";
+import { inputFilesSchema, jobIdSchema, resultContractSchema, promptSchema } from "./job.ts";
 
 // The protocol between a Runner and the hub over the Runner's WebSocket (ADR 0026): JSON-RPC 2.0,
 // one object per text message, with each method's params and result as schemas here. The Runner
@@ -58,11 +58,17 @@ const placementRefSchema = z.object({
 });
 export type PlacementRef = z.infer<typeof placementRefSchema>;
 
+/**
+ * Where the hub's copy of a job's journal ends: the ID of the last record it has stored, 0 before
+ * any. Record IDs count up from 1 with gaps, in the order the journal committed them.
+ */
+const positionSchema = z.int().check(z.nonnegative());
+
 /** A job as the Runner needs it to run the job: the submission's content, as submitted. */
 export const jobContentSchema = z.object({
   prompt: promptSchema,
   inputFiles: inputFilesSchema,
-  outputContract: outputContractSchema,
+  resultContract: resultContractSchema,
 });
 export type JobContent = z.infer<typeof jobContentSchema>;
 
@@ -74,6 +80,8 @@ const placementSchema = z.object({
   ...placementRefSchema.shape,
   intent: intentSchema,
   job: z.optional(jobContentSchema),
+  /** The hub's position in the job's journal, which the Runner reads after. */
+  position: positionSchema,
 });
 export type Placement = z.infer<typeof placementSchema>;
 
@@ -88,25 +96,160 @@ const loadSchema = z.object({
   /** The placements the Runner holds, running or not. */
   held: z.array(placementRefSchema),
   /** How many more jobs the Runner can take. */
-  free: z.int().check(z.gte(0)),
+  free: z.int().check(z.nonnegative()),
 });
 export type Load = z.infer<typeof loadSchema>;
 
-/** What became of a placement on the Runner, reported once each. */
-const outcomeSchema = z.discriminatedUnion("state", [
-  z.object({ state: z.literal("running"), startedAt: z.iso.datetime() }),
-  z.object({ state: z.literal("succeeded"), result: z.unknown(), endedAt: z.iso.datetime() }),
-  // Why a job failed reaches the hub with structured failure reasons.
-  z.object({ state: z.literal("failed"), endedAt: z.iso.datetime() }),
-]);
-export type Outcome = z.infer<typeof outcomeSchema>;
+/**
+ * The kinds of the entries the Runner adds to a job's journal about the job: its start, each
+ * recovery after a Runner restart, and its end. The hub reads the job's lifecycle from them, as
+ * they reach it with the job's other events.
+ */
+export const JOB_STARTED = "agent-batch.job.started";
+export const JOB_RECOVERED = "agent-batch.job.recovered";
+export const JOB_ENDED = "agent-batch.job.ended";
 
-/** One job's report: the placement, the intent the Runner applied, and what came of it. */
-const jobReportSchema = z.object({
-  ...placementRefSchema.shape,
-  intent: intentSchema,
-  outcome: outcomeSchema,
+/**
+ * What a start or a recovery records: when, by the Runner's clock in Unix milliseconds as pi-ai's
+ * messages keep time, under which placement, and by which Runner.
+ */
+export const jobOpeningSchema = z.object({
+  timestamp: z.number(),
+  generation: z.int(),
+  runnerVersion: z.string(),
 });
+export type JobOpening = z.infer<typeof jobOpeningSchema>;
+
+/** What a job's end records: when, how it ended, and for a success its result. */
+export const jobEndingSchema = z.discriminatedUnion("status", [
+  z.object({ timestamp: z.number(), status: z.literal("succeeded"), result: z.json() }),
+  // Why a job failed comes with structured failure reasons.
+  z.object({ timestamp: z.number(), status: z.literal("failed") }),
+]);
+export type JobEnding = z.infer<typeof jobEndingSchema>;
+
+/** A time the Runner keeps in Unix milliseconds, as pi does, as an ISO date like the job's others. */
+export function isoDate(at: number): string {
+  return new Date(at).toISOString();
+}
+
+/**
+ * One of a job's events: a record of the job's journal, one of pi-durable's entries or
+ * conversation records, unchanged under `record`. The record's fields are pi's, so `record` keeps
+ * those this schema does not name.
+ */
+export const jobEventSchema = z.discriminatedUnion("type", [
+  z.object({
+    id: z.int().check(z.positive()),
+    type: z.literal("entry"),
+    record: z.looseObject({ kind: z.string() }),
+  }),
+  z.object({
+    id: z.int().check(z.positive()),
+    type: z.literal("conversation"),
+    record: z.looseObject({}),
+  }),
+]);
+export type JobEvent = z.infer<typeof jobEventSchema>;
+
+/** One model's or tool's usage as pi-ai counts it; the hub reads its tokens and cost and keeps the rest. */
+const usageSchema = z.looseObject({
+  totalTokens: z.int(),
+  cost: z.looseObject({ total: z.number() }),
+});
+
+/** A job's usage totals so far, per model (`provider/modelId`) and per tool, as pi reports them. */
+export const jobUsageSchema = z.looseObject({
+  models: z.record(z.string(), usageSchema),
+  tools: z.record(z.string(), usageSchema),
+});
+export type JobUsage = z.infer<typeof jobUsageSchema>;
+
+/** A wait before another attempt: when it ends, and the error of the attempt that failed. */
+const retrySchema = z.object({ at: z.iso.datetime(), error: z.string() });
+
+/**
+ * What one of a job's conversations is doing, from pi's live state (`pi.live`) and under pi's
+ * names: the model call in progress, the tool calls not yet done and the compactions under way,
+ * without what they have produced so far. pi records no time for a part's changes, so each part
+ * has `changedAt`: when it last changed to what it is now, such as a new attempt, a retry wait
+ * beginning or a tool call starting to run, as the Runner first saw it, up to a report interval
+ * late. Times are the Runner's clock, as ISO dates like the job's own, where pi keeps Unix
+ * milliseconds.
+ */
+export const conversationActivitySchema = z.object({
+  conversationId: z.int().check(z.positive()),
+  /** The model call: its attempt, and the wait before the next attempt after one failed. */
+  generation: z.optional(
+    z.object({
+      attempt: z.int().check(z.positive()),
+      retry: z.optional(retrySchema),
+      changedAt: z.iso.datetime(),
+    }),
+  ),
+  /** The tool calls of the current round that are not done, in call order. */
+  tools: z.array(
+    z.object({
+      callId: z.string(),
+      name: z.string(),
+      status: z.enum(["pending", "running"]),
+      changedAt: z.iso.datetime(),
+    }),
+  ),
+  /** The compactions under way, and whether the model call waits for each. */
+  compactions: z.array(
+    z.object({
+      reason: z.enum(["manual", "threshold", "overflow"]),
+      blocking: z.boolean(),
+      attempt: z.int().check(z.positive()),
+      retry: z.optional(retrySchema),
+      changedAt: z.iso.datetime(),
+    }),
+  ),
+});
+export type ConversationActivity = z.infer<typeof conversationActivitySchema>;
+
+/** What a job's conversations doing anything are doing, one entry each; empty between steps. */
+export const jobActivitySchema = z.array(conversationActivitySchema);
+export type JobActivity = z.infer<typeof jobActivitySchema>;
+
+/**
+ * One job's report: the placement, the intent the Runner applied, the journal's records after the
+ * hub's position, and the job's usage and activity. The report is read fresh from the journal after
+ * the position the hub last gave, so a report repeated after a lost answer starts from the same
+ * position. The job's start and end are entries among its events, so they reach the hub with them.
+ *
+ * The hub applies the usage when the Runner and the placement's generation match and neither total
+ * is smaller than the one it stored. It applies the events, its position, the activity and a
+ * failure only when `position` also matches its own, so a repeated report changes nothing.
+ */
+const jobReportSchema = z
+  .object({
+    ...placementRefSchema.shape,
+    intent: intentSchema,
+    /** The hub's position the Runner read the journal after. */
+    position: positionSchema,
+    /** Every record of the journal after `position`, in ID order; none when nothing is new. */
+    events: z.array(jobEventSchema),
+    /** The job's usage totals; absent when they could not be read. */
+    usage: z.optional(jobUsageSchema),
+    /** What the job's conversations doing anything are doing; absent when it could not be read. */
+    activity: z.optional(jobActivitySchema),
+    /**
+     * When the job failed without its journal recording its end, as when the journal could not be
+     * opened or the Runner faulted. Sent until the hub drops the placement, but only with a report
+     * that reaches the end of what the journal holds, or with no events when the job's journal never
+     * held any, so the hub never ends a job without an entry its journal holds.
+     */
+    failedAt: z.optional(z.iso.datetime()),
+  })
+  .check(
+    z.refine(
+      ({ position, events }) =>
+        events.every((event, index) => event.id > (events[index - 1]?.id ?? position)),
+      "Each event's ID is greater than the position and than the event's before it",
+    ),
+  );
 export type JobReport = z.infer<typeof jobReportSchema>;
 
 /** The requests a Runner makes of the hub. */
@@ -116,14 +259,27 @@ export const runnerMethods = {
     params: z.object({ name: z.string() }),
     result: z.object({
       /** How often the Runner is to sync while nothing else prompts it; the hub's interval. */
-      syncIntervalMs: z.int().check(z.gte(0)),
+      syncIntervalMs: z.int().check(z.nonnegative()),
+      /** How often the Runner is to report its jobs' new events, a setting of the hub's deployment. */
+      reportIntervalMs: z.int().check(z.positive()),
     }),
   },
   /** Asks for the desired state, offering the Runner's load; the hub places queued jobs on free slots. */
   sync: { params: loadSchema, result: desiredStateSchema },
   /** Reports what became of placements, with the load, and gets the desired state back. */
   report: {
-    params: z.object({ ...loadSchema.shape, jobs: z.array(jobReportSchema) }),
+    params: z.object({
+      ...loadSchema.shape,
+      /** Each job at most once. */
+      jobs: z
+        .array(jobReportSchema)
+        .check(
+          z.refine(
+            (jobs) => new Set(jobs.map((job) => job.jobId)).size === jobs.length,
+            "Each job appears once",
+          ),
+        ),
+    }),
     result: desiredStateSchema,
   },
 };

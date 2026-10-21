@@ -282,6 +282,11 @@ export function startSystem(
     stopRunner,
     /** The scripted model the Runner's jobs run on. */
     model: scripted.faux,
+    /** A job's Workspace on the started Runner, as the Runner lays out its data directory. */
+    workspace(jobId: string) {
+      if (runnerDataDir === undefined) throw new Error("No Runner has started");
+      return path.join(runnerDataDir, "jobs", jobId, "workspace");
+    },
     /**
      * Registers a Runner and opens its socket to the hub directly with its own key, without a Runner's
      * reconnects and heartbeats.

@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -17,17 +16,24 @@ import {
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import type { JobContent } from "contract";
-import { Effect } from "effect";
+import type { JobContent, JobEnding } from "contract";
+import { Effect, Exit, type FileSystem, type PlatformError, Scope } from "effect";
 import ensureError from "ensure-error";
 import { compileSchema } from "json-schema-library";
 
+import {
+  JOB_ENDED_REQUEST,
+  JobEnded,
+  JobRecovered,
+  JobStarted,
+  RUNNER_VERSION,
+} from "./journal.ts";
 import type { JobEnvironments } from "./sandbox.ts";
 
 // Runs a job's agent with pi-durable: one Harness and SQLite journal per job, so purging a job
 // deletes its file (pi-durable cannot delete a conversation) and the journal holds exactly the
 // job's entries in order. The agent has pi-durable's coding tools on the job's Workspace, in
-// the job's sandbox (ADR 0027), and `submit_result`, which checks the result against the Output
+// the job's sandbox (ADR 0027), and `submit_result`, which checks the result against the Result
 // contract, as the hub checks the contract itself (ADR 0025), and ends the run once a result is
 // accepted (ADR 0009).
 
@@ -42,13 +48,12 @@ export interface AgentModel {
 export interface AgentSettings {
   /** The directory holding one directory per job: its journal, its Workspace and its temp directory. */
   jobsDir: string;
+  /** The Runner's file system, where it looks for jobs' journals. */
+  fileSystem: FileSystem.FileSystem;
   environments: JobEnvironments;
   models: Models;
   model: AgentModel;
 }
-
-/** What became of a job's agent. */
-export type AgentOutcome = { state: "succeeded"; result: unknown } | { state: "failed" };
 
 /**
  * The result `submit_result` accepted first, committed in its own transaction before the call's
@@ -77,14 +82,20 @@ function jobPaths(jobsDir: string, jobId: string) {
   };
 }
 
-/** Whether the job has a journal on this Runner, as a job that started here has. */
-export function hasJournal(jobsDir: string, jobId: string): boolean {
-  return existsSync(jobPaths(jobsDir, jobId).journal);
+/**
+ * Whether the job has a journal on this Runner, as a job that started here has. Fails when that
+ * cannot be told, as on a permission error.
+ */
+export function journalExists(
+  settings: AgentSettings,
+  jobId: string,
+): Effect.Effect<boolean, PlatformError.PlatformError> {
+  return settings.fileSystem.exists(jobPaths(settings.jobsDir, jobId).journal);
 }
 
 /**
  * Writes the Input files into the Workspace's `inputs/` folder, once, as the job's conversation is
- * created: a job that continues after its Runner restarts keeps the agent's edits to them. Their
+ * created: a job recovered after its Runner restarts keeps the agent's edits to them. Their
  * names are flat file names valid on every platform: the contract's schema checked them again
  * when the placement reached the Runner, so none leaves the folder.
  */
@@ -102,7 +113,7 @@ async function writeInputFiles(workspace: string, files: JobContent["inputFiles"
  */
 function instructions(paths: { workspace: string }) {
   return `You are running a job unattended; nobody will answer questions. Your Workspace, where your files are and your commands run, is ${paths.workspace}; the job's Input files, if any, are in ${path.join(paths.workspace, "inputs")}. For temporary files, use the directory in $TMPDIR, not /tmp.
-When the work is complete, call submit_result once with the complete result: as \`value\`, or, for a large result or one a script produced, as the \`path\` of a JSON file in the Workspace. The result is checked against the job's Output contract; if it is rejected, correct it and submit again. A reply in prose does not complete the job.`;
+When the work is complete, call submit_result once with the complete result: as \`value\`, or, for a large result or one a script produced, as the \`path\` of a JSON file in the Workspace. The result is checked against the job's Result contract; if it is rejected, correct it and submit again. A reply in prose does not complete the job.`;
 }
 
 function submitResultTool(schema: Record<string, unknown>) {
@@ -139,7 +150,7 @@ function submitResultTool(schema: Record<string, unknown>) {
       const { valid, errors } = contract.validate(value);
       if (!valid) {
         const problems = errors.map((error) => `- ${error.message}`).join("\n");
-        throw new Error(`The result does not match the Output contract:\n${problems}`);
+        throw new Error(`The result does not match the Result contract:\n${problems}`);
       }
       // The first accepted result is the job's, as when the model submits twice in one round.
       const first = await api.commit(async (tx) => {
@@ -157,16 +168,30 @@ function submitResultTool(schema: Record<string, unknown>) {
 }
 
 /**
- * Runs `job`'s agent in `<jobsDir>/<jobId>` until it submits an accepted result or ends without
- * one. `dropped` completes when the hub drops the placement: the run is then aborted, which ends the
- * job's work; interruption, as when the Runner stops, only closes the journal, so the job continues
- * when the Runner starts again.
+ * Opens `job`'s journal and sandbox in `<jobsDir>/<jobId>`, and gives the journal to
+ * `journalOpened` before anything is written to it. The journal stays open until the caller's scope
+ * closes, and the sandbox until the job's run ends. Records in the journal that the job started,
+ * the first time, or that it was recovered: a journal that already holds the job, unless
+ * `openedBefore` says this process opened it, is one the Runner left before it restarted, since the
+ * hub places a started job on no other Runner, and not here again while it runs. A job that has
+ * ended is not recovered.
+ *
+ * Gives back the job's run, which runs its agent until it submits an accepted result or ends without
+ * one, and records the job's end in the journal. `dropped` completes when the hub drops the
+ * placement, which aborts the run instead: that ends the job's work here but is not the job's end.
+ * Interruption, as when the Runner stops, aborts none of the job's work, so the job is recovered
+ * when the Runner starts again; the caller's scope then closes the journal and then the sandbox.
  */
-export function runAgent(
+export function openJob(
   jobId: string,
   job: JobContent,
-  options: AgentSettings & { dropped: Effect.Effect<void> },
-): Effect.Effect<AgentOutcome> {
+  options: AgentSettings & {
+    dropped: Effect.Effect<void>;
+    generation: number;
+    openedBefore: boolean;
+    journalOpened: (journal: Harness) => void;
+  },
+): Effect.Effect<Effect.Effect<void>, never, Scope.Scope> {
   const context = BACKGROUND_CONTEXT;
   const paths = jobPaths(options.jobsDir, jobId);
   return Effect.gen(function* () {
@@ -177,7 +202,7 @@ export function runAgent(
     registry.install(
       defineExtension({
         name: "agent-batch",
-        tools: [submitResultTool(job.outputContract.schema)],
+        tools: [submitResultTool(job.resultContract.schema)],
         hooks: [
           // An accepted result ends the run only when every call of its round asks to; the job
           // ends once the round's other calls are done, without another model turn. The result is
@@ -198,11 +223,14 @@ export function runAgent(
     // The Workspace exists before its Input files: they are written only when the job's
     // conversation is created.
     yield* Effect.promise(() => mkdir(paths.workspace, { recursive: true }));
-    // Released after the Harness closes, so no tool call is left on a stopped daemon.
+    // The sandbox has a scope of its own, which the run closes once it has ended, while the journal
+    // stays open for reporting. A Runner that stops closes the journal first and the sandbox after
+    // it, so no tool call is left on a stopped daemon.
+    const sandbox = yield* Scope.fork(yield* Effect.scope);
     const { env } = yield* Effect.acquireRelease(
       Effect.sync(() => options.environments.open(paths)),
       (opened) => Effect.promise(() => opened.close()),
-    );
+    ).pipe(Scope.provide(sandbox));
     const harness = yield* Effect.acquireRelease(
       Effect.promise(async () =>
         Harness.open(
@@ -221,6 +249,13 @@ export function runAgent(
       ),
       (opened) => Effect.promise(() => opened.close(context)),
     );
+    options.journalOpened(harness);
+    const opening = () => ({
+      timestamp: Date.now(),
+      generation: options.generation,
+      runnerVersion: RUNNER_VERSION,
+    });
+    let created = false;
     const root = yield* Effect.promise(() =>
       harness.root(context, {
         agent: {
@@ -229,30 +264,80 @@ export function runAgent(
           instructions: instructions(paths),
           cwd: paths.workspace,
         },
-        init: () => writeInputFiles(paths.workspace, job.inputFiles),
+        // The commit that creates the job's conversation, so the start is recorded exactly once.
+        init: async (tx, conversationId) => {
+          created = true;
+          await tx.appendEntry(JobStarted, conversationId, { data: opening() });
+          await writeInputFiles(paths.workspace, job.inputFiles);
+        },
       }),
     );
     conversation = root;
-    // The request ID makes the Prompt's submission happen once, also when a restarted Runner opens
-    // the same journal again.
-    const answered = Effect.promise(async () => {
-      const submission = await root.submit(
-        { type: "input", content: job.prompt, requestId: `job:${jobId}` },
-        context,
+    if (!created && !options.openedBefore) {
+      yield* Effect.promise(() =>
+        root.commit(async (tx) => {
+          if (await tx.submissionByRequest(root.id, JOB_ENDED_REQUEST)) return;
+          await tx.appendEntry(JobRecovered, root.id, { data: opening() });
+        }, context),
       );
-      await submission.wait(context);
-    });
-    const abortOnDrop = options.dropped.pipe(
-      Effect.andThen(Effect.promise(() => root.abort(context))),
+    }
+    // pi's plain abort leaves background work, such as a compaction, running, so this abort includes
+    // it and waits until all of it has stopped: nothing then adds to the journal after the job's end
+    // or runs on in its sandbox.
+    const stopWork = Effect.promise(() => root.abort(context, { background: true }));
+    const run = Effect.gen(function* () {
+      // The request ID makes the Prompt's submission happen once, also when a restarted Runner
+      // opens the same journal again.
+      const answered = Effect.promise(async () => {
+        const submission = await root.submit(
+          { type: "input", content: job.prompt, requestId: `job:${jobId}` },
+          context,
+        );
+        await submission.wait(context);
+      });
+      // Once the job has finished or been dropped, or pi has failed, all of its work stops. A Runner
+      // that stops interrupts the run instead, which leaves the work to be recovered.
+      const dropped = yield* Effect.raceFirst(
+        answered.pipe(Effect.as(false)),
+        options.dropped.pipe(Effect.as(true)),
+      ).pipe(
+        Effect.onExitIf(
+          (exit) => !Exit.hasInterrupts(exit),
+          () => stopWork,
+        ),
+      );
+      if (dropped) return;
+      const accepted = yield* Effect.promise(() =>
+        harness.snapshot(AcceptedResult, root.id, context),
+      );
+      // An agent that stopped without an accepted result fails the job at once; reminding it
+      // first is planned with failure reporting and result reminders.
+      // JSON holds no `undefined`, so a result that is absent was never accepted.
+      const result = accepted?.result;
+      const timestamp = Date.now();
+      const ending: JobEnding =
+        result === undefined
+          ? { timestamp, status: "failed" }
+          : { timestamp, status: "succeeded", result };
+      // The request ID writes the end once, also when a restarted Runner finds the job ended.
+      yield* Effect.promise(() =>
+        root.submit(
+          {
+            type: "write",
+            entry: { kind: JobEnded.kind, data: ending },
+            requestId: JOB_ENDED_REQUEST,
+          },
+          context,
+        ),
+      );
+    }).pipe(
+      // However the run ends, its sandbox goes, and with it every process the job left running. A
+      // Runner that stops interrupts the run instead, and closes the sandbox after the journal.
+      Effect.onExitIf(
+        (exit) => !Exit.hasInterrupts(exit),
+        (exit) => Scope.close(sandbox, exit),
+      ),
     );
-    yield* Effect.raceFirst(answered, abortOnDrop);
-    const accepted = yield* Effect.promise(() =>
-      harness.snapshot(AcceptedResult, root.id, context),
-    );
-    // An agent that stopped without an accepted result fails the job at once; reminding it first
-    // is planned with failure reporting and result reminders.
-    return accepted && "result" in accepted
-      ? ({ state: "succeeded", result: accepted.result } as const)
-      : ({ state: "failed" } as const);
-  }).pipe(Effect.scoped);
+    return run;
+  });
 }

@@ -18,9 +18,11 @@ export class RunnerSockets {
   readonly #lastSeenWrittenAt = new Map<Peer, number>();
   /** The services with the hub's database, for the Runners' protocol. */
   readonly #services: Context.Context<Db>;
+  readonly #reportIntervalMs: number;
 
-  constructor(services: Context.Context<Db>) {
+  constructor(services: Context.Context<Db>, reportIntervalMs: number) {
     this.#services = services;
+    this.#reportIntervalMs = reportIntervalMs;
   }
 
   /** Takes over the open socket of the Runner the upgrade authenticated, in its `runnerId`. */
@@ -48,6 +50,7 @@ export class RunnerSockets {
       runnerId: runnerOf(peer),
       services: this.#services,
       recordSeen,
+      reportIntervalMs: this.#reportIntervalMs,
     });
     if (recordSeen) this.#lastSeenWrittenAt.set(peer, now);
     if (reply !== undefined) peer.send(reply);

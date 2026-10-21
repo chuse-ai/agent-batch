@@ -7,6 +7,7 @@ import { Db, databaseLayer } from "./db/database.ts";
 import { RunnerId } from "./db/types.ts";
 import { handleRunnerMessage, SYNC_NOW } from "./runner-protocol.ts";
 import { SYNC_INTERVAL_MS } from "./runners.ts";
+import { hubSettings, readConfig } from "./settings.ts";
 
 /** What the hub keeps with each socket, surviving hibernation. */
 /**
@@ -80,6 +81,7 @@ export class RunnerConnection extends DurableObject<Env> {
             runnerId,
             services,
             recordSeen,
+            reportIntervalMs: readConfig(hubSettings, this.env).reportIntervalMs,
           }),
         ),
       ),

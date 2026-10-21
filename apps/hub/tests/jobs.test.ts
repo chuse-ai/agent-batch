@@ -14,7 +14,7 @@ afterAll(() => system.stop());
 const SUBMISSION = {
   prompt: "Summarise the report in one sentence.",
   inputFiles: { "q3.md": { content: "Revenue grew 4%." } },
-  outputContract: {
+  resultContract: {
     schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
   },
 } satisfies JobSubmission;
@@ -43,20 +43,23 @@ test("a submitted job answers 201 and reads back as queued, with a key or a memb
     z.looseObject({ id: z.string(), createdAt: z.string() }),
     await response.json(),
   );
+  const unused = { totalTokens: 0, cost: { totalUsd: "0" } };
   expect(job).toEqual({
     id: expect.any(String),
-    state: "queued",
+    status: "queued",
     createdAt: expect.any(String),
     startedAt: null,
     endedAt: null,
+    usage: unused,
   });
 
   const read = {
     id: job.id,
-    state: "queued",
+    status: "queued",
     createdAt: new Date(job.createdAt),
     startedAt: null,
     endedAt: null,
+    usage: unused,
   };
   expect(await client.jobs.get({ id: job.id })).toEqual(read);
   expect(await system.owner().jobs.get({ id: job.id })).toEqual(read);
@@ -68,8 +71,8 @@ test("resubmitting with an idempotency key returns the same job, or refuses diff
 
   const first = await client.jobs.submit(submission);
   // The same content written differently is the same job.
-  const { prompt, inputFiles, outputContract, idempotencyKey } = submission;
-  expect(await client.jobs.submit({ outputContract, inputFiles, idempotencyKey, prompt })).toEqual(
+  const { prompt, inputFiles, resultContract, idempotencyKey } = submission;
+  expect(await client.jobs.submit({ resultContract, inputFiles, idempotencyKey, prompt })).toEqual(
     first,
   );
 
@@ -111,11 +114,12 @@ test("a key submits and reads jobs only with the permission for each", async () 
 
   const { client: submitOnly } = await withKey({ job: ["create"] });
   await expect(submitOnly.jobs.get({ id })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  await expect(submitOnly.jobs.events({ id })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   const { client: readOnly } = await withKey({ job: ["read"] });
   await expect(readOnly.jobs.submit(SUBMISSION)).rejects.toMatchObject({ code: "UNAUTHORIZED" });
 });
 
-test("an invalid Output contract or Input file name is refused with 400", async () => {
+test("an invalid Result contract or Input file name is refused with 400", async () => {
   const { key, client } = await withKey({ job: ["create"] });
   const schemas = [
     { type: 5 },
@@ -125,7 +129,7 @@ test("an invalid Output contract or Input file name is refused with 400", async 
   ];
   for (const schema of schemas) {
     await expect(
-      client.jobs.submit({ ...SUBMISSION, outputContract: { schema } }),
+      client.jobs.submit({ ...SUBMISSION, resultContract: { schema } }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   }
   for (const name of ["reports/q3.md", "../outside", "..", "a\\b"]) {
@@ -138,10 +142,10 @@ test("an invalid Output contract or Input file name is refused with 400", async 
   // The answer names the problem, so a caller can correct the request.
   const response = await submit(
     key,
-    JSON.stringify({ ...SUBMISSION, outputContract: { schema: schemas[2] } }),
+    JSON.stringify({ ...SUBMISSION, resultContract: { schema: schemas[2] } }),
   );
   expect(await response.json()).toMatchObject({
     status: 400,
-    detail: expect.stringContaining("outputContract.schema"),
+    detail: expect.stringContaining("resultContract.schema"),
   });
 });

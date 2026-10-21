@@ -7,8 +7,8 @@ import { callTool, scriptedModel, untilAborted } from "./scripted-model.ts";
 // A Runner in a process of its own, which `runner-restart.test.ts` kills outright. Its arguments are
 // the hub's URL, the key Runners register with, the data directory, and the phase, which sets what
 // its scripted model does: before the kill, the agent appends a line to a file, and the model call
-// after that tells the test, on file descriptor 3, that it is waiting; after the kill, the agent
-// continues and submits the file's line count as its result.
+// after that tells the test, on file descriptor 3, that it is waiting; after the kill, the job is
+// recovered and the agent submits the file's line count as its result.
 
 const [hubUrl, registrationKey, dataDir, phase] = process.argv.slice(2);
 if (!hubUrl || !registrationKey || !dataDir) {
@@ -29,7 +29,7 @@ faux.setResponses(
         (context) => {
           // A job that started over would show the model no earlier tool result.
           if (!context.messages.some((message) => message.role === "toolResult")) {
-            throw new Error("The job started over instead of continuing");
+            throw new Error("The job started over instead of carrying on");
           }
           return callTool("bash", {
             command: `printf '{"lines":%d}' "$(wc -l < marks.txt)" > result.json`,

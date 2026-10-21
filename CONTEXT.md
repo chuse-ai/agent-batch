@@ -21,19 +21,27 @@ A named credential the organization stores with the hosts it may be sent to; a j
 _Avoid_: API key, token, credential, environment variable
 
 **Job**:
-One self-contained piece of agent work: a prompt, its input files, and an output contract. Runs once, unattended; a person may pause, resume or cancel it.
+One self-contained piece of agent work: a prompt, its input files, and a result contract. Runs once, unattended; a person may pause, resume or cancel it.
 _Avoid_: task, run, session, conversation
 
 **Label**:
 A key and value attached to a job when it is submitted, such as `customer = acme`, used to find jobs, group them, and attribute their cost.
 _Avoid_: tag, metadata, category
 
-**Job state**:
-Where a job is in its life: queued, running, paused, succeeded, failed or cancelled. Paused jobs can be resumed; succeeded, failed and cancelled are final. A running job whose Runner restarts stays running and continues where it left off; it is not resumed. Why a job stopped is its reason, not a further state.
-_Avoid_: status, phase
+**Job status**:
+Where a job is in its life: queued, running, paused, succeeded, failed or cancelled. Paused jobs can be resumed; succeeded, failed and cancelled are final. A running job whose Runner restarts stays running: it is recovered from its journal and carries on where it left off; it is not resumed. Why a job stopped is its reason, not a further status. Status is the one word for where a piece of work is in its life, so a job and each of its tool calls have one.
+_Avoid_: state, phase
+
+**Journal**:
+A job's durable record on its Runner, one file per job: the agent's entries and conversation records, which are copied to the hub as the job's events, and pi's own task records, documents and submissions. The job is recovered from it after a restart, and it is deleted with the job's files.
+_Avoid_: log, checkpoint, session
+
+**Recovery**:
+A running job carrying on from its journal after its Runner stopped and started again: it stays running, completed tool calls are not repeated, a tool call cut off mid-flight gets an interrupted result, and a model call in flight is made again.
+_Avoid_: resume, continue, restart
 
 **Usage record**:
-The small, lasting record of a job's outcome and cost (labels, model, state, tokens, cost, times), kept after the job's content expires or is deleted.
+The small, lasting record of a job's outcome and cost (labels, model, status, tokens, cost, times), kept after the job's content expires or is deleted.
 _Avoid_: billing record, receipt, audit log
 
 **Prompt**:
@@ -44,9 +52,9 @@ _Avoid_: task, instructions, query
 A file written into a job's workspace before its agent starts, such as a document, data or a script to run.
 _Avoid_: attachment, upload, input data
 
-**Output contract**:
-The JSON Schema, and optional validation script, that a job's result must satisfy before the job counts as succeeded.
-_Avoid_: output format, response schema
+**Result contract**:
+The JSON Schema, and optional validation script, that a job's result must satisfy before the job counts as succeeded. It governs the result only, not the Output files.
+_Avoid_: output contract, output format, response schema
 
 **Output file**:
 A file a job's agent puts in its output folder, delivered to the caller with the result and kept even if the job's host goes away.
@@ -65,11 +73,11 @@ The first jobs of a batch, run before the rest are released.
 _Avoid_: preflight, pilot, trial run
 
 **Event**:
-One entry in a job's history: a message, tool call or tool result from the job's agent, or something the hub records about the job, such as a state change or a limit notice; a job's events, in order, are its history, kept during and after the run.
+One item of what a job did: a message, tool call or tool result from the job's agent, or something the Runner records about the job, such as its start, recovery or end; a job's events are kept in order during and after the run.
 _Avoid_: log line, update, notification
 
 **Current activity**:
-What a running job is doing at this moment, such as waiting on a model or running a tool, and since when; it is replaced as the job moves on and is not part of its history.
+What a running job is doing at this moment, such as waiting on a model or running a tool, and since when; it is replaced as the job moves on and is not one of its events.
 _Avoid_: live view, status
 
 **Hub**:
@@ -77,7 +85,7 @@ The single central service that every caller and runner connects to; it accepts 
 _Avoid_: control, control plane, server, coordinator
 
 **Runner**:
-A process that runs many jobs' agents at once; there can be many, on hosts and in the cloud.
+A process that runs many jobs' agents at once; there can be many, on hosts and in the cloud. A restart is a process, such as a Runner or the hub, stopping and starting again; a job is never restarted, reset, replayed or retried.
 _Avoid_: runtime, worker, agent, executor
 
 **Workspace**:

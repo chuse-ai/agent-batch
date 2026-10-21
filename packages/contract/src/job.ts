@@ -48,8 +48,8 @@ export const inputFilesSchema = z.record(fileNameSchema, inputFileSchema, {
  * The result a job must produce: a JSON Schema (2020-12 unless `$schema` says otherwise) describing
  * a single value, not a list, and referring to nothing outside itself.
  */
-export const outputContractSchema = z.object({ schema: z.record(z.string(), z.unknown()) });
-export type OutputContract = z.infer<typeof outputContractSchema>;
+export const resultContractSchema = z.object({ schema: z.record(z.string(), z.unknown()) });
+export type ResultContract = z.infer<typeof resultContractSchema>;
 
 /** What the agent is asked to do. */
 export const promptSchema = textSchema.check(z.minLength(1));

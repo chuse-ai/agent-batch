@@ -6,16 +6,16 @@ import { type Kysely, sql } from "kysely";
 export async function up(db: Kysely<unknown>): Promise<void> {
   const schema = db.schema.withSchema("agent_batch");
   await schema
-    .createType("jobState")
+    .createType("jobStatus")
     .asEnum(["queued", "running", "paused", "succeeded", "failed", "cancelled"])
     .execute();
   await schema
     .createTable("job")
     .addColumn("id", "uuid", (col) => col.primaryKey())
     .addColumn("organizationId", "text", (col) => col.notNull())
-    .addColumn("state", sql`agent_batch."jobState"`, (col) => col.notNull())
+    .addColumn("status", sql`agent_batch."jobStatus"`, (col) => col.notNull())
     .addColumn("prompt", "text", (col) => col.notNull())
-    .addColumn("outputContract", "jsonb", (col) => col.notNull())
+    .addColumn("resultContract", "jsonb", (col) => col.notNull())
     // Null when the submission carried none; the unique constraint below ignores nulls.
     .addColumn("idempotencyKey", "text")
     // SHA-256 of the submission's RFC 8785 canonical JSON without the key, in hex: replays compare it.
@@ -54,5 +54,5 @@ export async function down(db: Kysely<unknown>): Promise<void> {
   const schema = db.schema.withSchema("agent_batch");
   await schema.dropTable("inputFile").execute();
   await schema.dropTable("job").execute();
-  await schema.dropType("jobState").execute();
+  await schema.dropType("jobStatus").execute();
 }

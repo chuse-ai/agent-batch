@@ -1,7 +1,9 @@
 import { catchORPCErrorCode, type WithEffectContext } from "@orpc/experimental-effect";
 import "@orpc/experimental-effect/extensions/effect";
+import { SmartCoercionHandlerPlugin } from "@orpc/json-schema";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { implement, ValidationError } from "@orpc/server";
+import { ZodToJsonSchemaConverter } from "@orpc/zod";
 import {
   contract,
   PROTOCOL_UNSUPPORTED,
@@ -29,8 +31,8 @@ import {
 } from "./auth/auth.ts";
 import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
 import { Db } from "./db/database.ts";
-import { ApikeyId, JobId, RunnerId } from "./db/types.ts";
-import { getJob, outputContractProblems, submitJob, submitterOf } from "./jobs.ts";
+import { ApikeyId, EventId, JobId, RunnerId } from "./db/types.ts";
+import { getJob, resultContractProblems, readJobEvents, submitJob, submitterOf } from "./jobs.ts";
 import { RunnerConnections, type HubServices } from "./platform.ts";
 import { toProblemDetails } from "./problem-details.ts";
 import { findRunnerByKey, registerRunner, removeRunner } from "./runner-registration.ts";
@@ -110,10 +112,10 @@ const router = os.router({
   jobs: {
     submit: os.jobs.submit.effect(function* ({ input, context, errors }) {
       const key = yield* requireKey(context.headers, { job: ["create"] });
-      const problems = outputContractProblems(input.outputContract.schema);
+      const problems = resultContractProblems(input.resultContract.schema);
       if (problems.length > 0) {
         // Raised as oRPC raises invalid input, so the answer lists the problems the same way.
-        const path = ["outputContract", "schema"];
+        const path = ["resultContract", "schema"];
         const cause = new ValidationError({
           message: "Input validation failed",
           issues: problems.map((message) => ({ message, path })),
@@ -135,10 +137,20 @@ const router = os.router({
       // The ID enters the hub here.
       return yield* getJob(JobId(input.id));
     }),
+    events: os.jobs.events.effect(function* ({ input, context }) {
+      yield* requireKeyOrMember(context.headers, { job: ["read"] });
+      // The IDs enter the hub here.
+      return yield* readJobEvents(JobId(input.id), EventId(input.after), input.limit);
+    }),
   },
 });
 
-const api = new OpenAPIHandler(router, { customErrorResponseBodyEncoder: toProblemDetails });
+const api = new OpenAPIHandler(router, {
+  customErrorResponseBodyEncoder: toProblemDetails,
+  // A query string's values arrive as text; this turns them into what the input's schema expects,
+  // such as `after=42` into a number.
+  plugins: [new SmartCoercionHandlerPlugin({ converters: [new ZodToJsonSchemaConverter()] })],
+});
 
 /**
  * The challenge every 401 carries, as HTTP requires (RFC 9110, section 15.5.2): callers authenticate

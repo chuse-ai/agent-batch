@@ -5,12 +5,14 @@ import { Brand } from "effect";
 import type { ApikeyId as ApikeyIdType } from "./generated/agent_batch/Apikey.ts";
 import type { InputFileName as InputFileNameType } from "./generated/agent_batch/InputFile.ts";
 import type { JobId as JobIdType } from "./generated/agent_batch/Job.ts";
+import type { JobEventChunkLastId } from "./generated/agent_batch/JobEventChunk.ts";
 import type { MemberId as MemberIdType } from "./generated/agent_batch/Member.ts";
 import type { RunnerId as RunnerIdType } from "./generated/agent_batch/Runner.ts";
 
 export type { default as Database } from "./generated/Database.ts";
 export type { Job as JobRow } from "./generated/agent_batch/Job.ts";
-export type { default as JobState } from "./generated/agent_batch/JobState.ts";
+export type { JobProgress as JobProgressRow } from "./generated/agent_batch/JobProgress.ts";
+export type { default as JobStatus } from "./generated/agent_batch/JobStatus.ts";
 
 // Each ID type with its constructor under the same name, as Effect brands are declared. A string
 // becomes an ID through the constructor, once, where the ID enters the hub (ADR 0020): a new UUID,
@@ -26,3 +28,6 @@ export type MemberId = MemberIdType;
 export const MemberId = Brand.nominal<MemberId>();
 export type InputFileName = InputFileNameType;
 export const InputFileName = Brand.nominal<InputFileName>();
+/** An event's ID in its job's journal, which a stored row of events is keyed by its last of. */
+export type EventId = JobEventChunkLastId;
+export const EventId = Brand.nominal<EventId>();

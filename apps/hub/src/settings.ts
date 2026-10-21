@@ -33,6 +33,11 @@ export const hubSettings = Config.all({
   trustedProxies: Config.Array(Schema.String, "TRUSTED_PROXIES").pipe(Config.withDefault([])),
   /** Whether Better Auth's rate limits apply; tests turn them off. */
   authRateLimit: Config.Boolean("AUTH_RATE_LIMIT").pipe(Config.withDefault(true)),
+  /**
+   * How often Runners report their jobs' new events, which decides how far behind a running job's
+   * events may be; told to each Runner in the answer to its hello.
+   */
+  reportIntervalMs: Config.Int("REPORT_INTERVAL_MS").pipe(Config.withDefault(3_000)),
 });
 export type HubSettings = Config.Success<typeof hubSettings>;
 
