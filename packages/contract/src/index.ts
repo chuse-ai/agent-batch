@@ -109,11 +109,17 @@ export const jobSchema = z.object({
    * A control the job's Runner has not yet acted on, beside the last `status` it confirmed: present
    * only while it waits. A pause or cancel waits for a job its Runner may be running, until
    * the Runner stops the job, which is then `paused` or ends `cancelled`, or the job ends first,
-   * with its own status and result. A cancel replaces a waiting pause.
+   * with its own status and result. A cancel replaces a waiting pause. A delete waits for the job's
+   * Runner to delete its files from its host.
    */
   pendingControl: z.optional(
-    z.object({ type: z.enum(["pause", "cancel"]), requestedAt: z.date() }),
+    z.object({ type: z.enum(["pause", "cancel", "delete"]), requestedAt: z.date() }),
   ),
+  /**
+   * When the job was deleted, present only while its Runner still deletes its files: the job reads
+   * without its content, and as not found once they are gone.
+   */
+  deletedAt: z.optional(z.date()),
 });
 export type Job = z.infer<typeof jobSchema>;
 
@@ -279,6 +285,18 @@ export const contract = {
     cancel: authenticated
       .errors({ [NotFound.code]: NotFound })
       .meta(openapi({ method: "POST", path: "/jobs/{id}/cancel" }))
+      .input(z.object({ id: z.string() }))
+      .output(jobSchema),
+    /**
+     * Deletes a finished job, called by a signed-in member or with an API key holding
+     * `job: ["delete"]`, and answers with the job as it now reads. Its content goes from the
+     * hub at once, and from its host once its Runner has deleted its journal and Workspace; until
+     * then the job reads without its content, with `deletedAt` and a waiting `delete`, and then as
+     * not found. Its Usage record stays. An unfinished job is refused: cancel it first.
+     */
+    delete: authenticated
+      .errors({ [NotFound.code]: NotFound, [ControlRefused.code]: ControlRefused })
+      .meta(openapi({ method: "DELETE", path: "/jobs/{id}" }))
       .input(z.object({ id: z.string() }))
       .output(jobSchema),
     /**

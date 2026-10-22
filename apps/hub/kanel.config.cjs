@@ -15,13 +15,30 @@ const JSON_COLUMN_TYPES = {
  */
 const COPIED_ID_COLUMNS = {
   job: { runnerId: "Runner", submitterKeyId: "Apikey", submitterMemberId: "Member" },
+  usageRecord: {
+    jobId: "Job",
+    runnerId: "Runner",
+    submitterKeyId: "Apikey",
+    submitterMemberId: "Member",
+  },
+  jobDeletion: { jobId: "Job", runnerId: "Runner" },
 };
 
 /**
- * Types a JSON column with the contract's type for it, importing it from the contract package, and a
- * copied ID column with the ID type of the table it copies, as Kanel types a referencing column.
+ * Key columns that are counts, not identities, by table and column: Kanel brands every key column as
+ * the table's identifier, but a Usage record's `generation` is the job's placement generation, copied.
+ */
+const COUNT_KEY_COLUMNS = { usageRecord: ["generation"] };
+
+/**
+ * Types a JSON column with the contract's type for it, importing it from the contract package, a
+ * copied ID column with the ID type of the table it copies, as Kanel types a referencing column,
+ * and a key column that is a count as a number.
  */
 function getPropertyMetadata(property, details, generateFor, builtinMetadata) {
+  if (COUNT_KEY_COLUMNS[details.name]?.includes(property.name)) {
+    return { ...builtinMetadata, typeOverride: { name: "number", typeImports: [] } };
+  }
   const jsonType = JSON_COLUMN_TYPES[details.name]?.[property.name];
   if (jsonType) {
     const typeImport = {

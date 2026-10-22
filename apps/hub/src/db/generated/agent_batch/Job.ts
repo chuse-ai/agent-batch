@@ -57,6 +57,10 @@ export default interface JobTable {
   pendingControlRequestedAt: ColumnType<Date | null, Date | string | null, Date | string | null>;
 
   reason: ColumnType<JobReason | null, JobReason | null, JobReason | null>;
+
+  recordedTotalTokens: ColumnType<number, number | undefined, number>;
+
+  recordedCostUsd: ColumnType<string, string | undefined, string>;
 }
 
 export type Job = Selectable<JobTable>;

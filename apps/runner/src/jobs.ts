@@ -13,15 +13,22 @@ import type {
 import { Array, Effect, Equal, Fiber, Latch, Option, Order, type Scope } from "effect";
 import ensureError from "ensure-error";
 
-import { type AgentSettings, journalExists, openJob, recordStop, type Stop } from "./agent.ts";
+import {
+  type AgentSettings,
+  journalExists,
+  openJob,
+  recordStop,
+  deleteJobFiles,
+  type Stop,
+} from "./agent.ts";
 import { readActivity, readEvents } from "./journal.ts";
 
 // The Runner's jobs: each placement the hub gives it runs as one supervised fiber (ADR 0022), and
 // its journal's new events, its usage and what it is doing are reported to the hub. The hub's
 // answer to every sync and report is the desired state, which this brings the jobs to: placements
 // it does not hold start, held placements the hub pauses or cancels are stopped and their pause or
-// cancel recorded, and held placements the hub no longer lists are stopped and forgotten
-// (ADR 0026).
+// cancel recorded, held placements the hub no longer lists are stopped and forgotten, and
+// the files of jobs the hub has deleted are deleted (ADR 0026).
 
 /**
  * One placement the Runner holds: its job's journal and the hub's position in it, a failure its
@@ -60,6 +67,12 @@ interface HeldJob {
   dropped: Latch.Latch;
 }
 
+/** A deleted job's files the hub asks the Runner to delete, and whether they are gone. */
+interface Deletion {
+  placement: PlacementRef;
+  done: boolean;
+}
+
 /**
  * Runs the Runner's jobs, up to `maxJobs` at once, in `scope`, and reads their reports from their
  * journals. Closing the scope stops every job.
@@ -74,6 +87,8 @@ export class JobRunner {
   readonly #runs = new Map<string, Fiber.Fiber<void>>();
   /** The jobs this process has started, whose journals it has opened or is opening, by job ID. */
   readonly #opened = new Set<string>();
+  /** The deletions the hub lists, by placement, until it stops listing them. */
+  readonly #deletions = new Map<string, Deletion>();
   readonly #scope: Scope.Scope;
 
   constructor(maxJobs: number, agent: AgentSettings, scope: Scope.Scope, onChange: () => void) {
@@ -123,8 +138,13 @@ export class JobRunner {
     all: boolean,
   ): Effect.Effect<{ jobs: JobReport[]; more: boolean }> {
     const held = [...this.#held.values()];
+    const deletions = [...this.#deletions.values()];
     return Effect.gen(function* () {
-      const jobs: JobReport[] = [];
+      // A deletion is reported done until the hub stops listing it, so the hub that missed one hears
+      // of it again.
+      const jobs: JobReport[] = deletions.flatMap((deletion) =>
+        deletion.done ? [{ ...deletion.placement, intent: "delete", position: 0, events: [] }] : [],
+      );
       let budget = maxBytes;
       let more = false;
       for (const job of held) {
@@ -187,14 +207,20 @@ export class JobRunner {
   /**
    * Brings the jobs to `desired`, the hub's answer to a sync or a report: takes the hub's
    * positions, stops held placements no longer listed, pauses or cancels those the hub pauses or
-   * cancels, and starts those not held while slots are free. A pause or cancel of a placement the
-   * Runner does not hold, as after it restarted, is recorded without running the job, and takes no
-   * slot.
+   * cancels, deletes the files of jobs the hub has deleted, and starts those not held while slots
+   * are free. A pause or cancel of a placement the Runner does not hold, as after it restarted, is
+   * recorded without running the job, and takes no slot.
    */
   reconcile(desired: DesiredState): void {
     for (const placement of desired.placements) {
       const job = this.#held.get(keyOf(placement));
       if (!job) continue;
+      // A deleted job's placement stops, closing its journal, before its files go.
+      if (placement.intent === "delete") {
+        this.#held.delete(keyOf(placement));
+        job.dropped.openUnsafe();
+        continue;
+      }
       job.position = placement.position;
       // A job that has ended keeps its end, which reaches the hub with its events. A cancel that
       // follows a pause the Runner has not yet recorded replaces it.
@@ -213,6 +239,12 @@ export class JobRunner {
       if (isStop(placement.intent) && !this.#held.has(keyOf(placement))) {
         this.#start(placement, undefined);
       }
+      if (placement.intent === "delete" && !this.#deletions.has(keyOf(placement))) {
+        this.#deleteFiles(placement);
+      }
+    }
+    for (const key of this.#deletions.keys()) {
+      if (!listed.has(key)) this.#deletions.delete(key);
     }
     // A Runner that starts with fewer slots than the jobs placed on it, as when its allowance was
     // lowered, recovers only as many as it has slots for, those the hub has events of first, since
@@ -230,6 +262,40 @@ export class JobRunner {
       if (!placement.job) continue;
       this.#start(placement, placement.job);
     }
+  }
+
+  /**
+   * Deletes the deleted job's files once its last run has closed them, and reports the deletion done.
+   * A deletion that fails is logged and forgotten, so the hub's next answer, which lists the deletion
+   * again, tries again.
+   */
+  #deleteFiles(placement: PlacementRef): void {
+    const ref = { jobId: placement.jobId, generation: placement.generation };
+    const key = keyOf(ref);
+    const deletion: Deletion = { placement: ref, done: false };
+    this.#deletions.set(key, deletion);
+    this.#opened.delete(ref.jobId);
+    const deletions = this.#deletions;
+    const onChange = this.#onChange;
+    const settings = this.#agent;
+    const previous = this.#runs.get(ref.jobId);
+    const run = Effect.gen(function* () {
+      if (previous) yield* Fiber.await(previous);
+      yield* deleteJobFiles(settings, ref.jobId);
+      deletion.done = true;
+      if (deletions.get(key) === deletion) onChange();
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("A deleted job's files could not be deleted", cause).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              if (deletions.get(key) === deletion) deletions.delete(key);
+            }),
+          ),
+        ),
+      ),
+    );
+    Effect.runSync(Effect.forkIn(run, this.#scope));
   }
 
   /** How many held jobs are running: an ended job occupies no slot. */

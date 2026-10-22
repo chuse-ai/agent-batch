@@ -1,7 +1,7 @@
 import { type Kysely, sql } from "kysely";
 
 // A job's events as the hub stores them from its Runner's reports, and what the job has used so far.
-// Both go with their job: purge deletes the job, and the Usage record that outlives it copies
+// Both go with their job: deleting the job deletes them, and the Usage record that outlives it copies
 // the totals rather than referencing them.
 
 export async function up(db: Kysely<unknown>): Promise<void> {

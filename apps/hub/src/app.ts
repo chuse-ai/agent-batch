@@ -35,6 +35,7 @@ import { ApikeyId, EventId, JobId, RunnerId } from "./db/types.ts";
 import {
   type Control,
   controlJob,
+  deleteJob,
   getJob,
   resultContractProblems,
   readJobEvents,
@@ -53,23 +54,28 @@ interface ApiContext extends WithEffectContext<HubServices> {
 const os = implement<typeof contract, ApiContext>(contract);
 
 /**
- * Applies `control` to the job `jobId` and tells the Runners it concerns to sync now. They learn of
- * it at their next sync anyway; the hint only makes it sooner, so a failed one is only logged.
+ * Tells the Runners a change to a job concerns to sync now: one Runner, or every live one for a job
+ * any Runner may take. They learn of it at their next sync anyway; the hint only makes it sooner, so
+ * a failed one is only logged.
  */
+function hintRunners(hint: RunnerId | "live" | undefined) {
+  if (hint === undefined) return Effect.void;
+  return (
+    hint === "live"
+      ? hintLiveRunners
+      : RunnerConnections.use((connections) => connections.hint(hint))
+  ).pipe(
+    Effect.catchCause((cause) =>
+      Effect.sync(() => console.error("Hinting Runners to sync failed", cause)),
+    ),
+  );
+}
+
+/** Applies `control` to the job `jobId` and tells the Runners it concerns to sync now. */
 function controlJobAndHint(jobId: JobId, control: Control) {
   return Effect.gen(function* () {
     const { job, hint } = yield* controlJob(jobId, control);
-    if (hint !== undefined) {
-      yield* (
-        hint === "live"
-          ? hintLiveRunners
-          : RunnerConnections.use((connections) => connections.hint(hint))
-      ).pipe(
-        Effect.catchCause((cause) =>
-          Effect.sync(() => console.error("Hinting Runners to sync failed", cause)),
-        ),
-      );
-    }
+    yield* hintRunners(hint);
     return job;
   });
 }
@@ -154,12 +160,7 @@ const router = os.router({
         return yield* Effect.fail(errors.BAD_REQUEST({ cause }));
       }
       const job = yield* submitJob(input, submitterOf(key));
-      // Runners learn of the job at their next sync anyway; the hint only makes it sooner.
-      yield* hintLiveRunners.pipe(
-        Effect.catchCause((cause) =>
-          Effect.sync(() => console.error("Hinting Runners to sync failed", cause)),
-        ),
-      );
+      yield* hintRunners("live");
       return job;
     }),
     get: os.jobs.get.effect(function* ({ input, context }) {
@@ -181,6 +182,13 @@ const router = os.router({
       yield* requireKeyOrMember(context.headers, { job: ["cancel"] });
       // The ID enters the hub here.
       return yield* controlJobAndHint(JobId(input.id), "cancel");
+    }),
+    delete: os.jobs.delete.effect(function* ({ input, context }) {
+      yield* requireKeyOrMember(context.headers, { job: ["delete"] });
+      // The ID enters the hub here.
+      const { job, hint } = yield* deleteJob(JobId(input.id));
+      yield* hintRunners(hint);
+      return job;
     }),
     events: os.jobs.events.effect(function* ({ input, context }) {
       yield* requireKeyOrMember(context.headers, { job: ["read"] });

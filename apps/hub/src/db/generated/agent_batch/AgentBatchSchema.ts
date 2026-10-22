@@ -6,6 +6,7 @@ import type { default as ApikeyTable } from "./Apikey.js";
 import type { default as InputFileTable } from "./InputFile.js";
 import type { default as InvitationTable } from "./Invitation.js";
 import type { default as JobTable } from "./Job.js";
+import type { default as JobDeletionTable } from "./JobDeletion.js";
 import type { default as JobEventChunkTable } from "./JobEventChunk.js";
 import type { default as JobProgressTable } from "./JobProgress.js";
 import type { default as MemberTable } from "./Member.js";
@@ -13,13 +14,18 @@ import type { default as OrganizationTable } from "./Organization.js";
 import type { default as RateLimitTable } from "./RateLimit.js";
 import type { default as RunnerTable } from "./Runner.js";
 import type { default as SessionTable } from "./Session.js";
+import type { default as UsageRecordTable } from "./UsageRecord.js";
 import type { default as UserTable } from "./User.js";
 import type { default as VerificationTable } from "./Verification.js";
 
 export default interface AgentBatchSchema {
   rateLimit: RateLimitTable;
 
+  usageRecord: UsageRecordTable;
+
   session: SessionTable;
+
+  jobDeletion: JobDeletionTable;
 
   jobProgress: JobProgressTable;
 

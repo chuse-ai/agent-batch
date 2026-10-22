@@ -8,6 +8,7 @@ import {
   JOB_RESUMED,
   JOB_STARTED,
   JOB_SUCCEEDED,
+  intentSchema,
   isoDate,
   jobEndingSchema,
   jobOpeningSchema,
@@ -31,14 +32,19 @@ import * as z from "zod/mini";
 
 import { Db, DB_SCHEMA } from "./db/database.ts";
 import { type Database, JobId, type JobReason, type JobStatus, type RunnerId } from "./db/types.ts";
-import { FINAL_STATUSES, QUEUED_OR_RUNNING } from "./jobs.ts";
+import {
+  FINAL_STATUSES,
+  insertUsageRecords,
+  QUEUED_OR_RUNNING,
+  USAGE_COPIED_COLUMNS,
+} from "./jobs.ts";
 import { recordRunnerHello, recordRunnerSeen, SYNC_INTERVAL_MS } from "./runners.ts";
 
 // The hub's side of the Runner protocol (ADR 0026), shared by both hubs: each answers a Runner's
 // message by calling `handleRunnerMessage` with the Runner's identity and a database. A sync or a
 // report is answered by one statement that records what the Runner said and reads its desired
-// state: every queued or running job placed on it, with the content of those it does not hold, and
-// queued jobs newly placed on its free slots.
+// state: every queued or running job placed on it, with the content of those it does not hold,
+// queued jobs newly placed on its free slots, and the deletions of deleted jobs' files it owes.
 
 /** The statuses that close a placement: the job's end, or its pause. */
 const CLOSING_STATUSES: JobStatus[] = [...FINAL_STATUSES, "paused"];
@@ -151,7 +157,11 @@ function lifecycleOf(
   if (report.failedAt) {
     return { ...base, status: "failed", endedAt: report.failedAt };
   }
-  if (report.intent !== "run" && report.position === 0 && report.events.length === 0) {
+  if (
+    (report.intent === "pause" || report.intent === "cancel") &&
+    report.position === 0 &&
+    report.events.length === 0
+  ) {
     return report.intent === "pause"
       ? { ...base, status: "paused", reason: "pausedByUser", neverStarted: true }
       : { ...base, status: "cancelled", endedAt: now.toISOString(), neverStarted: true };
@@ -191,233 +201,322 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
   const now = new Date();
   return Db.use((database) =>
     database.query(async (db) => {
-      await db
-        .with("report", (qb) =>
-          qb
-            .selectFrom((eb) =>
-              jsonRows(
-                eb,
-                reports.map((report) => reportRow(report, now)),
-              ),
-            )
-            .select((eb) => {
-              const field = (name: keyof ReportRow) => eb.ref("row.value", "->>").key(name);
-              const json = <Name extends "usage" | "activity" | "result">(name: Name) =>
-                eb.ref("row.value", "->").key(name);
-              return [
-                eb.cast<JobId>(field("jobId"), "uuid").as("jobId"),
-                eb.cast<number>(field("generation"), "integer").as("generation"),
-                eb.cast<number>(field("position"), "bigint").as("position"),
-                eb.cast<string | null>(field("events"), "text").as("events"),
-                eb.cast<number | null>(field("firstId"), "bigint").as("firstId"),
-                eb.cast<number | null>(field("lastId"), "bigint").as("lastId"),
-                json("usage").as("usage"),
-                json("activity").as("activity"),
-                eb.cast<JobStatus | null>(field("status"), jobStatus).as("status"),
-                eb.cast<Date | null>(field("startedAt"), "timestamptz").as("startedAt"),
-                eb.cast<Date | null>(field("endedAt"), "timestamptz").as("endedAt"),
-                eb.cast<JobReason | null>(field("reason"), jobReason).as("reason"),
-                json("result").as("result"),
-                eb.cast<boolean>(field("neverStarted"), "boolean").as("neverStarted"),
-              ];
-            }),
-        )
-        // Each report of a job placed on the Runner under its generation, whether its position is
-        // the hub's, and what the job's progress row holds once the report applies.
-        .with("current", (qb) =>
-          qb
-            .selectFrom("report as r")
-            .innerJoin("job as j", (join) =>
-              join
-                .onRef("j.id", "=", "r.jobId")
-                .onRef("j.generation", "=", "r.generation")
-                .on("j.runnerId", "=", runnerId),
-            )
-            .innerJoin("jobProgress as p", "p.jobId", "r.jobId")
-            // The reported totals: pi's usage for each model and each tool, added up exactly, as
-            // `numeric`.
-            .crossJoinLateral((eb) => {
-              const amountsOf = (map: "models" | "tools") =>
-                eb
-                  .selectFrom(
-                    eb
-                      .fn<{ value: Usage }>("jsonb_each", [eb.ref("r.usage", "->").key(map)])
-                      .as("amount"),
-                  )
-                  .select("amount.value");
-              return eb
-                .selectFrom(amountsOf("models").unionAll(amountsOf("tools")).as("amount"))
-                .select((sum) => [
-                  sum
-                    .cast<number>(
-                      sum.fn.coalesce(
-                        sum.fn.sum(
-                          sum.cast(sum.ref("amount.value", "->>").key("totalTokens"), "bigint"),
+      await insertUsageRecords(
+        db
+          .with("report", (qb) =>
+            qb
+              .selectFrom((eb) =>
+                jsonRows(
+                  eb,
+                  reports.map((report) => reportRow(report, now)),
+                ),
+              )
+              .select((eb) => {
+                const field = (name: keyof ReportRow) => eb.ref("row.value", "->>").key(name);
+                const json = <Name extends "usage" | "activity" | "result">(name: Name) =>
+                  eb.ref("row.value", "->").key(name);
+                return [
+                  eb.cast<JobId>(field("jobId"), "uuid").as("jobId"),
+                  eb.cast<number>(field("generation"), "integer").as("generation"),
+                  eb.cast<number>(field("position"), "bigint").as("position"),
+                  eb.cast<string | null>(field("events"), "text").as("events"),
+                  eb.cast<number | null>(field("firstId"), "bigint").as("firstId"),
+                  eb.cast<number | null>(field("lastId"), "bigint").as("lastId"),
+                  json("usage").as("usage"),
+                  json("activity").as("activity"),
+                  eb.cast<JobStatus | null>(field("status"), jobStatus).as("status"),
+                  eb.cast<Date | null>(field("startedAt"), "timestamptz").as("startedAt"),
+                  eb.cast<Date | null>(field("endedAt"), "timestamptz").as("endedAt"),
+                  eb.cast<JobReason | null>(field("reason"), jobReason).as("reason"),
+                  json("result").as("result"),
+                  eb.cast<boolean>(field("neverStarted"), "boolean").as("neverStarted"),
+                ];
+              }),
+          )
+          // Each report of a job placed on the Runner under its generation, whether its position is
+          // the hub's, and what the job's progress row holds once the report applies.
+          .with("current", (qb) =>
+            qb
+              .selectFrom("report as r")
+              .innerJoin("job as j", (join) =>
+                join
+                  .onRef("j.id", "=", "r.jobId")
+                  .onRef("j.generation", "=", "r.generation")
+                  .on("j.runnerId", "=", runnerId),
+              )
+              .innerJoin("jobProgress as p", "p.jobId", "r.jobId")
+              // The reported totals: pi's usage for each model and each tool, added up exactly, as
+              // `numeric`.
+              .crossJoinLateral((eb) => {
+                const amountsOf = (map: "models" | "tools") =>
+                  eb
+                    .selectFrom(
+                      eb
+                        .fn<{ value: Usage }>("jsonb_each", [eb.ref("r.usage", "->").key(map)])
+                        .as("amount"),
+                    )
+                    .select("amount.value");
+                return eb
+                  .selectFrom(amountsOf("models").unionAll(amountsOf("tools")).as("amount"))
+                  .select((sum) => [
+                    sum
+                      .cast<number>(
+                        sum.fn.coalesce(
+                          sum.fn.sum(
+                            sum.cast(sum.ref("amount.value", "->>").key("totalTokens"), "bigint"),
+                          ),
+                          sum.lit(0),
+                        ),
+                        "bigint",
+                      )
+                      .as("tokens"),
+                    sum.fn
+                      .coalesce(
+                        sum.fn.sum<string>(
+                          sum.cast(
+                            sum.ref("amount.value", "->>").key("cost").key("total"),
+                            "numeric",
+                          ),
                         ),
                         sum.lit(0),
-                      ),
-                      "bigint",
-                    )
-                    .as("tokens"),
-                  sum.fn
-                    .coalesce(
-                      sum.fn.sum<string>(
-                        sum.cast(
-                          sum.ref("amount.value", "->>").key("cost").key("total"),
-                          "numeric",
-                        ),
-                      ),
-                      sum.lit(0),
-                    )
-                    .as("cost"),
-                ])
-                .as("totals");
-            })
-            .selectAll("r")
-            .select((eb) => {
-              const fresh = eb.and([
-                eb("p.position", "=", eb.ref("r.position")),
-                eb("j.status", "not in", FINAL_STATUSES),
-              ]);
-              const usageApplies = eb.and([
-                eb("r.usage", "is not", null),
-                eb("totals.tokens", ">=", eb.ref("p.totalTokens")),
-                eb("totals.cost", ">=", eb.ref("p.costUsd")),
-              ]);
-              const afterUsage = <T>(reported: Expression<T>, stored: Expression<T>) =>
-                eb.case().when(usageApplies).then(reported).else(stored).end();
-              return [
-                fresh.as("fresh"),
+                      )
+                      .as("cost"),
+                  ])
+                  .as("totals");
+              })
+              .selectAll("r")
+              .select((eb) => {
+                const fresh = eb.and([
+                  eb("p.position", "=", eb.ref("r.position")),
+                  eb("j.status", "not in", FINAL_STATUSES),
+                ]);
+                const usageApplies = eb.and([
+                  eb("r.usage", "is not", null),
+                  eb("totals.tokens", ">=", eb.ref("p.totalTokens")),
+                  eb("totals.cost", ">=", eb.ref("p.costUsd")),
+                ]);
+                const afterUsage = <T>(reported: Expression<T>, stored: Expression<T>) =>
+                  eb.case().when(usageApplies).then(reported).else(stored).end();
+                return [
+                  fresh.as("fresh"),
+                  eb
+                    .case()
+                    .when(fresh)
+                    .then(eb.fn.coalesce("r.lastId", "p.position"))
+                    .else(eb.ref("p.position"))
+                    .end()
+                    .as("nextPosition"),
+                  afterUsage(eb.ref("r.usage").$notNull(), eb.ref("p.usage")).as("nextUsage"),
+                  afterUsage(eb.ref("totals.tokens"), eb.ref("p.totalTokens")).as(
+                    "nextTotalTokens",
+                  ),
+                  afterUsage(eb.ref("totals.cost"), eb.ref("p.costUsd")).as("nextCostUsd"),
+                  // A paused or ended job is doing nothing, whatever its last report said.
+                  eb
+                    .case()
+                    .when(eb.and([fresh, eb("r.status", "in", CLOSING_STATUSES)]))
+                    .then(eb.lit(null))
+                    .when(eb.and([fresh, eb("r.activity", "is not", null)]))
+                    .then(eb.ref("r.activity"))
+                    .else(eb.ref("p.activity"))
+                    .end()
+                    .as("nextActivity"),
+                ];
+              })
+              .forUpdate("p"),
+          )
+          .with("progress", (qb) =>
+            qb
+              .updateTable("jobProgress as p")
+              .from("current as c")
+              .set((eb) => ({
+                position: eb.ref("c.nextPosition"),
+                usage: eb.ref("c.nextUsage"),
+                totalTokens: eb.ref("c.nextTotalTokens"),
+                costUsd: eb.ref("c.nextCostUsd"),
+                activity: eb.ref("c.nextActivity"),
+              }))
+              .whereRef("p.jobId", "=", "c.jobId")
+              // A report that changes nothing leaves the row as it is. The totals change with the usage.
+              .where((eb) =>
+                eb.or([
+                  eb("c.nextPosition", "is distinct from", eb.ref("p.position")),
+                  eb("c.nextUsage", "is distinct from", eb.ref("p.usage")),
+                  eb("c.nextActivity", "is distinct from", eb.ref("p.activity")),
+                ]),
+              ),
+          )
+          .with("stored", (qb) =>
+            qb
+              .insertInto("jobEventChunk")
+              .columns(["jobId", "firstId", "lastId", "events", "storedAt"])
+              .expression((eb) =>
                 eb
-                  .case()
-                  .when(fresh)
-                  .then(eb.fn.coalesce("r.lastId", "p.position"))
-                  .else(eb.ref("p.position"))
-                  .end()
-                  .as("nextPosition"),
-                afterUsage(eb.ref("r.usage").$notNull(), eb.ref("p.usage")).as("nextUsage"),
-                afterUsage(eb.ref("totals.tokens"), eb.ref("p.totalTokens")).as("nextTotalTokens"),
-                afterUsage(eb.ref("totals.cost"), eb.ref("p.costUsd")).as("nextCostUsd"),
-                // A paused or ended job is doing nothing, whatever its last report said.
-                eb
-                  .case()
-                  .when(eb.and([fresh, eb("r.status", "in", CLOSING_STATUSES)]))
-                  .then(eb.lit(null))
-                  .when(eb.and([fresh, eb("r.activity", "is not", null)]))
-                  .then(eb.ref("r.activity"))
-                  .else(eb.ref("p.activity"))
-                  .end()
-                  .as("nextActivity"),
-              ];
-            })
-            .forUpdate("p"),
-        )
-        .with("progress", (qb) =>
+                  .selectFrom("current")
+                  .select((selectEb) => [
+                    "jobId",
+                    "firstId",
+                    "lastId",
+                    "events",
+                    selectEb.val(now).as("storedAt"),
+                  ])
+                  .where("fresh", "=", true)
+                  .where("lastId", "is not", null)
+                  .$narrowType<{ firstId: number; lastId: number; events: string }>(),
+              ),
+          )
+          .with("reported", (qb) =>
+            qb
+              .selectFrom("current")
+              .select([
+                "jobId",
+                "status",
+                "startedAt",
+                "endedAt",
+                "reason",
+                "result",
+                "neverStarted",
+                "nextTotalTokens",
+                "nextCostUsd",
+              ])
+              .where("fresh", "=", true)
+              .where("status", "is not", null)
+              .$narrowType<{ status: JobStatus }>(),
+          )
+          .with("moved", (qb) =>
+            qb
+              .updateTable("job as j")
+              .from("reported as r")
+              .set((eb) => {
+                // A cancel that was waiting when its Runner confirmed a pause ends the paused job at once,
+                // as a cancel of a paused job does.
+                const cancelledOnPause = eb.and([
+                  eb("r.status", "=", "paused"),
+                  eb("j.pendingControl", "=", "cancel"),
+                ]);
+                // A control waits until the job's status confirms it or the job ends first.
+                const settled = eb("r.status", "in", CLOSING_STATUSES);
+                const unlessSettled = <T>(stored: Expression<T>) =>
+                  eb.case().when(settled).then(eb.lit(null)).else(stored).end();
+                const unlessNeverStarted = <T>(stored: Expression<T>) =>
+                  eb.case().when("r.neverStarted", "=", true).then(eb.lit(null)).else(stored).end();
+                const ends = eb.or([eb("r.status", "in", FINAL_STATUSES), cancelledOnPause]);
+                return {
+                  status: eb
+                    .case()
+                    .when(cancelledOnPause)
+                    .then(eb.cast<JobStatus>(eb.val("cancelled"), jobStatus))
+                    .else(eb.ref("r.status"))
+                    .end(),
+                  startedAt: eb.fn.coalesce("j.startedAt", "r.startedAt"),
+                  endedAt: eb
+                    .case()
+                    .when(cancelledOnPause)
+                    .then(eb.val(now))
+                    .else(eb.ref("r.endedAt"))
+                    .end(),
+                  reason: eb
+                    .case()
+                    .when(cancelledOnPause)
+                    .then(eb.lit(null))
+                    .else(eb.ref("r.reason"))
+                    .end(),
+                  result: eb.ref("r.result"),
+                  pendingControl: unlessSettled(eb.ref("j.pendingControl")),
+                  pendingControlRequestedAt: unlessSettled(eb.ref("j.pendingControlRequestedAt")),
+                  // A job held before it started has no work on any Runner, so it is no longer sent to
+                  // one, and a resume may place it anywhere.
+                  runnerId: unlessNeverStarted(eb.ref("j.runnerId")),
+                  placedAt: unlessNeverStarted(eb.ref("j.placedAt")),
+                  // An end's Usage record, below, counts the job's totals from here on.
+                  recordedTotalTokens: eb
+                    .case()
+                    .when(ends)
+                    .then(eb.ref("r.nextTotalTokens"))
+                    .else(eb.ref("j.recordedTotalTokens"))
+                    .end(),
+                  recordedCostUsd: eb
+                    .case()
+                    .when(ends)
+                    .then(eb.ref("r.nextCostUsd"))
+                    .else(eb.ref("j.recordedCostUsd"))
+                    .end(),
+                };
+              })
+              .whereRef("j.id", "=", "r.jobId")
+              // Each status moves the job forward once; anything else is stale or repeated. A pause or an
+              // end applies to a queued job too: its start may come in the same report, or it failed
+              // before its journal opened, or its Runner was told to pause or cancel it before starting
+              // it.
+              .where((eb) =>
+                eb.or([
+                  eb.and([eb("r.status", "=", "running"), eb("j.status", "=", "queued")]),
+                  eb.and([
+                    eb("r.status", "in", CLOSING_STATUSES),
+                    eb("j.status", "in", QUEUED_OR_RUNNING),
+                  ]),
+                ]),
+              )
+              .returning(["j.id", ...USAGE_COPIED_COLUMNS.map((column) => `j.${column}` as const)]),
+          )
+          // Each job the statement ended gets the Usage record of its end, with its totals as the
+          // report applied them.
+          .with("ended", (qb) =>
+            qb
+              .selectFrom("moved as m")
+              .innerJoin("current as c", "c.jobId", "m.id")
+              // The job's row as the statement found it, before it ended: what its records counted.
+              .innerJoin("job as before", "before.id", "m.id")
+              .select([
+                "m.id as jobId",
+                ...USAGE_COPIED_COLUMNS.map((column) => `m.${column}` as const),
+                "before.recordedTotalTokens",
+                "before.recordedCostUsd",
+                "c.nextTotalTokens as jobTotalTokens",
+                "c.nextCostUsd as jobCostUsd",
+              ])
+              .where("m.status", "in", FINAL_STATUSES),
+          ),
+      ).execute();
+    }),
+  );
+}
+
+/**
+ * Records the deletions of deleted jobs' files the Runner reports done: each goes from those
+ * the Runner owes, and the job's latest Usage record keeps the outcome, `confirmed`, with its time.
+ * A deletion reported again after that changes nothing.
+ */
+function confirmDeletions(runnerId: RunnerId, reports: JobReport[]) {
+  const now = new Date();
+  const deletedFiles = reports.map(({ jobId, generation }) => ({ jobId, generation }));
+  return Db.use((database) =>
+    database.query(async (db) => {
+      await db
+        .with("deleted", (qb) =>
           qb
-            .updateTable("jobProgress as p")
-            .from("current as c")
-            .set((eb) => ({
-              position: eb.ref("c.nextPosition"),
-              usage: eb.ref("c.nextUsage"),
-              totalTokens: eb.ref("c.nextTotalTokens"),
-              costUsd: eb.ref("c.nextCostUsd"),
-              activity: eb.ref("c.nextActivity"),
-            }))
-            .whereRef("p.jobId", "=", "c.jobId")
-            // A report that changes nothing leaves the row as it is. The totals change with the usage.
-            .where((eb) =>
-              eb.or([
-                eb("c.nextPosition", "is distinct from", eb.ref("p.position")),
-                eb("c.nextUsage", "is distinct from", eb.ref("p.usage")),
-                eb("c.nextActivity", "is distinct from", eb.ref("p.activity")),
-              ]),
-            ),
-        )
-        .with("stored", (qb) =>
-          qb
-            .insertInto("jobEventChunk")
-            .columns(["jobId", "firstId", "lastId", "events", "storedAt"])
-            .expression((eb) =>
+            .selectFrom((eb) => jsonRows(eb, deletedFiles))
+            .select((eb) => [
+              eb.cast<JobId>(eb.ref("row.value", "->>").key("jobId"), "uuid").as("jobId"),
               eb
-                .selectFrom("current")
-                .select((selectEb) => [
-                  "jobId",
-                  "firstId",
-                  "lastId",
-                  "events",
-                  selectEb.val(now).as("storedAt"),
-                ])
-                .where("fresh", "=", true)
-                .where("lastId", "is not", null)
-                .$narrowType<{ firstId: number; lastId: number; events: string }>(),
-            ),
-        )
-        .with("reported", (qb) =>
-          qb
-            .selectFrom("current")
-            .select(["jobId", "status", "startedAt", "endedAt", "reason", "result", "neverStarted"])
-            .where("fresh", "=", true)
-            .where("status", "is not", null)
-            .$narrowType<{ status: JobStatus }>(),
-        )
-        .updateTable("job as j")
-        .from("reported as r")
-        .set((eb) => {
-          // A cancel that was waiting when its Runner confirmed a pause ends the paused job at once,
-          // as a cancel of a paused job does.
-          const cancelledOnPause = eb.and([
-            eb("r.status", "=", "paused"),
-            eb("j.pendingControl", "=", "cancel"),
-          ]);
-          // A control waits until the job's status confirms it or the job ends first.
-          const settled = eb("r.status", "in", CLOSING_STATUSES);
-          const unlessSettled = <T>(stored: Expression<T>) =>
-            eb.case().when(settled).then(eb.lit(null)).else(stored).end();
-          const unlessNeverStarted = <T>(stored: Expression<T>) =>
-            eb.case().when("r.neverStarted", "=", true).then(eb.lit(null)).else(stored).end();
-          return {
-            status: eb
-              .case()
-              .when(cancelledOnPause)
-              .then(eb.cast<JobStatus>(eb.val("cancelled"), jobStatus))
-              .else(eb.ref("r.status"))
-              .end(),
-            startedAt: eb.fn.coalesce("j.startedAt", "r.startedAt"),
-            endedAt: eb
-              .case()
-              .when(cancelledOnPause)
-              .then(eb.val(now))
-              .else(eb.ref("r.endedAt"))
-              .end(),
-            reason: eb
-              .case()
-              .when(cancelledOnPause)
-              .then(eb.lit(null))
-              .else(eb.ref("r.reason"))
-              .end(),
-            result: eb.ref("r.result"),
-            pendingControl: unlessSettled(eb.ref("j.pendingControl")),
-            pendingControlRequestedAt: unlessSettled(eb.ref("j.pendingControlRequestedAt")),
-            // A job held before it started has no work on any Runner, so it is no longer sent to
-            // one, and a resume may place it anywhere.
-            runnerId: unlessNeverStarted(eb.ref("j.runnerId")),
-            placedAt: unlessNeverStarted(eb.ref("j.placedAt")),
-          };
-        })
-        .whereRef("j.id", "=", "r.jobId")
-        // Each status moves the job forward once; anything else is stale or repeated. A pause or an
-        // end applies to a queued job too: its start may come in the same report, or it failed
-        // before its journal opened, or its Runner was told to pause or cancel it before starting
-        // it.
-        .where((eb) =>
-          eb.or([
-            eb.and([eb("r.status", "=", "running"), eb("j.status", "=", "queued")]),
-            eb.and([
-              eb("r.status", "in", CLOSING_STATUSES),
-              eb("j.status", "in", QUEUED_OR_RUNNING),
+                .cast<number>(eb.ref("row.value", "->>").key("generation"), "integer")
+                .as("generation"),
             ]),
-          ]),
         )
+        .with("confirmed", (qb) =>
+          qb
+            .deleteFrom("jobDeletion as p")
+            .using("deleted")
+            .whereRef("p.jobId", "=", "deleted.jobId")
+            .whereRef("p.generation", "=", "deleted.generation")
+            .where("p.runnerId", "=", runnerId)
+            .returning(["p.jobId", "p.generation"]),
+        )
+        .updateTable("usageRecord as u")
+        .from("confirmed as c")
+        .set({ hostDeletionOutcome: "confirmed", hostDeletionOutcomeAt: now })
+        .whereRef("u.jobId", "=", "c.jobId")
+        .whereRef("u.generation", "=", "c.generation")
         .execute();
     }),
   );
@@ -426,7 +525,8 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
 /**
  * Places queued jobs on the Runner's free slots and reads its desired state: every queued or running
  * job placed on it, under the intent its pending control gives, with the content of those the
- * Runner does not hold and is to run. One statement, so the jobs just placed come from the
+ * Runner does not hold and is to run, and the deletions of deleted jobs' files it owes, as `delete`
+ * placements under each job's last generation. One statement, so the jobs just placed come from the
  * placement's `RETURNING`, as Postgres runs a `WITH` clause on the statement's snapshot. Placement
  * takes the oldest queued jobs not yet sent to a Runner, new ones without a Runner and resumed ones
  * waiting for this Runner, which holds their journals, locking each row it takes so concurrent syncs
@@ -435,8 +535,8 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
  * request in flight and a lost answer makes it repeat reports that then change nothing.
  *
  * The Runner's free slots count only the jobs it holds, so the queued or running jobs placed on it
- * that it does not hold are subtracted first: it starts them on this answer, as a restarted Runner does with
- * every job it ran. kube-scheduler likewise counts every pod assigned to a node, running or not.
+ * that it does not hold are subtracted first: it starts them on this answer, as a restarted Runner
+ * does with every job it ran. kube-scheduler likewise counts every pod assigned to a node, running or not.
  */
 function placeAndRead(runnerId: RunnerId, load: Load) {
   const now = new Date();
@@ -530,7 +630,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
         .select((eb) => [
           "id",
           "generation",
-          "pendingControl",
+          eb.fn.coalesce(eb.cast<string>("pendingControl", "text"), eb.val("run")).as("intent"),
           "jobProgress.position",
           eb
             .case()
@@ -572,13 +672,27 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
             .end()
             .as("job"),
         ])
+        // The deleted jobs whose files the Runner still owes the deletion of, under their last
+        // placement.
+        .unionAll((eb) =>
+          eb
+            .selectFrom("jobDeletion")
+            .select((deletion) => [
+              deletion.ref("jobId").as("id"),
+              "generation",
+              deletion.val("delete").as("intent"),
+              deletion.lit(0).as("position"),
+              deletion.lit(null).as("job"),
+            ])
+            .where("runnerId", "=", runnerId),
+        )
         .orderBy("id")
         .execute();
       return {
         placements: rows.map((row): Placement => ({
           jobId: row.id,
           generation: row.generation,
-          intent: row.pendingControl ?? "run",
+          intent: z.parse(intentSchema, row.intent),
           ...(row.job === null ? {} : { job: row.job }),
           position: row.position,
         })),
@@ -601,7 +715,10 @@ export const handleRunnerMessage = createProtocolServer<typeof runnerMethods, Ru
     },
     report: async ({ jobs, ...load }, context) => {
       if (context.recordSeen) await run(context, recordRunnerSeen(context.runnerId, new Date()));
-      await run(context, applyReports(context.runnerId, jobs));
+      const applied = jobs.filter((job) => job.intent !== "delete");
+      if (applied.length > 0) await run(context, applyReports(context.runnerId, applied));
+      const deleted = jobs.filter((job) => job.intent === "delete");
+      if (deleted.length > 0) await run(context, confirmDeletions(context.runnerId, deleted));
       return await run(context, placeAndRead(context.runnerId, load));
     },
   },

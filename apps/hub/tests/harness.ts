@@ -228,7 +228,7 @@ export function startSystem(
     async clientWithNewJobsKey() {
       const { key } = await owner.apiKeys.create({
         name: "jobs",
-        permissions: { job: ["create", "read", "pause", "resume", "cancel"] },
+        permissions: { job: ["create", "read", "pause", "resume", "cancel", "delete"] },
       });
       return client({ "x-api-key": key });
     },

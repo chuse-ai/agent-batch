@@ -44,10 +44,10 @@ export function selectProtocolVersion(offered: string | null): string | undefine
 
 /**
  * What the hub wants done with a placement, which only ever moves forward: run, then pause or cancel,
- * then purge. Resuming a job is a new placement. All four are declared now, though only `run`,
- * `pause` and `cancel` are sent: a new value in a closed set would bump the protocol version.
+ * then delete. Resuming a job is a new placement. A delete asks the Runner to delete the files of a
+ * job the hub has deleted, under the job's last placement, and comes without the job.
  */
-export const intentSchema = z.enum(["run", "pause", "cancel", "purge"]);
+export const intentSchema = z.enum(["run", "pause", "cancel", "delete"]);
 export type Intent = z.infer<typeof intentSchema>;
 
 /** One placement of a job on the Runner: the job and the generation of its placement. */
@@ -231,7 +231,8 @@ export type JobActivity = z.infer<typeof jobActivitySchema>;
  * journal, so its pause or cancel writes nothing: it reports `pause` or `cancel` with no events,
  * and the hub holds or ends the job itself. The report is read fresh from the journal after the
  * position the hub last gave, so a report repeated after a lost answer starts from the same position.
- * The job's start and end are entries among its events, so they reach the hub with them.
+ * The job's start and end are entries among its events, so they reach the hub with them. A `delete`
+ * report, with no events, says the deleted job's files are gone from the host.
  *
  * The hub applies the usage when the Runner and the placement's generation match and neither total
  * is smaller than the one it stored. It applies the events, its position, the activity and a

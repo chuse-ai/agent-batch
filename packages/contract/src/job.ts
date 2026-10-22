@@ -4,8 +4,11 @@ import * as z from "zod/mini";
 // What a job is made of, as a caller submits it and as a Runner receives it: the same schemas on
 // both sides, so neither can drift from the other.
 
-/** A job's ID, as the API and the Runner protocol carry it. */
-export const jobIdSchema = z.string();
+/**
+ * A job's ID, as the API and the Runner protocol carry it: a UUID, so a Runner that names a job's
+ * files by it stays inside its jobs directory.
+ */
+export const jobIdSchema = z.uuid();
 
 /**
  * Text as a job keeps it. JSON can carry a lone UTF-16 surrogate, which is not Unicode text and which

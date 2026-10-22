@@ -44,7 +44,7 @@ A running job carrying on from its journal after its Runner stopped and started 
 _Avoid_: resume, continue, restart
 
 **Usage record**:
-The small, lasting record of a job's outcome and cost (labels, model, status, tokens, cost, times), kept after the job's content expires or is deleted.
+The small, lasting record of a job's outcome and cost (labels, model, status, tokens, cost, times), kept after the job's content expires or is deleted. A job resumed after it ended has one for each end, each with what it used since the previous one.
 _Avoid_: billing record, receipt, audit log
 
 **Prompt**:

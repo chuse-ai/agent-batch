@@ -1,3 +1,6 @@
+import { access } from "node:fs/promises";
+import path from "node:path";
+
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import type { JobEvent, JobSubmission } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
@@ -42,7 +45,7 @@ async function submitRunningJob(client: HubClient) {
   return id;
 }
 
-test("cancelling a job no Runner was sent ends it at once", async () => {
+test("cancelling a job no Runner was sent ends it at once, and deleting it then removes it at once", async () => {
   const client = await system.clientWithNewJobsKey();
   const { id } = await client.jobs.submit(SUBMISSION);
 
@@ -55,6 +58,11 @@ test("cancelling a job no Runner was sent ends it at once", async () => {
     hasMore: false,
     status: "cancelled",
   });
+
+  const deleted = await client.jobs.delete({ id });
+  expect(deleted).toMatchObject({ status: "cancelled", deletedAt: expect.any(Date) });
+  expect(deleted).not.toHaveProperty("pendingControl");
+  await expect(client.jobs.get({ id })).rejects.toMatchObject({ code: "NOT_FOUND" });
 });
 
 test("pausing a job no Runner was sent holds it, and resuming it lets it start", async () => {
@@ -283,3 +291,58 @@ test("pausing a running job frees its slot for the next queued job", async () =>
   await system.stopRunner();
   await system.startRunner();
 });
+
+test("deleting an unfinished job is refused", async () => {
+  const client = await system.clientWithNewJobsKey();
+  const id = await submitRunningJob(client);
+
+  await expect(client.jobs.delete({ id })).rejects.toMatchObject({
+    code: "CONFLICT",
+    message: expect.stringContaining("cancel it first"),
+  });
+  await client.jobs.cancel({ id });
+  await untilStatus(client, id, "cancelled");
+});
+
+test("deleting a finished job removes its content at once and its files from its host once its Runner confirms", async () => {
+  system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
+  const client = await system.clientWithNewJobsKey();
+  const { id } = await client.jobs.submit(SUBMISSION);
+  await untilStatus(client, id, "succeeded");
+  const jobDir = path.dirname(system.workspace(id));
+  await access(jobDir);
+
+  const deleted = await client.jobs.delete({ id });
+
+  expect(deleted).toMatchObject({
+    status: "succeeded",
+    deletedAt: expect.any(Date),
+    pendingControl: { type: "delete", requestedAt: expect.any(Date) },
+  });
+  expect(deleted).not.toHaveProperty("result");
+  await expect(client.jobs.events({ id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  await expect
+    .poll(() => client.jobs.get({ id }).catch((error: unknown) => error), { timeout: 10_000 })
+    .toMatchObject({ code: "NOT_FOUND" });
+  await expect(access(jobDir)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(client.jobs.delete({ id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+});
+
+test("a job deleted while its Runner is away reads as deleted, and a repeated delete returns it, until the Runner is back", async () => {
+  system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
+  const client = await system.clientWithNewJobsKey();
+  const { id } = await client.jobs.submit(SUBMISSION);
+  await untilStatus(client, id, "succeeded");
+  await system.stopRunner();
+
+  const deleted = await client.jobs.delete({ id });
+  expect(await client.jobs.get({ id })).toEqual(deleted);
+  expect(await client.jobs.delete({ id })).toEqual(deleted);
+  expect(await client.jobs.cancel({ id })).toEqual(deleted);
+  await expect(client.jobs.resume({ id })).rejects.toMatchObject({ code: "CONFLICT" });
+  await system.startRunner();
+
+  await expect
+    .poll(() => client.jobs.get({ id }).catch((error: unknown) => error), { timeout: 20_000 })
+    .toMatchObject({ code: "NOT_FOUND" });
+}, 40_000);

@@ -91,10 +91,25 @@ const AcceptedResult = defineDoc<{ result?: JsonValue }>({
 function jobPaths(jobsDir: string, jobId: string) {
   const dir = path.resolve(jobsDir, jobId);
   return {
+    dir,
     journal: path.join(dir, "journal.sqlite"),
     workspace: path.join(dir, "workspace"),
     temp: path.join(dir, "tmp"),
   };
+}
+
+/**
+ * Deletes everything of the job `jobId` on this Runner: its journal, its Workspace and its temp
+ * directory. Nothing there and nothing to delete are the same.
+ */
+export function deleteJobFiles(
+  settings: AgentSettings,
+  jobId: string,
+): Effect.Effect<void, PlatformError.PlatformError> {
+  return settings.fileSystem.remove(jobPaths(settings.jobsDir, jobId).dir, {
+    recursive: true,
+    force: true,
+  });
 }
 
 /**

@@ -15,6 +15,7 @@ import {
 } from "contract";
 import { Array, Effect, Order, Record, String, Struct } from "effect";
 import { compileSchema, isJsonError } from "json-schema-library";
+import type { Kysely, QueryCreator, Transaction } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { validate as isUuid, v7 as uuidv7 } from "uuid";
 import * as z from "zod/mini";
@@ -23,10 +24,12 @@ import { getOrganization, keyMetadataSchema } from "./auth/auth.ts";
 import { Db } from "./db/database.ts";
 import {
   ApikeyId,
+  type Database,
   type EventId,
   InputFileName,
   JobId,
   type JobProgressRow,
+  type JobDeletionRow,
   type JobRow,
   type JobStatus,
   type JobUpdate,
@@ -42,6 +45,20 @@ export const QUEUED_OR_RUNNING: JobStatus[] = ["queued", "running"];
 
 /** About how many bytes of events, as JSON Lines, one page of a job's events holds. */
 const MAX_PAGE_BYTES = 1024 * 1024;
+
+/** What a job's Usage record copies from the job's row at its end, beside the job's ID. */
+export const USAGE_COPIED_COLUMNS = [
+  "generation",
+  "organizationId",
+  "status",
+  "runnerId",
+  "submitterKeyId",
+  "submitterKeyName",
+  "submitterMemberId",
+  "createdAt",
+  "startedAt",
+  "endedAt",
+] as const;
 
 /** What the hub reports of a job, from its own row and from its progress row. */
 const JOB_COLUMNS = [
@@ -233,8 +250,10 @@ export function getJob(jobId: JobId) {
         .where("id", "=", jobId)
         .executeTakeFirst(),
     );
-    if (!job) return yield* Effect.fail(new NotFound());
-    return toApiJob(job);
+    if (job) return toApiJob(job);
+    const deleted = yield* database.query((db) => readDeletedJob(db, jobId));
+    if (!deleted) return yield* Effect.fail(new NotFound());
+    return deleted;
   });
 }
 
@@ -370,10 +389,25 @@ export function controlJob(jobId: JobId, control: Control) {
           .where("id", "=", jobId)
           .returning(JOB_COLUMNS)
           .executeTakeFirstOrThrow();
+        if (FINAL_STATUSES.includes(changed.status)) await recordUsageOfEnd(trx, jobId);
         return { decision, job: { ...job, ...changed } };
       }),
     );
-    if (!controlled) return yield* Effect.fail(new NotFound());
+    if (!controlled) {
+      // A deleted job still reads while its Runner owes the deletion of its files, and is over: a
+      // cancel leaves it as it is, and nothing carries it on.
+      const deleted = yield* database.query((db) => readDeletedJob(db, jobId));
+      if (!deleted) return yield* Effect.fail(new NotFound());
+      if (control === "cancel") return { job: deleted, hint: undefined };
+      return yield* Effect.fail(
+        new ControlRefused({
+          message:
+            control === "resume"
+              ? "The job is deleted, and its journal is being deleted from its host"
+              : "The job is deleted",
+        }),
+      );
+    }
     const { decision, job } = controlled;
     if (decision.kind === "refused") {
       return yield* Effect.fail(new ControlRefused({ message: decision.why }));
@@ -384,6 +418,217 @@ export function controlJob(jobId: JobId, control: Control) {
       hint,
     } satisfies { job: Job; hint?: RunnerId | "live" };
   });
+}
+
+/** A job's end that gets a Usage record: the job as it ended, and its totals then. */
+export type UsageOfEnd = Pick<
+  JobRow,
+  (typeof USAGE_COPIED_COLUMNS)[number] | "recordedTotalTokens" | "recordedCostUsd"
+> & {
+  jobId: JobId;
+  jobTotalTokens: number;
+  jobCostUsd: string;
+};
+
+/**
+ * Inserts the Usage record of each job end in the `ended` table, a `WITH` query of the statement
+ * `db` builds: the job as it ended, what it used since its previous end, counted in the
+ * month it ends, and its totals now. What it used is its totals less what its records already
+ * count (`recordedTotalTokens`, `recordedCostUsd`), as the job's row held them before this end; the
+ * statement that ends the job sets them to its totals. The ends the hub makes itself and those its
+ * Runners report are recorded alike.
+ */
+export function insertUsageRecords(db: QueryCreator<Database & { ended: UsageOfEnd }>) {
+  return db
+    .insertInto("usageRecord")
+    .columns([
+      "jobId",
+      ...USAGE_COPIED_COLUMNS,
+      "totalTokens",
+      "costUsd",
+      "jobTotalTokens",
+      "jobCostUsd",
+    ])
+    .expression((eb) =>
+      eb
+        .selectFrom("ended as e")
+        .select((select) => [
+          "e.jobId",
+          ...USAGE_COPIED_COLUMNS.map((column) => `e.${column}` as const),
+          select("e.jobTotalTokens", "-", select.ref("e.recordedTotalTokens")).as("totalTokens"),
+          select("e.jobCostUsd", "-", select.ref("e.recordedCostUsd")).as("costUsd"),
+          "e.jobTotalTokens",
+          "e.jobCostUsd",
+        ]),
+    );
+}
+
+/**
+ * Records the Usage record of the job `jobId`'s end, which the hub has just made itself, in the
+ * transaction `trx` that made it, from the job's row and its totals now, which its records then
+ * count.
+ */
+async function recordUsageOfEnd(trx: Transaction<Database>, jobId: JobId) {
+  await insertUsageRecords(
+    trx
+      .with("ended", (qb) =>
+        qb
+          .selectFrom("job as j")
+          .innerJoin("jobProgress as p", "p.jobId", "j.id")
+          .select([
+            "j.id as jobId",
+            ...USAGE_COPIED_COLUMNS.map((column) => `j.${column}` as const),
+            "j.recordedTotalTokens",
+            "j.recordedCostUsd",
+            "p.totalTokens as jobTotalTokens",
+            "p.costUsd as jobCostUsd",
+          ])
+          .where("j.id", "=", jobId),
+      )
+      // Runs whether or not the insert reads it, as Postgres runs every data-modifying `WITH`.
+      .with("counted", (qb) =>
+        qb
+          .updateTable("job as j")
+          .from("jobProgress as p")
+          .set((eb) => ({
+            recordedTotalTokens: eb.ref("p.totalTokens"),
+            recordedCostUsd: eb.ref("p.costUsd"),
+          }))
+          .whereRef("p.jobId", "=", "j.id")
+          .where("j.id", "=", jobId)
+          .returning("j.id"),
+      ),
+  ).execute();
+}
+
+/**
+ * Deletes the finished job `jobId` and returns it as it now reads, or fails with a 404 error
+ * or, for an unfinished job, a 409; with its Runner to tell to sync now. In one transaction: the
+ * job's row goes, and with it its input files, events and progress; its latest Usage record is
+ * marked deleted, as its tombstone; and the deletion of its files from its host is recorded for its
+ * Runner, unless no Runner holds any of the job, as when none was sent it or none started it. A
+ * repeat while that deletion waits returns the job again, as Kubernetes returns a pod already being
+ * deleted; once the deletion is done, the job is not found.
+ */
+export function deleteJob(jobId: JobId) {
+  return Effect.gen(function* () {
+    if (!isUuid(jobId)) return yield* Effect.fail(new NotFound());
+    const database = yield* Db;
+    const now = new Date();
+    const deleted = yield* database.query((db) =>
+      db.transaction().execute(async (trx) => {
+        const job = await trx
+          .selectFrom("job")
+          .select(["status", "runnerId", "generation", "organizationId"])
+          .where("id", "=", jobId)
+          .forUpdate("job")
+          .executeTakeFirst();
+        if (!job) return { deleted: await readDeletedJob(trx, jobId) };
+        if (!FINAL_STATUSES.includes(job.status)) {
+          return {
+            refused:
+              job.status === "paused"
+                ? "The job is paused, not finished; cancel it first"
+                : "The job is not finished; cancel it first",
+          };
+        }
+        const usage = await trx
+          .updateTable("usageRecord")
+          .set(
+            job.runnerId === null
+              ? { deletedAt: now, hostDeletionOutcome: "notRequired", hostDeletionOutcomeAt: now }
+              : { deletedAt: now },
+          )
+          .where("jobId", "=", jobId)
+          .where("generation", "=", job.generation)
+          .returning([
+            "jobId",
+            "status",
+            "createdAt",
+            "startedAt",
+            "endedAt",
+            "jobTotalTokens as totalTokens",
+            "jobCostUsd as costUsd",
+          ])
+          // Every end writes the Usage record of the job's generation, so a finished job has one.
+          .executeTakeFirstOrThrow();
+        if (job.runnerId !== null) {
+          await trx
+            .insertInto("jobDeletion")
+            .values({
+              ...usage,
+              organizationId: job.organizationId,
+              runnerId: job.runnerId,
+              generation: job.generation,
+              requestedAt: now,
+            })
+            .execute();
+        }
+        await trx.deleteFrom("job").where("id", "=", jobId).execute();
+        return {
+          deleted: toDeletedJob(usage, now, job.runnerId === null ? null : now),
+          hint: job.runnerId ?? undefined,
+        };
+      }),
+    );
+    if ("refused" in deleted)
+      return yield* Effect.fail(new ControlRefused({ message: deleted.refused }));
+    if (!deleted.deleted) return yield* Effect.fail(new NotFound());
+    return { job: deleted.deleted, hint: deleted.hint };
+  });
+}
+
+/** What a deleted job reads from its latest Usage record. */
+/** What a deleted job reads from: the snapshot the deletion its Runner owes keeps. */
+const DELETED_JOB_COLUMNS = [
+  "jobId",
+  "status",
+  "createdAt",
+  "startedAt",
+  "endedAt",
+  "totalTokens",
+  "costUsd",
+] as const;
+
+/**
+ * A deleted job as it reads: without its content, its final status, times and totals,
+ * `snapshot`, with when it was deleted, `deletedAt`, and the deletion of its files its Runner still
+ * owes, requested at `deletionRequestedAt`, while it waits.
+ */
+function toDeletedJob(
+  snapshot: Pick<JobDeletionRow, (typeof DELETED_JOB_COLUMNS)[number]>,
+  deletedAt: Date,
+  deletionRequestedAt: Date | null,
+): Job {
+  return {
+    id: snapshot.jobId,
+    status: snapshot.status,
+    createdAt: snapshot.createdAt,
+    startedAt: snapshot.startedAt,
+    endedAt: snapshot.endedAt,
+    // A finished job has no reason yet: failures' reasons come with structured failure and limit reasons.
+    reason: null,
+    usage: { totalTokens: snapshot.totalTokens, cost: { totalUsd: snapshot.costUsd } },
+    deletedAt,
+    ...(deletionRequestedAt !== null
+      ? { pendingControl: { type: "delete", requestedAt: deletionRequestedAt } }
+      : {}),
+  };
+}
+
+/**
+ * A deleted job as it reads while its Runner still owes the deletion of its files, from the
+ * snapshot that deletion keeps, which outlasts the job's Usage records' months; or nothing, once its
+ * files are gone or when the hub has no such job.
+ */
+async function readDeletedJob(db: Kysely<Database>, jobId: JobId): Promise<Job | undefined> {
+  const row = await db
+    .selectFrom("jobDeletion")
+    .select([...DELETED_JOB_COLUMNS, "requestedAt"])
+    .where("jobId", "=", jobId)
+    .executeTakeFirst();
+  // The deletion is requested as the job is deleted.
+  return row && toDeletedJob(row, row.requestedAt, row.requestedAt);
 }
 
 /**
