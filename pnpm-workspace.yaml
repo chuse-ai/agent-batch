@@ -57,7 +57,7 @@ catalog:
   json-schema-library: ^11.6.11
   kanel: ^4.0.4
   kanel-kysely: ^4.0.0
-  kysely: ^0.29.6
+  kysely: ^0.29.7
   nf3: ^0.4.2
   pg: ^8.23.1
   testcontainers: ^12.2.1
