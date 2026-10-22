@@ -198,8 +198,8 @@ catalogs:
       specifier: 2.0.0-beta.43
       version: 2.0.0-beta.43
     '@orpc/json-schema':
-      specifier: 2.0.0-beta.43
-      version: 2.0.0-beta.43
+      specifier: 2.0.0-beta.44
+      version: 2.0.0-beta.44
     '@orpc/openapi':
       specifier: 2.0.0-beta.43
       version: 2.0.0-beta.43
@@ -327,7 +327,7 @@ importers:
         version: 2.0.0-beta.43(crossws@0.4.15)(effect@4.0.5)
       '@orpc/json-schema':
         specifier: 'catalog:'
-        version: 2.0.0-beta.43(crossws@0.4.15)
+        version: 2.0.0-beta.44(crossws@0.4.15)
       '@orpc/openapi':
         specifier: 'catalog:'
         version: 2.0.0-beta.43(crossws@0.4.15)
@@ -518,7 +518,7 @@ importers:
         version: 2.0.0-beta.43
       '@orpc/json-schema':
         specifier: 'catalog:'
-        version: 2.0.0-beta.43(crossws@0.4.15)
+        version: 2.0.0-beta.44(crossws@0.4.15)
       '@orpc/openapi':
         specifier: 'catalog:'
         version: 2.0.0-beta.43(crossws@0.4.15)
@@ -1413,8 +1413,14 @@ packages:
   '@orpc/client@2.0.0-beta.43':
     resolution: {integrity: sha512-176u4pmmoXGyjHRTuJFSQVN4Ucuau5mfn3LkxBs+kyTcNHOZD9XmDW8DAr0NJwhfUBDT/E62q1y9aEgiKUcJsA==}
 
+  '@orpc/client@2.0.0-beta.44':
+    resolution: {integrity: sha512-x78eWZACv7Xzc6qGyrG6BvbH9/p6zoG+urnmOo8Vr6U63fnk9yLN4AA0B5n3/Ndb2lA6kmW8fNCyYbqj2DzH7A==}
+
   '@orpc/contract@2.0.0-beta.43':
     resolution: {integrity: sha512-8IyzPrpdvGhi51G6QHEkoPOvs4AyV0YjhV6OP57W9rUAS9YnPyc/ScKwpsTZsm6dOjPcNBk8R2n+iN2s7m4t4w==}
+
+  '@orpc/contract@2.0.0-beta.44':
+    resolution: {integrity: sha512-8yRa8eY7b6ltf9EjswD+h6HlqLhyjzxn4YOmj48u39K2VGjRhFwXw/EpAGJGmochOuQZuWzrj9VcsyVg6uV7kQ==}
 
   '@orpc/experimental-effect@2.0.0-beta.43':
     resolution: {integrity: sha512-24Lwf6rbiaeidp0d28IG8TosinZInV7f0duHoDAeV9HNccsiXB/7ShL5G/va7tNDaDX+L3N/DU01GybSK5Pl7g==}
@@ -1423,6 +1429,9 @@ packages:
 
   '@orpc/json-schema@2.0.0-beta.43':
     resolution: {integrity: sha512-h0wq0pMfxTjFEy7RaFTKwwq2GviS7lz+uh16sUMbdUMTNYP4y1t8SLLfa979EbhfG9RJ3/vXPdaToiMh8HQz8g==}
+
+  '@orpc/json-schema@2.0.0-beta.44':
+    resolution: {integrity: sha512-V8FriE7bd+WEZgjYGuCYg1cAGEaM/+nSDIJLSGyp1Zco2lMaXZ7whwqWyh9KJm36d4VkraIePDA4Tntza9+w7A==}
 
   '@orpc/openapi@2.0.0-beta.43':
     resolution: {integrity: sha512-sT/a4M/rfyemqAv07VRdbBA/NsepWTLlggrqnpRUhqYSUobGKJ+I08uaKRzjPumXUz8ip9oDeSaR3Xgu3q5JXw==}
@@ -1449,8 +1458,22 @@ packages:
       fastify:
         optional: true
 
+  '@orpc/server@2.0.0-beta.44':
+    resolution: {integrity: sha512-XUyWiMyTqm+hoIU9XMG+C5dlh63Ay3hrwWqgoHG7eDfU+KjwJvnxQtR7HUVT7EeJknXioMaKDihf8Z7Qu01Uew==}
+    peerDependencies:
+      crossws: '>=0.3.4'
+      fastify: '>=5.6.1'
+    peerDependenciesMeta:
+      crossws:
+        optional: true
+      fastify:
+        optional: true
+
   '@orpc/shared@2.0.0-beta.43':
     resolution: {integrity: sha512-2DP1wex6Aja6dcmudQAiMdZlXcuJXN7/k0dtFAj2Sy0TwQ6Jcr+t7aJk5lmZrosPpEAQTbY/f9kJJW+Cxr35Cw==}
+
+  '@orpc/shared@2.0.0-beta.44':
+    resolution: {integrity: sha512-3R+et5pRqGXJ0GKeU/Xzm+Ia0pgfN7C2Ur01RxvDQmkPnFCfU5XxPWmHq0AmiTbOwt5dV3xpSeP7JTgy8P8A9Q==}
 
   '@orpc/zod@2.0.0-beta.43':
     resolution: {integrity: sha512-Ria1YRhR1tX1DT1dQVrQDhy5SZ/hSJcQknh2XZJ2lGa2cZTtvm8jJL4wsWYaZNtDaXpOLx/DBH7RoGDS0ewaPw==}
@@ -5242,10 +5265,23 @@ snapshots:
       '@standard-server/fetch': 0.10.3
       '@standard-server/peer': 0.10.3
 
+  '@orpc/client@2.0.0-beta.44':
+    dependencies:
+      '@orpc/shared': 2.0.0-beta.44
+      '@standard-server/core': 0.10.3
+      '@standard-server/fetch': 0.10.3
+      '@standard-server/peer': 0.10.3
+
   '@orpc/contract@2.0.0-beta.43':
     dependencies:
       '@orpc/client': 2.0.0-beta.43
       '@orpc/shared': 2.0.0-beta.43
+      '@standard-schema/spec': 1.1.0
+
+  '@orpc/contract@2.0.0-beta.44':
+    dependencies:
+      '@orpc/client': 2.0.0-beta.44
+      '@orpc/shared': 2.0.0-beta.44
       '@standard-schema/spec': 1.1.0
 
   '@orpc/experimental-effect@2.0.0-beta.43(crossws@0.4.15)(effect@4.0.5)':
@@ -5267,6 +5303,18 @@ snapshots:
       '@orpc/contract': 2.0.0-beta.43
       '@orpc/server': 2.0.0-beta.43(crossws@0.4.15)
       '@orpc/shared': 2.0.0-beta.43
+      '@standard-schema/spec': 1.1.0
+    transitivePeerDependencies:
+      - crossws
+      - fastify
+
+  '@orpc/json-schema@2.0.0-beta.44(crossws@0.4.15)':
+    dependencies:
+      '@openapi-spec/types': 0.3.0
+      '@orpc/client': 2.0.0-beta.44
+      '@orpc/contract': 2.0.0-beta.44
+      '@orpc/server': 2.0.0-beta.44(crossws@0.4.15)
+      '@orpc/shared': 2.0.0-beta.44
       '@standard-schema/spec': 1.1.0
     transitivePeerDependencies:
       - crossws
@@ -5303,7 +5351,28 @@ snapshots:
     optionalDependencies:
       crossws: 0.4.15
 
+  '@orpc/server@2.0.0-beta.44(crossws@0.4.15)':
+    dependencies:
+      '@orpc/client': 2.0.0-beta.44
+      '@orpc/contract': 2.0.0-beta.44
+      '@orpc/shared': 2.0.0-beta.44
+      '@standard-server/aws-lambda': 0.10.3
+      '@standard-server/core': 0.10.3
+      '@standard-server/fastify': 0.10.3
+      '@standard-server/fetch': 0.10.3
+      '@standard-server/node': 0.10.3
+      '@standard-server/peer': 0.10.3
+      cookie: 2.0.1
+    optionalDependencies:
+      crossws: 0.4.15
+
   '@orpc/shared@2.0.0-beta.43':
+    dependencies:
+      '@standard-server/shared': 0.10.3
+      radash: 12.1.1
+      type-fest: 5.10.0
+
+  '@orpc/shared@2.0.0-beta.44':
     dependencies:
       '@standard-server/shared': 0.10.3
       radash: 12.1.1
