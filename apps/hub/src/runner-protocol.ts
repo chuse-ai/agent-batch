@@ -245,6 +245,14 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
                   .on("j.runnerId", "=", runnerId),
               )
               .innerJoin("jobProgress as p", "p.jobId", "r.jobId")
+              // A removed Runner's reports change nothing: its row is gone, and its jobs end with
+              // it. The row is locked, so a removal waits for a report already being applied, whose
+              // events then come before the end the removal gives the job.
+              .where((eb) =>
+                eb.exists(
+                  eb.selectFrom("runner").select("id").where("id", "=", runnerId).forKeyShare(),
+                ),
+              )
               // The reported totals: pi's usage for each model and each tool, added up exactly, as
               // `numeric`.
               .crossJoinLateral((eb) => {
@@ -578,6 +586,17 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                     runnerEb("runnerId", "is", null),
                     runnerEb("runnerId", "=", runnerId),
                   ]),
+                )
+                // A removed Runner takes no job, though its socket is still open while it closes. Its
+                // row is locked, so a removal waits for this placement and then ends what it placed.
+                .where((runnerEb) =>
+                  runnerEb.exists(
+                    runnerEb
+                      .selectFrom("runner")
+                      .select("id")
+                      .where("id", "=", runnerId)
+                      .forKeyShare(),
+                  ),
                 )
                 .orderBy("id")
                 .limit((limitEb) =>

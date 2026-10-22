@@ -7,6 +7,7 @@ import type { ColumnType, Selectable, Insertable, Updateable } from "kysely";
 import type { ApikeyId } from "./Apikey.js";
 import type { default as HostDeletionOutcome } from "./HostDeletionOutcome.js";
 import type { JobId } from "./Job.js";
+import type { default as JobReason } from "./JobReason.js";
 import type { default as JobStatus } from "./JobStatus.js";
 import type { MemberId } from "./Member.js";
 import type { OrganizationId } from "./Organization.js";
@@ -27,6 +28,8 @@ export default interface UsageRecordTable {
   organizationId: ColumnType<OrganizationId, OrganizationId, OrganizationId>;
 
   status: ColumnType<JobStatus, JobStatus, JobStatus>;
+
+  reason: ColumnType<JobReason | null, JobReason | null, JobReason | null>;
 
   runnerId: ColumnType<RunnerId | null, RunnerId | null, RunnerId | null>;
 

@@ -94,8 +94,13 @@ const router = os.router({
       yield* requireMember(context.headers);
       // The ID enters the hub here.
       const runnerId = RunnerId(input.id);
-      yield* removeRunner(context.headers, runnerId);
-      yield* RunnerConnections.use((connections) => connections.drop(runnerId));
+      // Its steps run to the end once begun, also when the caller goes away and the Node hub
+      // interrupts the request, so a removal leaves no Runner gone with its jobs still running.
+      return yield* Effect.uninterruptible(
+        removeRunner(context.headers, runnerId).pipe(
+          Effect.tap(() => RunnerConnections.use((connections) => connections.drop(runnerId))),
+        ),
+      );
     }),
   },
   apiKeys: {

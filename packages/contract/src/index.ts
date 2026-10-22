@@ -103,8 +103,11 @@ export const jobSchema = z.object({
   activity: z.optional(jobActivitySchema),
   /** The job's result, once it has succeeded. */
   result: z.optional(z.unknown()),
-  /** Why the job stopped, while it is paused: `pausedByUser` when a caller paused it; else null. */
-  reason: z.nullable(z.enum(["pausedByUser"])),
+  /**
+   * Why the job stopped: while it is paused, `pausedByUser` when a caller paused it; once it has
+   * failed, `runnerRemoved` when its Runner was removed before it ended; else null.
+   */
+  reason: z.nullable(z.enum(["pausedByUser", "runnerRemoved"])),
   /**
    * A control the job's Runner has not yet acted on, beside the last `status` it confirmed: present
    * only while it waits. A pause or cancel waits for a job its Runner may be running, until
@@ -163,6 +166,9 @@ export const Unauthorized = error("UNAUTHORIZED");
 export const HubNotSetUp = error("SERVICE_UNAVAILABLE", { message: "The hub is not set up" });
 /** A call naming a Runner, an API key or a job the hub does not have. */
 export const NotFound = error("NOT_FOUND");
+
+/** A call the member's role does not allow, decided by the hub. */
+export const Forbidden = error("FORBIDDEN");
 /**
  * A control that cannot take effect on the job as it is, such as a resume of a job that succeeded;
  * its message says why.
@@ -174,8 +180,8 @@ export const IdempotencyKeyReused = error("UNPROCESSABLE_CONTENT", {
 });
 
 // Calls a member's role does not allow fail with `FORBIDDEN`, and invalid ones with `BAD_REQUEST`.
-// Neither is declared with a factory: the hub passes `FORBIDDEN` through from Better Auth, and raises
-// `BAD_REQUEST` itself in only two procedures. `FORBIDDEN` becomes a factory once the hub raises it.
+// Where Better Auth decides, the hub passes its `FORBIDDEN` through, declared without a factory;
+// removing a Runner raises `Forbidden` itself. The hub raises `BAD_REQUEST` in only two procedures.
 
 /**
  * Every call of the API, whose bodies are all JSON. oRPC's client reads only `application/json` as
@@ -205,12 +211,24 @@ export const contract = {
      * Removes a Runner, for a host that is retired or compromised: its own key stops working and its
      * connection is dropped at once. A compromised host also holds the shared key Runners register
      * with, so revoke that too and create a new one for future hosts; Runners already registered
-     * keep working with their own keys.
+     * keep working with their own keys. Nothing the host holds can be run, resumed or removed
+     * through the hub again, so the jobs the Runner held that had not ended end: `cancelled`
+     * where a cancel was waiting, otherwise `failed` with reason `runnerRemoved`. They may still
+     * run on the host unseen. The answer lists the jobs it ended, and every job whose files the
+     * host may still hold, which whoever looks after the host can remove.
      */
     delete: authenticated
-      .errors({ FORBIDDEN: {}, [NotFound.code]: NotFound })
+      .errors({ [Forbidden.code]: Forbidden, [NotFound.code]: NotFound })
       .meta(openapi({ method: "DELETE", path: "/runners/{id}" }))
-      .input(z.object({ id: z.string() })),
+      .input(z.object({ id: z.string() }))
+      .output(
+        z.object({
+          /** The jobs the removal ended. */
+          endedJobs: z.array(jobIdSchema),
+          /** The jobs whose files the Runner's host may still hold, those ended included. */
+          jobsWithFilesLeft: z.array(jobIdSchema),
+        }),
+      ),
   },
   apiKeys: {
     create: forOrganization

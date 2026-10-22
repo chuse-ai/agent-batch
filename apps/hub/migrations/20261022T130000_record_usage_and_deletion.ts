@@ -12,7 +12,10 @@ import { type Kysely, sql } from "kysely";
 
 export async function up(db: Kysely<unknown>): Promise<void> {
   const schema = db.schema.withSchema("agent_batch");
-  await schema.createType("hostDeletionOutcome").asEnum(["confirmed", "notRequired"]).execute();
+  await schema
+    .createType("hostDeletionOutcome")
+    .asEnum(["confirmed", "notRequired", "abandoned"])
+    .execute();
   await schema
     .createTable("usageRecord")
     .addColumn("jobId", "uuid", (col) => col.notNull())
@@ -20,6 +23,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("generation", "integer", (col) => col.notNull())
     .addColumn("organizationId", "text", (col) => col.notNull())
     .addColumn("status", sql`agent_batch."jobStatus"`, (col) => col.notNull())
+    // Null unless the end has a reason, as a job its Runner's removal ended has. Read by a deleted
+    // job's summary, and by a Batch's failure breaker, which leaves `runnerRemoved` out.
+    .addColumn("reason", sql`agent_batch."jobReason"`)
     // Null for a job that ended before a Runner was sent it or started it.
     .addColumn("runnerId", "text")
     .addColumn("submitterKeyId", "text", (col) => col.notNull())
@@ -73,8 +79,10 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     // When the job was deleted, by the hub's clock.
     .addColumn("requestedAt", "timestamptz", (col) => col.notNull())
     // The deleted job as it reads while the deletion waits, which can outlast its Usage records'
-    // months: its final status, its times, null for a start it never had, and its totals.
+    // months: its final status, its reason, null unless its end has one, its times, null for a
+    // start it never had, and its totals.
     .addColumn("status", sql`agent_batch."jobStatus"`, (col) => col.notNull())
+    .addColumn("reason", sql`agent_batch."jobReason"`)
     .addColumn("createdAt", "timestamptz", (col) => col.notNull())
     .addColumn("startedAt", "timestamptz")
     .addColumn("endedAt", "timestamptz", (col) => col.notNull())
@@ -92,6 +100,13 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .createIndex("jobDeletion_runnerId_idx")
     .on("jobDeletion")
     .column("runnerId")
+    .execute();
+  // A Runner's removal lists its deleted jobs whose files were abandoned.
+  await schema
+    .createIndex("usageRecord_abandoned_runnerId_idx")
+    .on("usageRecord")
+    .column("runnerId")
+    .where(sql.ref("hostDeletionOutcome"), "=", "abandoned")
     .execute();
   // What the job's Usage records already count: its totals at its last end, 0 before any. Its next
   // end counts what it used from them, and the monthly limit counts what an unfinished job has

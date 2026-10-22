@@ -15,13 +15,13 @@ import {
 } from "contract";
 import { Array, Effect, Order, Record, String, Struct } from "effect";
 import { compileSchema, isJsonError } from "json-schema-library";
-import type { Kysely, QueryCreator, Transaction } from "kysely";
+import { type Kysely, type QueryCreator, sql, type Transaction } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { validate as isUuid, v7 as uuidv7 } from "uuid";
 import * as z from "zod/mini";
 
 import { getOrganization, keyMetadataSchema } from "./auth/auth.ts";
-import { Db } from "./db/database.ts";
+import { Db, DB_SCHEMA } from "./db/database.ts";
 import {
   ApikeyId,
   type Database,
@@ -29,6 +29,7 @@ import {
   InputFileName,
   JobId,
   type JobProgressRow,
+  type JobReason,
   type JobDeletionRow,
   type JobRow,
   type JobStatus,
@@ -51,6 +52,7 @@ export const USAGE_COPIED_COLUMNS = [
   "generation",
   "organizationId",
   "status",
+  "reason",
   "runnerId",
   "submitterKeyId",
   "submitterKeyName",
@@ -260,11 +262,14 @@ export function getJob(jobId: JobId) {
 /** A control a caller asks of a job. */
 export type Control = "pause" | "resume" | "cancel";
 
-/** What a control is decided on: the job's status, where it runs, and the control waiting. */
+/**
+ * What a control is decided on: the job's status, where it runs, the control waiting, and whether
+ * its Runner still exists, since a removed Runner's host is beyond the hub's reach.
+ */
 type ControlledJob = Pick<
   JobRow,
   "status" | "runnerId" | "generation" | "placedAt" | "startedAt" | "pendingControl"
->;
+> & { runnerExists: boolean };
 
 /**
  * What a control does to a job as it is: nothing, a refusal saying why, or a change, with the
@@ -291,18 +296,20 @@ function decide(control: Control, job: ControlledJob, now: Date): Decision {
   // A resumed job that started carries on from its journal, which only its Runner holds, as a new
   // placement there (ADR 0026), sent when that Runner next syncs; one that never started has no
   // work to carry on.
-  const resumeOnItsRunner: Decision = {
-    kind: "changed",
-    set: {
-      status: "queued",
-      generation: job.generation + 1,
-      placedAt: null,
-      endedAt: null,
-      result: null,
-      reason: null,
-    },
-    ...toItsRunner,
-  };
+  const resumeOnItsRunner: Decision = !job.runnerExists
+    ? refused("The job's Runner was removed, so the work its host holds cannot be carried on")
+    : {
+        kind: "changed",
+        set: {
+          status: "queued",
+          generation: job.generation + 1,
+          placedAt: null,
+          endedAt: null,
+          result: null,
+          reason: null,
+        },
+        ...toItsRunner,
+      };
   switch (job.status) {
     case "queued":
     case "running": {
@@ -376,8 +383,27 @@ export function controlJob(jobId: JobId, control: Control) {
         const job = await trx
           .selectFrom("job")
           .innerJoin("jobProgress", "jobProgress.jobId", "job.id")
-          .select([...JOB_COLUMNS, ...PROGRESS_COLUMNS, "runnerId", "generation", "placedAt"])
-          .where("id", "=", jobId)
+          .select((eb) => [
+            ...JOB_COLUMNS.map((column) => `job.${column}` as const),
+            ...PROGRESS_COLUMNS,
+            "job.runnerId",
+            "job.generation",
+            "job.placedAt",
+            // The Runner's row is locked, so a removal of the Runner waits for this control and then
+            // ends the job a resume queued on it, or comes first, and the resume is refused.
+            eb
+              .exists(
+                eb
+                  .selectFrom("runner")
+                  .select("runner.id")
+                  .whereRef("runner.id", "=", "job.runnerId")
+                  .forKeyShare(),
+              )
+              // pg reads a boolean as one.
+              .$castTo<boolean>()
+              .as("runnerExists"),
+          ])
+          .where("job.id", "=", jobId)
           .forUpdate("job")
           .executeTakeFirst();
         if (!job) return undefined;
@@ -519,8 +545,26 @@ export function deleteJob(jobId: JobId) {
       db.transaction().execute(async (trx) => {
         const job = await trx
           .selectFrom("job")
-          .select(["status", "runnerId", "generation", "organizationId"])
-          .where("id", "=", jobId)
+          .select((eb) => [
+            "job.status",
+            "job.runnerId",
+            "job.generation",
+            // A removed Runner's host is beyond the hub's reach, so its files are abandoned at once.
+            // The Runner's row is locked while the deletion is recorded, so a removal of the
+            // Runner sees it and abandons it in turn.
+            eb
+              .exists(
+                eb
+                  .selectFrom("runner")
+                  .select("runner.id")
+                  .whereRef("runner.id", "=", "job.runnerId")
+                  .forKeyShare(),
+              )
+              // pg reads a boolean as one.
+              .$castTo<boolean>()
+              .as("runnerExists"),
+          ])
+          .where("job.id", "=", jobId)
           .forUpdate("job")
           .executeTakeFirst();
         if (!job) return { deleted: await readDeletedJob(trx, jobId) };
@@ -532,42 +576,74 @@ export function deleteJob(jobId: JobId) {
                 : "The job is not finished; cancel it first",
           };
         }
-        const usage = await trx
-          .updateTable("usageRecord")
-          .set(
-            job.runnerId === null
-              ? { deletedAt: now, hostDeletionOutcome: "notRequired", hostDeletionOutcomeAt: now }
-              : { deletedAt: now },
+        // One statement marks the Usage record deleted, records the deletion the Runner owes with a
+        // snapshot of the job from that record, and deletes the job's row.
+        const snapshot = await trx
+          .with("usage", (qb) =>
+            qb
+              .updateTable("usageRecord")
+              .set(
+                job.runnerId === null
+                  ? {
+                      deletedAt: now,
+                      hostDeletionOutcome: "notRequired",
+                      hostDeletionOutcomeAt: now,
+                    }
+                  : job.runnerExists
+                    ? { deletedAt: now }
+                    : {
+                        deletedAt: now,
+                        hostDeletionOutcome: "abandoned",
+                        hostDeletionOutcomeAt: now,
+                      },
+              )
+              .where("jobId", "=", jobId)
+              .where("generation", "=", job.generation)
+              .returning([
+                "jobId",
+                "status",
+                "reason",
+                "createdAt",
+                "startedAt",
+                "endedAt",
+                "jobTotalTokens as totalTokens",
+                "jobCostUsd as costUsd",
+                "organizationId",
+                "generation",
+              ]),
           )
-          .where("jobId", "=", jobId)
-          .where("generation", "=", job.generation)
-          .returning([
-            "jobId",
-            "status",
-            "createdAt",
-            "startedAt",
-            "endedAt",
-            "jobTotalTokens as totalTokens",
-            "jobCostUsd as costUsd",
-          ])
+          .with("deletion", (qb) =>
+            qb
+              .insertInto("jobDeletion")
+              .columns([
+                ...DELETED_JOB_COLUMNS,
+                "organizationId",
+                "generation",
+                "runnerId",
+                "requestedAt",
+              ])
+              .expression((eb) =>
+                eb
+                  .selectFrom("usage")
+                  .innerJoin("runner", (join) => join.on("runner.id", "=", job.runnerId))
+                  .select([
+                    ...DELETED_JOB_COLUMNS.map((column) => `usage.${column}` as const),
+                    "usage.organizationId",
+                    "usage.generation",
+                    "runner.id as runnerId",
+                    eb.val(now).as("requestedAt"),
+                  ]),
+              )
+              .returning("jobId"),
+          )
+          .with("gone", (qb) => qb.deleteFrom("job").where("id", "=", jobId).returning("id"))
+          .selectFrom("usage")
+          .select(DELETED_JOB_COLUMNS)
           // Every end writes the Usage record of the job's generation, so a finished job has one.
           .executeTakeFirstOrThrow();
-        if (job.runnerId !== null) {
-          await trx
-            .insertInto("jobDeletion")
-            .values({
-              ...usage,
-              organizationId: job.organizationId,
-              runnerId: job.runnerId,
-              generation: job.generation,
-              requestedAt: now,
-            })
-            .execute();
-        }
-        await trx.deleteFrom("job").where("id", "=", jobId).execute();
         return {
-          deleted: toDeletedJob(usage, now, job.runnerId === null ? null : now),
-          hint: job.runnerId ?? undefined,
+          deleted: toDeletedJob(snapshot, now, job.runnerExists ? now : null),
+          hint: job.runnerExists ? (job.runnerId ?? undefined) : undefined,
         };
       }),
     );
@@ -578,17 +654,138 @@ export function deleteJob(jobId: JobId) {
   });
 }
 
-/** What a deleted job reads from its latest Usage record. */
 /** What a deleted job reads from: the snapshot the deletion its Runner owes keeps. */
 const DELETED_JOB_COLUMNS = [
   "jobId",
   "status",
+  "reason",
   "createdAt",
   "startedAt",
   "endedAt",
   "totalTokens",
   "costUsd",
 ] as const;
+
+/**
+ * Deletes the Runner `runnerId`'s row and, in the same transaction, ends the work it held: each
+ * of its jobs that had not ended ends at once, `cancelled` where a cancel was waiting and otherwise
+ * `failed` with reason `runnerRemoved`, with the Usage record of that end, and each deletion of a
+ * deleted job's files it owed is abandoned, on the job's Usage record. A job its Runner reported
+ * ending before this keeps its end. Placement, reports and controls lock the Runner's row while
+ * they use it, so the delete waits for them, and what follows sees what they did; once it is gone,
+ * none of them uses the Runner again. Returns the Runner's key, the jobs it ended, and every job
+ * whose files the host may still hold, those whose delete abandoned them included; or nothing when
+ * there is no such Runner.
+ */
+export function deleteRunnerWithItsWork(runnerId: RunnerId) {
+  return Effect.gen(function* () {
+    const database = yield* Db;
+    const now = new Date();
+    return yield* database.query((db) =>
+      db.transaction().execute(async (trx) => {
+        const runner = await trx
+          .deleteFrom("runner")
+          .where("id", "=", runnerId)
+          .returning("keyId")
+          .executeTakeFirst();
+        if (!runner) return undefined;
+        const ended = await insertUsageRecords(
+          trx
+            .with("endedJob", (qb) =>
+              qb
+                .updateTable("job")
+                .from("jobProgress")
+                .whereRef("jobProgress.jobId", "=", "job.id")
+                .set((eb) => {
+                  const cancelWaiting = eb("pendingControl", "=", "cancel");
+                  // Cast, since no branch gives the enums' types.
+                  const status = (value: JobStatus) =>
+                    eb.cast<JobStatus>(eb.val(value), sql.id(DB_SCHEMA, "jobStatus"));
+                  return {
+                    status: eb
+                      .case()
+                      .when(cancelWaiting)
+                      .then(status("cancelled"))
+                      .else(status("failed"))
+                      .end(),
+                    reason: eb
+                      .case()
+                      .when(cancelWaiting)
+                      .then(eb.lit(null))
+                      .else(
+                        eb.cast<JobReason>(eb.val("runnerRemoved"), sql.id(DB_SCHEMA, "jobReason")),
+                      )
+                      .end(),
+                    endedAt: now,
+                    pendingControl: null,
+                    pendingControlRequestedAt: null,
+                    // The end's Usage record, below, counts the job's totals from here on.
+                    recordedTotalTokens: eb.ref("jobProgress.totalTokens"),
+                    recordedCostUsd: eb.ref("jobProgress.costUsd"),
+                  };
+                })
+                .where("job.runnerId", "=", runnerId)
+                .where("job.status", "not in", FINAL_STATUSES)
+                .returning([
+                  "job.id",
+                  ...USAGE_COPIED_COLUMNS.map((column) => `job.${column}` as const),
+                  "jobProgress.totalTokens as jobTotalTokens",
+                  "jobProgress.costUsd as jobCostUsd",
+                ]),
+            )
+            .with("ended", (qb) =>
+              qb
+                .selectFrom("endedJob as j")
+                // The job's row as the statement found it, before it ended: what its records counted.
+                .innerJoin("job as before", "before.id", "j.id")
+                .select([
+                  "j.id as jobId",
+                  ...USAGE_COPIED_COLUMNS.map((column) => `j.${column}` as const),
+                  "before.recordedTotalTokens",
+                  "before.recordedCostUsd",
+                  "j.jobTotalTokens",
+                  "j.jobCostUsd",
+                ]),
+            ),
+        )
+          .returning("jobId")
+          .execute();
+        await trx
+          .with("abandoned", (qb) =>
+            qb
+              .deleteFrom("jobDeletion")
+              .where("runnerId", "=", runnerId)
+              .returning(["jobId", "generation"]),
+          )
+          .updateTable("usageRecord as u")
+          .from("abandoned as a")
+          .set({ hostDeletionOutcome: "abandoned", hostDeletionOutcomeAt: now })
+          .whereRef("u.jobId", "=", "a.jobId")
+          .whereRef("u.generation", "=", "a.generation")
+          .execute();
+        // Its jobs not yet deleted, and its deleted jobs whose files were abandoned, here or by a
+        // delete that found the Runner gone.
+        const withFilesLeft = await trx
+          .selectFrom("job")
+          .select("id as jobId")
+          .where("runnerId", "=", runnerId)
+          .unionAll((eb) =>
+            eb
+              .selectFrom("usageRecord")
+              .select("jobId")
+              .where("runnerId", "=", runnerId)
+              .where("hostDeletionOutcome", "=", "abandoned"),
+          )
+          .execute();
+        return {
+          keyId: runner.keyId,
+          endedJobs: ended.map(({ jobId }) => jobId),
+          jobsWithFilesLeft: withFilesLeft.map(({ jobId }) => jobId),
+        };
+      }),
+    );
+  });
+}
 
 /**
  * A deleted job as it reads: without its content, its final status, times and totals,
@@ -606,8 +803,7 @@ function toDeletedJob(
     createdAt: snapshot.createdAt,
     startedAt: snapshot.startedAt,
     endedAt: snapshot.endedAt,
-    // A finished job has no reason yet: failures' reasons come with structured failure and limit reasons.
-    reason: null,
+    reason: snapshot.reason,
     usage: { totalTokens: snapshot.totalTokens, cost: { totalUsd: snapshot.costUsd } },
     deletedAt,
     ...(deletionRequestedAt !== null

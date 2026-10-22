@@ -39,12 +39,13 @@ export const GRANTABLE_KEY_PERMISSIONS = ac.newRole({
 });
 
 /**
- * Better Auth's default organization roles. Owners have every key permission already; admins are
- * granted key management, as in Better Auth's API key docs. Members have none, so keys stay with
- * admins and owners, as Buildkite's agent tokens do.
+ * Better Auth's default organization roles, with key management granted to owners and admins, as in
+ * Better Auth's API key docs. Its key routes let owners do everything anyway; granting it in the role
+ * makes a check of the role's permissions, as the hub makes before removing a Runner, decide as they
+ * do. Members have none, so keys stay with admins and owners, as Buildkite's agent tokens do.
  */
 const roles = {
-  owner: ownerAc,
+  owner: ac.newRole({ ...ownerAc.statements, apiKey: ["create", "read", "update", "delete"] }),
   admin: ac.newRole({ ...adminAc.statements, apiKey: ["create", "read", "update", "delete"] }),
   member: memberAc,
 };

@@ -1,10 +1,11 @@
-import { NotFound } from "contract";
+import { Forbidden, NotFound } from "contract";
 import { Effect, Predicate } from "effect";
 
 import { Auth, getOrganization } from "./auth/auth.ts";
 import { RUNNER_KEY_CONFIG } from "./auth/options.ts";
 import { Db } from "./db/database.ts";
 import { ApikeyId, RunnerId } from "./db/types.ts";
+import { deleteRunnerWithItsWork } from "./jobs.ts";
 
 // A Runner starts with a key shared by many Runners and registers once, receiving a key of its own
 // that it keeps and connects with, as GitHub Actions and Buildkite runners do. The hub records which
@@ -59,24 +60,40 @@ export function findRunnerByKey(keyId: ApikeyId) {
 }
 
 /**
- * Removes the Runner `runnerId` by deleting its own key through Better Auth, which checks that the
- * member signed in with `headers` may delete the Organization's keys; the database deletes the
- * Runner's row with its key. The caller drops the Runner's connection.
+ * Removes the Runner `runnerId` for the member signed in with `headers`, who may if they may delete
+ * the Organization's keys, as Better Auth decides for the Runner's own key. The Runner's row goes
+ * first, in one transaction with the work it held, so nothing leaves the Runner gone with its
+ * jobs unended. Its key goes after, through Better Auth: the hub refuses a key whose Runner's row is
+ * gone, so a key a failure leaves behind grants nothing, and retention's sweep removes it.
+ * Returns the jobs the removal concerns. The caller drops the Runner's connection. Every way the hub
+ * deletes a Runner's key comes here: Better Auth's own key routes are disabled for this reason.
  */
 export function removeRunner(headers: Headers, runnerId: RunnerId) {
   return Effect.gen(function* () {
-    const database = yield* Db;
     const auth = yield* Auth;
-    const runner = yield* database
-      .query((db) =>
-        db.selectFrom("runner").select("keyId").where("id", "=", runnerId).executeTakeFirst(),
-      )
-      .pipe(Effect.filterOrFail(Predicate.isNotUndefined, () => new NotFound()));
-    yield* auth.call((betterAuth) =>
-      betterAuth.api.deleteApiKey({
+    const { id: organizationId } = yield* getOrganization;
+    const { success: allowed } = yield* auth.call((betterAuth) =>
+      betterAuth.api.hasPermission({
         headers,
-        body: { keyId: runner.keyId, configId: RUNNER_KEY_CONFIG },
+        body: { organizationId, permissions: { apiKey: ["delete"] } },
       }),
     );
+    if (!allowed) return yield* Effect.fail(new Forbidden());
+    const removed = yield* deleteRunnerWithItsWork(runnerId).pipe(
+      Effect.filterOrFail(Predicate.isNotUndefined, () => new NotFound()),
+    );
+    yield* auth
+      .call((betterAuth) =>
+        betterAuth.api.deleteApiKey({
+          headers,
+          body: { keyId: removed.keyId, configId: RUNNER_KEY_CONFIG },
+        }),
+      )
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => console.error("Deleting a removed Runner's key failed", cause)),
+        ),
+      );
+    return { endedJobs: removed.endedJobs, jobsWithFilesLeft: removed.jobsWithFilesLeft };
   });
 }

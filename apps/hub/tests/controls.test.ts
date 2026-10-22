@@ -346,3 +346,47 @@ test("a job deleted while its Runner is away reads as deleted, and a repeated de
     .poll(() => client.jobs.get({ id }).catch((error: unknown) => error), { timeout: 20_000 })
     .toMatchObject({ code: "NOT_FOUND" });
 }, 40_000);
+
+// Last in the file: it removes the Runner the others share.
+test("removing a Runner ends the jobs it held, and leaves its finished jobs no work to carry on or files to remove", async () => {
+  const tedious = reply("Counting is tedious.");
+  system.model.setResponses([tedious, tedious, tedious]);
+  const client = await system.clientWithNewJobsKey();
+  const { id: finished } = await client.jobs.submit(SUBMISSION);
+  const { id: resumed } = await client.jobs.submit(SUBMISSION);
+  const { id: deleting } = await client.jobs.submit(SUBMISSION);
+  for (const id of [finished, resumed, deleting]) await untilStatus(client, id, "failed");
+  system.model.setResponses([untilAborted, untilAborted]);
+  const { id: running } = await client.jobs.submit(SUBMISSION);
+  const { id: cancelling } = await client.jobs.submit(SUBMISSION);
+  await untilStatus(client, running, "running");
+  await untilStatus(client, cancelling, "running");
+  await system.stopRunner();
+  await client.jobs.cancel({ id: cancelling });
+  // Queued for the Runner, which holds its journal, and the removal of the other's files waits for it.
+  await client.jobs.resume({ id: resumed });
+  await client.jobs.delete({ id: deleting });
+  const runnerId = (await system.owner().runners.list())[0]?.id ?? "";
+
+  const removed = await system.owner().runners.delete({ id: runnerId });
+
+  expect(removed.endedJobs.toSorted()).toEqual([running, cancelling, resumed].toSorted());
+  expect(removed.jobsWithFilesLeft).toEqual(
+    expect.arrayContaining([finished, running, cancelling, resumed, deleting]),
+  );
+  for (const id of [running, resumed]) {
+    expect(await client.jobs.get({ id })).toMatchObject({
+      status: "failed",
+      reason: "runnerRemoved",
+    });
+  }
+  expect(await client.jobs.get({ id: cancelling })).toMatchObject({ status: "cancelled" });
+  await expect(client.jobs.get({ id: deleting })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  await expect(client.jobs.resume({ id: finished })).rejects.toMatchObject({
+    code: "CONFLICT",
+    message: expect.stringContaining("Runner was removed"),
+  });
+  const deleted = await client.jobs.delete({ id: finished });
+  expect(deleted).not.toHaveProperty("pendingControl");
+  await expect(client.jobs.get({ id: finished })).rejects.toMatchObject({ code: "NOT_FOUND" });
+});
