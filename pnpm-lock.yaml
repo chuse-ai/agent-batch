@@ -252,8 +252,8 @@ catalogs:
       specifier: ^1.8.1
       version: 1.8.1
     json-schema-library:
-      specifier: ^11.6.6
-      version: 11.6.6
+      specifier: ^11.6.11
+      version: 11.6.11
     kanel:
       specifier: ^4.0.4
       version: 4.0.4
@@ -363,7 +363,7 @@ importers:
         version: 0.12.0(@standard-schema/spec@1.1.0)(hono@5.0.0-rc.1)(zod@4.6.7)
       json-schema-library:
         specifier: 'catalog:'
-        version: 11.6.6
+        version: 11.6.11
       kysely:
         specifier: 'catalog:'
         version: 0.29.6
@@ -472,7 +472,7 @@ importers:
         version: 5.0.0
       json-schema-library:
         specifier: 'catalog:'
-        version: 11.6.6
+        version: 11.6.11
       ws:
         specifier: 'catalog:'
         version: 8.22.0
@@ -3135,8 +3135,8 @@ packages:
   json-rpc-2.0@1.8.1:
     resolution: {integrity: sha512-BmN42JKn6FI36pcMMzHCXQhpKNEfbeqgSIcUYHKnifq0/4Ey6PDinovwUOgajT7NsgUtpWdDXaCWlpI4LHXN3g==}
 
-  json-schema-library@11.6.6:
-    resolution: {integrity: sha512-1d8PfqDS/aJUgvIUeeJSVzAy28t65MRo//LeoTR2Zlb/LMMNpTSbmPaHI4MZ1/m1CskOwqqJIOuRuc383i9KcA==}
+  json-schema-library@11.6.11:
+    resolution: {integrity: sha512-7nkdAWBMz+QAk9PAKd+HQOMZDQwGAHkjEE0rmEdMUENatJeJwfC3MCunREw3rw7BCerl0G9wQADmNp+0nVRetg==}
 
   json-schema-to-ts@3.1.1:
     resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
@@ -6824,7 +6824,7 @@ snapshots:
 
   json-rpc-2.0@1.8.1: {}
 
-  json-schema-library@11.6.6:
+  json-schema-library@11.6.11:
     dependencies:
       '@hyperjump/json-schema-formats': 1.0.8
       '@sagold/json-pointer': 7.2.1
@@ -7903,6 +7903,49 @@ snapshots:
     optionalDependencies:
       '@types/node': 24.19.2
       '@vitest/browser-preview': 5.0.3(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(vitest@5.0.3)(yaml@2.9.1)
+      '@vitest/ui': 5.0.3(vitest@5.0.3)
+    transitivePeerDependencies:
+      - '@arethetypeswrong/core'
+      - '@typescript/native-preview'
+      - '@vitejs/devtools'
+      - '@volar/typescript'
+      - '@vue/language-core'
+      - esbuild
+      - jiti
+      - less
+      - msw
+      - publint
+      - sass
+      - sass-embedded
+      - stylus
+      - sugarss
+      - terser
+      - tsx
+      - typescript
+      - unplugin-unused
+      - unrun
+      - vue-tsc
+      - yaml
+
+  vitest@5.0.3(@types/node@24.19.2)(@vitest/browser-preview@5.0.3)(@vitest/ui@5.0.3)(@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1):
+    dependencies:
+      '@types/chai': 5.2.3
+      '@vitest/mocker': 5.0.3(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)
+      chai: 6.3.0
+      es-module-lexer: 2.3.2
+      expect-type: 1.4.0
+      magic-string: 1.4.3
+      obug: 2.2.1
+      picomatch: 4.0.7
+      std-env: 4.3.0
+      tinybench: 6.2.2
+      tinyexec: 1.3.1
+      tinyglobby: 0.2.17
+      vite: '@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
+      why-is-node-running: 3.2.1
+    optionalDependencies:
+      '@types/node': 24.19.2
+      '@vitest/browser-preview': 5.0.3(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(vitest@5.0.3)(yaml@2.9.1)
       '@vitest/ui': 5.0.3(vitest@5.0.3)
     transitivePeerDependencies:
       - '@arethetypeswrong/core'

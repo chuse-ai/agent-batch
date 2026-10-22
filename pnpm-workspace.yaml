@@ -54,7 +54,7 @@ catalog:
   hono: 5.0.0-rc.1
   hono-problem-details: ^0.12.0
   json-rpc-2.0: ^1.8.1
-  json-schema-library: ^11.6.6
+  json-schema-library: ^11.6.11
   kanel: ^4.0.4
   kanel-kysely: ^4.0.0
   kysely: ^0.29.6
