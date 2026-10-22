@@ -5,7 +5,6 @@ import { HTTPException } from "hono/http-exception";
 import { createApp } from "./app.ts";
 import { databaseAndAuthLayer } from "./auth/auth.ts";
 import { RunnerConnections } from "./platform.ts";
-import { hintLiveRunners } from "./runners.ts";
 import { authSettings, hubSettings, readConfig, type HubSettings } from "./settings.ts";
 
 export { RunnerConnection } from "./runner-connection.ts";
@@ -31,9 +30,8 @@ function workersLayer(env: Env) {
     Layer.succeed(RunnerConnections, {
       drop: (runnerId) =>
         Effect.tryPromise(() => env.RUNNER_CONNECTION.getByName(runnerId).dropConnections()),
-      hintLive: hintLiveRunners((runnerId) =>
-        env.RUNNER_CONNECTION.getByName(runnerId).requestSync(),
-      ),
+      hint: (runnerId) =>
+        Effect.tryPromise(() => env.RUNNER_CONNECTION.getByName(runnerId).requestSync()),
     }),
   );
 }

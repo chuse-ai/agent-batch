@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 
 import canonicalize from "canonicalize";
 import {
+  FINAL_JOB_STATUSES,
   IdempotencyKeyReused,
   NotFound,
   type Job,
@@ -13,46 +14,74 @@ import {
 } from "contract";
 import { Array, Effect, Order, Record, String, Struct } from "effect";
 import { compileSchema, isJsonError } from "json-schema-library";
+import { sql } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { validate as isUuid, v7 as uuidv7 } from "uuid";
 import * as z from "zod/mini";
 
 import { getOrganization, keyMetadataSchema } from "./auth/auth.ts";
-import { Db } from "./db/database.ts";
+import { Db, DB_SCHEMA } from "./db/database.ts";
 import {
   ApikeyId,
   type EventId,
   InputFileName,
+  type JobControl,
   JobId,
   type JobProgressRow,
   type JobRow,
   type JobStatus,
   MemberId,
+  type RunnerId,
 } from "./db/types.ts";
 
-/** The statuses a job ends in; nothing about it changes after. */
-export const FINAL_STATUSES: JobStatus[] = ["succeeded", "failed", "cancelled"];
+/** The statuses a job ends in (`FINAL_JOB_STATUSES`), as the hub's database types them. */
+export const FINAL_STATUSES: JobStatus[] = [...FINAL_JOB_STATUSES];
+
+/** The statuses of a job a Runner may be running or about to run, which a control waits for. */
+export const QUEUED_OR_RUNNING: JobStatus[] = ["queued", "running"];
 
 /** About how many bytes of events, as JSON Lines, one page of a job's events holds. */
 const MAX_PAGE_BYTES = 1024 * 1024;
 
 /** What the hub reports of a job, from its own row and from its progress row. */
-const JOB_COLUMNS = ["id", "status", "createdAt", "startedAt", "endedAt", "result"] as const;
+const JOB_COLUMNS = [
+  "id",
+  "status",
+  "createdAt",
+  "startedAt",
+  "endedAt",
+  "result",
+  "pendingControl",
+  "pendingControlRequestedAt",
+] as const;
 const PROGRESS_COLUMNS = ["totalTokens", "costUsd", "activity"] as const;
 
 /**
  * A job as the API reports it: its result only once it has succeeded, its cost as the decimal text
- * Postgres gives for `numeric`, and its activity only while it runs. The report that starts a
- * placement carries its first activity, so a job running again never shows the last placement's.
+ * Postgres gives for `numeric`, its activity only while it runs, and a control only while it waits
+ * for the job's Runner. The report that starts a placement carries its first activity, so a job
+ * running again never shows the last placement's.
  */
 function toApiJob(
   job: Pick<JobRow, (typeof JOB_COLUMNS)[number]> &
     Pick<JobProgressRow, (typeof PROGRESS_COLUMNS)[number]>,
 ): Job {
-  const { result, totalTokens, costUsd, activity, ...rest } = job;
+  const {
+    result,
+    totalTokens,
+    costUsd,
+    activity,
+    pendingControl,
+    pendingControlRequestedAt,
+    ...rest
+  } = job;
   const summary = {
     usage: { totalTokens, cost: { totalUsd: costUsd } },
     ...(job.status === "running" && activity !== null ? { activity } : {}),
+    // The migration keeps the two set together.
+    ...(pendingControl !== null && pendingControlRequestedAt !== null
+      ? { pendingControl: { type: pendingControl, requestedAt: pendingControlRequestedAt } }
+      : {}),
   };
   return job.status === "succeeded" ? { ...rest, ...summary, result } : { ...rest, ...summary };
 }
@@ -209,6 +238,69 @@ export function getJob(jobId: JobId) {
 }
 
 /**
+ * Cancels the job `jobId` and returns it, or a 404 error, with the Runner to tell to sync now
+ * when the cancel waits for one. A job no Runner was sent ends at once, at the hub's clock. One its
+ * Runner may be running gets a pending cancel, which the Runner confirms by ending the job, unless
+ * the job ends first; repeating the cancel keeps the time it was first asked for. A job that has
+ * ended is left as it is. One statement decides, so a placement taking the job at the same moment
+ * either finds it cancelled or carries its pending cancel to the Runner.
+ */
+export function cancelJob(jobId: JobId) {
+  return Effect.gen(function* () {
+    if (!isUuid(jobId)) return yield* Effect.fail(new NotFound());
+    const database = yield* Db;
+    const now = new Date();
+    const cancelled = yield* database.query((db) =>
+      db
+        .updateTable("job")
+        .from("jobProgress")
+        .set((eb) => {
+          const unsent = eb.and([eb("job.status", "=", "queued"), eb("job.runnerId", "is", null)]);
+          return {
+            status: eb
+              .case()
+              .when(unsent)
+              .then(eb.val<JobStatus>("cancelled"))
+              .else(eb.ref("job.status"))
+              .end(),
+            endedAt: eb.case().when(unsent).then(eb.val(now)).else(eb.ref("job.endedAt")).end(),
+            pendingControl: eb
+              .case()
+              .when(unsent)
+              .then(eb.lit(null))
+              // Cast, since neither branch gives the enum's type.
+              .else(eb.cast<JobControl>(eb.val("cancel"), sql.id(DB_SCHEMA, "jobControl")))
+              .end(),
+            pendingControlRequestedAt: eb
+              .case()
+              .when(unsent)
+              .then(eb.lit(null))
+              .when("job.pendingControl", "=", "cancel")
+              .then(eb.ref("job.pendingControlRequestedAt"))
+              .else(eb.val(now))
+              .end(),
+          };
+        })
+        .whereRef("jobProgress.jobId", "=", "job.id")
+        .where("job.id", "=", jobId)
+        .where("job.status", "in", QUEUED_OR_RUNNING)
+        .returning([
+          ...JOB_COLUMNS.map((column) => `job.${column}` as const),
+          ...PROGRESS_COLUMNS,
+          "job.runnerId",
+        ])
+        .executeTakeFirst(),
+    );
+    if (!cancelled) return { job: yield* getJob(jobId) };
+    const { runnerId, ...job } = cancelled;
+    return {
+      job: toApiJob(job),
+      ...(job.pendingControl !== null && runnerId !== null ? { hint: runnerId } : {}),
+    } satisfies { job: Job; hint?: RunnerId };
+  });
+}
+
+/**
  * A page of the job `jobId`'s events after the position `after`, or a 404 error. Stored rows
  * each hold one report's events, so the page takes the rows after `after` in order, at most `limit`
  * of them and only as many as start within the byte budget, splits them into events, and drops
@@ -219,7 +311,7 @@ export function readJobEvents(jobId: JobId, after: EventId, limit: number) {
     if (!isUuid(jobId)) return yield* Effect.fail(new NotFound());
     const database = yield* Db;
     // One statement, so the job's status, its position and its events are read at one moment. Read
-    // apart, events stored between two reads would be missing from a page that says `done`.
+    // apart, events stored between two reads would be missing from a page whose status is final.
     const job = yield* database.query((db) =>
       db
         .selectFrom("job as j")
@@ -283,8 +375,7 @@ export function readJobEvents(jobId: JobId, after: EventId, limit: number) {
     }
     const hasMore = (events.at(-1)?.id ?? after) < job.position;
     // Events are stored only for a job that has not ended (`applyReports`), and its end only with
-    // its last event, so nothing follows a page that reaches the position of an ended job.
-    const done = !hasMore && FINAL_STATUSES.includes(job.status);
-    return { events, hasMore, done } satisfies JobEventsPage;
+    // its last event, so nothing follows a page without more whose status is final.
+    return { events, hasMore, status: job.status } satisfies JobEventsPage;
   });
 }

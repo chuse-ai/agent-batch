@@ -1,12 +1,15 @@
 import {
   createProtocolServer,
   hubNotifications,
-  JOB_ENDED,
+  JOB_CANCELLED,
+  JOB_FAILED,
   JOB_RECOVERED,
   JOB_STARTED,
+  JOB_SUCCEEDED,
   isoDate,
   jobEndingSchema,
   jobOpeningSchema,
+  jobSuccessSchema,
   notification,
   runnerMethods,
   type DesiredState,
@@ -25,7 +28,7 @@ import * as z from "zod/mini";
 
 import { Db, DB_SCHEMA } from "./db/database.ts";
 import { type Database, JobId, type JobStatus, type RunnerId } from "./db/types.ts";
-import { FINAL_STATUSES } from "./jobs.ts";
+import { FINAL_STATUSES, QUEUED_OR_RUNNING } from "./jobs.ts";
 import { recordRunnerHello, recordRunnerSeen, SYNC_INTERVAL_MS } from "./runners.ts";
 
 // The hub's side of the Runner protocol (ADR 0026), shared by both hubs: each answers a Runner's
@@ -77,7 +80,7 @@ interface ReportRow {
   result?: JsonValue;
 }
 
-function reportRow(report: JobReport): ReportRow {
+function reportRow(report: JobReport, now: Date): ReportRow {
   const { jobId, generation, position, events, usage, activity } = report;
   const row = {
     jobId: JobId(jobId),
@@ -90,34 +93,46 @@ function reportRow(report: JobReport): ReportRow {
     usage,
     activity,
   };
-  return { ...row, ...lifecycleOf(report) };
+  return { ...row, ...lifecycleOf(report, now) };
 }
+
+/** The kinds of the Runner's entries that end a job, with the status each ends it in. */
+const ENDS: ReadonlyMap<string, JobStatus> = new Map([
+  [JOB_SUCCEEDED, "succeeded"],
+  [JOB_FAILED, "failed"],
+  [JOB_CANCELLED, "cancelled"],
+]);
 
 /**
  * What a report says of its job's lifecycle, read from the Runner's own entries among its
- * events: a start or recovery makes the job running, and its end makes it succeeded or failed, with
- * its result. Each applies with the events that carry it, so a job ends only once every entry
- * before its end is stored, and a hub that loses the end loses those events too and is sent both
- * again. A job that failed without its journal recording an end says so in `failedAt`.
+ * events: a start or recovery makes the job running, and its end, one kind per outcome, makes
+ * it succeeded, with its result, failed or cancelled. Each applies with the events that carry it, so
+ * a job ends only once every entry before its end is stored, and a hub that loses the end loses those
+ * events too and is sent both again. A job that failed without its journal recording an end says so
+ * in `failedAt`. A job its Runner never started has no journal, so its cancel arrives with no events
+ * at the start of the journal; the hub ends the job itself, at `now`.
  */
 function lifecycleOf(
   report: JobReport,
+  now: Date,
 ): Pick<ReportRow, "status" | "startedAt" | "endedAt" | "result"> {
   const records = report.events.flatMap((event) => (event.type === "entry" ? [event.record] : []));
   const started = records.find((record) => record.kind === JOB_STARTED);
   const startedAt = started ? isoDate(z.parse(jobOpeningSchema, started.data).timestamp) : null;
-  const ended = records.find((record) => record.kind === JOB_ENDED);
-  if (ended) {
-    const ending = z.parse(jobEndingSchema, ended.data);
-    return {
-      status: ending.status,
-      startedAt,
-      endedAt: isoDate(ending.timestamp),
-      ...(ending.status === "succeeded" ? { result: ending.result } : {}),
-    };
+  const end = records.find((record) => ENDS.has(record.kind));
+  const status = end && ENDS.get(end.kind);
+  if (end && status) {
+    if (status === "succeeded") {
+      const { timestamp, result } = z.parse(jobSuccessSchema, end.data);
+      return { status, startedAt, endedAt: isoDate(timestamp), result };
+    }
+    return { status, startedAt, endedAt: isoDate(z.parse(jobEndingSchema, end.data).timestamp) };
   }
   if (report.failedAt) {
     return { status: "failed", startedAt, endedAt: report.failedAt };
+  }
+  if (report.intent === "cancel" && report.position === 0 && report.events.length === 0) {
+    return { status: "cancelled", startedAt: null, endedAt: now.toISOString() };
   }
   const opened = records.some(
     (record) => record.kind === JOB_STARTED || record.kind === JOB_RECOVERED,
@@ -149,14 +164,18 @@ function jsonRows<Row extends object>(eb: ExpressionBuilder<Database, never>, ro
  */
 function applyReports(runnerId: RunnerId, reports: JobReport[]) {
   const jobStatus = sql.id(DB_SCHEMA, "jobStatus");
-  const unfinished: JobStatus[] = ["queued", "running"];
   const now = new Date();
   return Db.use((database) =>
     database.query(async (db) => {
       await db
         .with("report", (qb) =>
           qb
-            .selectFrom((eb) => jsonRows(eb, reports.map(reportRow)))
+            .selectFrom((eb) =>
+              jsonRows(
+                eb,
+                reports.map((report) => reportRow(report, now)),
+              ),
+            )
             .select((eb) => {
               const field = (name: keyof ReportRow) => eb.ref("row.value", "->>").key(name);
               const json = <Name extends "usage" | "activity" | "result">(name: Name) =>
@@ -317,23 +336,36 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
         )
         .updateTable("job as j")
         .from("reported as r")
-        .set((eb) => ({
-          status: eb.ref("r.status"),
-          startedAt: eb.fn.coalesce("j.startedAt", "r.startedAt"),
-          endedAt: eb.ref("r.endedAt"),
-          result: eb.ref("r.result"),
-        }))
+        .set((eb) => {
+          // A control waits until the job ends, whether by it or first.
+          const ended = eb("r.status", "in", FINAL_STATUSES);
+          return {
+            status: eb.ref("r.status"),
+            startedAt: eb.fn.coalesce("j.startedAt", "r.startedAt"),
+            endedAt: eb.ref("r.endedAt"),
+            result: eb.ref("r.result"),
+            pendingControl: eb
+              .case()
+              .when(ended)
+              .then(eb.lit(null))
+              .else(eb.ref("j.pendingControl"))
+              .end(),
+            pendingControlRequestedAt: eb
+              .case()
+              .when(ended)
+              .then(eb.lit(null))
+              .else(eb.ref("j.pendingControlRequestedAt"))
+              .end(),
+          };
+        })
         .whereRef("j.id", "=", "r.jobId")
         // Each status moves the job forward once; anything else is stale or repeated. An end applies
         // to a queued job too: its start may come in the same report, or it failed before its
-        // journal opened.
+        // journal opened, or its Runner was told to cancel it before starting it.
         .where((eb) =>
           eb.or([
             eb.and([eb("r.status", "=", "running"), eb("j.status", "=", "queued")]),
-            eb.and([
-              eb("r.status", "in", ["succeeded", "failed"]),
-              eb("j.status", "in", unfinished),
-            ]),
+            eb.and([eb("r.status", "in", FINAL_STATUSES), eb("j.status", "in", QUEUED_OR_RUNNING)]),
           ]),
         )
         .execute();
@@ -343,7 +375,8 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
 
 /**
  * Places queued jobs on the Runner's free slots and reads its desired state: every unfinished job
- * placed on it, with the content of those the Runner does not hold. One statement, so the jobs just
+ * placed on it, under the intent its pending control gives, with the content of those the
+ * Runner does not hold and is to run. One statement, so the jobs just
  * placed come from the placement's `RETURNING`, as Postgres runs a `WITH` clause on the statement's
  * snapshot. Placement takes the oldest queued jobs without a Runner, locking each row it takes so
  * concurrent syncs take different jobs, as queue tables are read in Postgres (`FOR UPDATE SKIP
@@ -357,7 +390,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
  */
 function placeAndRead(runnerId: RunnerId, load: Load) {
   const now = new Date();
-  const unfinished: JobStatus[] = ["queued", "running"];
+  const unfinished = QUEUED_OR_RUNNING;
   return Db.use((database) =>
     database.query(async (db): Promise<DesiredState> => {
       const rows = await db
@@ -415,16 +448,18 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                 .forUpdate()
                 .skipLocked(),
             )
-            .returning(["id", "generation", "prompt", "resultContract"]),
+            .returning(["id", "generation", "prompt", "resultContract", "pendingControl"]),
         )
         .with("wanted", (qb) =>
           qb
             .selectFrom("job")
-            .select(["id", "generation", "prompt", "resultContract"])
+            .select(["id", "generation", "prompt", "resultContract", "pendingControl"])
             .where("runnerId", "=", runnerId)
             .where("status", "in", unfinished)
             .unionAll(
-              qb.selectFrom("placed").select(["id", "generation", "prompt", "resultContract"]),
+              qb
+                .selectFrom("placed")
+                .select(["id", "generation", "prompt", "resultContract", "pendingControl"]),
             ),
         )
         .selectFrom("wanted")
@@ -432,17 +467,21 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
         .select((eb) => [
           "id",
           "generation",
+          "pendingControl",
           "jobProgress.position",
           eb
             .case()
             .when(
-              eb.exists(
-                eb
-                  .selectFrom("held")
-                  .select("held.jobId")
-                  .whereRef("held.jobId", "=", "wanted.id")
-                  .whereRef("held.generation", "=", "wanted.generation"),
-              ),
+              eb.or([
+                eb("pendingControl", "is not", null),
+                eb.exists(
+                  eb
+                    .selectFrom("held")
+                    .select("held.jobId")
+                    .whereRef("held.jobId", "=", "wanted.id")
+                    .whereRef("held.generation", "=", "wanted.generation"),
+                ),
+              ]),
             )
             .then(eb.lit(null))
             .else(
@@ -476,7 +515,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
         placements: rows.map((row): Placement => ({
           jobId: row.id,
           generation: row.generation,
-          intent: "run",
+          intent: row.pendingControl ?? "run",
           ...(row.job === null ? {} : { job: row.job }),
           position: row.position,
         })),

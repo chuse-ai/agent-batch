@@ -32,11 +32,18 @@ import {
 import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
 import { Db } from "./db/database.ts";
 import { ApikeyId, EventId, JobId, RunnerId } from "./db/types.ts";
-import { getJob, resultContractProblems, readJobEvents, submitJob, submitterOf } from "./jobs.ts";
+import {
+  cancelJob,
+  getJob,
+  resultContractProblems,
+  readJobEvents,
+  submitJob,
+  submitterOf,
+} from "./jobs.ts";
 import { RunnerConnections, type HubServices } from "./platform.ts";
 import { toProblemDetails } from "./problem-details.ts";
 import { findRunnerByKey, registerRunner, removeRunner } from "./runner-registration.ts";
-import { listRunners } from "./runners.ts";
+import { hintLiveRunners, listRunners } from "./runners.ts";
 
 interface ApiContext extends WithEffectContext<HubServices> {
   headers: Headers;
@@ -125,7 +132,7 @@ const router = os.router({
       }
       const job = yield* submitJob(input, submitterOf(key));
       // Runners learn of the job at their next sync anyway; the hint only makes it sooner.
-      yield* RunnerConnections.use((connections) => connections.hintLive).pipe(
+      yield* hintLiveRunners.pipe(
         Effect.catchCause((cause) =>
           Effect.sync(() => console.error("Hinting Runners to sync failed", cause)),
         ),
@@ -136,6 +143,20 @@ const router = os.router({
       yield* requireKeyOrMember(context.headers, { job: ["read"] });
       // The ID enters the hub here.
       return yield* getJob(JobId(input.id));
+    }),
+    cancel: os.jobs.cancel.effect(function* ({ input, context }) {
+      yield* requireKeyOrMember(context.headers, { job: ["cancel"] });
+      // The ID enters the hub here.
+      const { job, hint } = yield* cancelJob(JobId(input.id));
+      // The Runner learns of the cancel at its next sync anyway; the hint only makes it sooner.
+      if (hint !== undefined) {
+        yield* RunnerConnections.use((connections) => connections.hint(hint)).pipe(
+          Effect.catchCause((cause) =>
+            Effect.sync(() => console.error("Hinting a Runner to sync failed", cause)),
+          ),
+        );
+      }
+      return job;
     }),
     events: os.jobs.events.effect(function* ({ input, context }) {
       yield* requireKeyOrMember(context.headers, { job: ["read"] });

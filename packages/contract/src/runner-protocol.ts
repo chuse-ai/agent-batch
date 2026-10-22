@@ -45,7 +45,7 @@ export function selectProtocolVersion(offered: string | null): string | undefine
 /**
  * What the hub wants done with a placement, which only ever moves forward: run, then pause or cancel,
  * then purge. Resuming a paused job is a new placement. All four are declared now, though only `run`
- * is sent: a new value in a closed set would bump the protocol version.
+ * and `cancel` are sent: a new value in a closed set would bump the protocol version.
  */
 export const intentSchema = z.enum(["run", "pause", "cancel", "purge"]);
 export type Intent = z.infer<typeof intentSchema>;
@@ -74,7 +74,7 @@ export type JobContent = z.infer<typeof jobContentSchema>;
 
 /**
  * What the Runner is to do with one job. The job's content comes only with a placement the Runner
- * said it does not hold, so a sync repeats placements but not jobs.
+ * said it does not hold and is to run, so a sync repeats placements but not jobs.
  */
 const placementSchema = z.object({
   ...placementRefSchema.shape,
@@ -101,13 +101,15 @@ const loadSchema = z.object({
 export type Load = z.infer<typeof loadSchema>;
 
 /**
- * The kinds of the entries the Runner adds to a job's journal about the job: its start, each
- * recovery after a Runner restart, and its end. The hub reads the job's lifecycle from them, as
- * they reach it with the job's other events.
+ * The kinds of the entries the Runner adds to a job's journal about the job, each naming what
+ * happened to it: its start, each recovery after a Runner restart, and its end, one kind per outcome.
+ * The hub reads the job's lifecycle from them, as they reach it with the job's other events.
  */
 export const JOB_STARTED = "agent-batch.job.started";
 export const JOB_RECOVERED = "agent-batch.job.recovered";
-export const JOB_ENDED = "agent-batch.job.ended";
+export const JOB_SUCCEEDED = "agent-batch.job.succeeded";
+export const JOB_FAILED = "agent-batch.job.failed";
+export const JOB_CANCELLED = "agent-batch.job.cancelled";
 
 /**
  * What a start or a recovery records: when, by the Runner's clock in Unix milliseconds as pi-ai's
@@ -120,12 +122,12 @@ export const jobOpeningSchema = z.object({
 });
 export type JobOpening = z.infer<typeof jobOpeningSchema>;
 
-/** What a job's end records: when, how it ended, and for a success its result. */
-export const jobEndingSchema = z.discriminatedUnion("status", [
-  z.object({ timestamp: z.number(), status: z.literal("succeeded"), result: z.json() }),
-  // Why a job failed comes with structured failure reasons.
-  z.object({ timestamp: z.number(), status: z.literal("failed") }),
-]);
+/** What a success records: when, and the job's result. */
+export const jobSuccessSchema = z.object({ timestamp: z.number(), result: z.json() });
+export type JobSuccess = z.infer<typeof jobSuccessSchema>;
+
+/** What a failure or a cancel records: when. Why a job failed comes with structured failure and limit reasons. */
+export const jobEndingSchema = z.object({ timestamp: z.number() });
 export type JobEnding = z.infer<typeof jobEndingSchema>;
 
 /** A time the Runner keeps in Unix milliseconds, as pi does, as an ISO date like the job's others. */
@@ -215,9 +217,10 @@ export type JobActivity = z.infer<typeof jobActivitySchema>;
 
 /**
  * One job's report: the placement, the intent the Runner applied, the journal's records after the
- * hub's position, and the job's usage and activity. The report is read fresh from the journal after
- * the position the hub last gave, so a report repeated after a lost answer starts from the same
- * position. The job's start and end are entries among its events, so they reach the hub with them.
+ * hub's position, and the job's usage and activity. A placement the Runner never started has no
+ * journal, so its cancel writes nothing: it reports `cancel` with no events, and the hub ends the
+ * job itself. The report is read fresh from the journal after the position the hub last gave, so a
+ * report repeated after a lost answer starts from the same position. The job's start and end are entries among its events, so they reach the hub with them.
  *
  * The hub applies the usage when the Runner and the placement's generation match and neither total
  * is smaller than the one it stored. It applies the events, its position, the activity and a

@@ -90,7 +90,7 @@ test(
       expect(kinds.filter((kind) => kind.startsWith("agent-batch."))).toEqual([
         "agent-batch.job.started",
         "agent-batch.job.recovered",
-        "agent-batch.job.ended",
+        "agent-batch.job.succeeded",
       ]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices), Effect.runPromise),
   60_000,

@@ -16,8 +16,11 @@ export class RunnerConnections extends Context.Service<
   {
     /** Closes the Runner's sockets, for a Runner the hub has removed. */
     readonly drop: (runnerId: RunnerId) => Effect.Effect<void, Cause.UnknownError>;
-    /** Tells every Runner the hub has heard from lately to sync now, such as for a new job. */
-    readonly hintLive: Effect.Effect<void, Cause.UnknownError, Db>;
+    /**
+     * Tells the Runner to sync now, such as for a new job or a control on one of its jobs. A Runner
+     * that is not connected misses nothing: its next sync finds the same.
+     */
+    readonly hint: (runnerId: RunnerId) => Effect.Effect<void, Cause.UnknownError>;
   }
 >()("hub/RunnerConnections") {}
 

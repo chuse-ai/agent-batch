@@ -13,6 +13,7 @@ export type { default as Database } from "./generated/Database.ts";
 export type { Job as JobRow } from "./generated/agent_batch/Job.ts";
 export type { JobProgress as JobProgressRow } from "./generated/agent_batch/JobProgress.ts";
 export type { default as JobStatus } from "./generated/agent_batch/JobStatus.ts";
+export type { default as JobControl } from "./generated/agent_batch/JobControl.ts";
 
 // Each ID type with its constructor under the same name, as Effect brands are declared. A string
 // becomes an ID through the constructor, once, where the ID enters the hub (ADR 0020): a new UUID,

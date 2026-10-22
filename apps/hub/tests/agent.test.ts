@@ -153,6 +153,10 @@ test("a runner stopped during a job's model call stops at once, leaving the job 
   const client = await system.clientWithNewJobsKey();
   const { id } = await client.jobs.submit(SUBMISSION);
   await expect.poll(() => calling, { timeout: 10_000 }).toBe(true);
+  // The model call can start before the hub has stored the Runner's report that the job started.
+  await expect
+    .poll(async () => (await client.jobs.get({ id })).status, { timeout: 10_000 })
+    .toBe("running");
 
   const before = Date.now();
   await system.stopRunner();

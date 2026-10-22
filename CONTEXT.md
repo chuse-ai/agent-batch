@@ -32,6 +32,9 @@ _Avoid_: tag, metadata, category
 Where a job is in its life: queued, running, paused, succeeded, failed or cancelled. Paused jobs can be resumed; succeeded, failed and cancelled are final. A running job whose Runner restarts stays running: it is recovered from its journal and carries on where it left off; it is not resumed. Why a job stopped is its reason, not a further status. Status is the one word for where a piece of work is in its life, so a job and each of its tool calls have one.
 _Avoid_: state, phase
 
+**Control**:
+What a caller asks of a job besides submitting and reading it: to pause, resume, cancel or delete it. One its Runner must carry out waits for it, shown beside the job's status until the Runner confirms it or the job ends first.
+
 **Journal**:
 A job's durable record on its Runner, one file per job: the agent's entries and conversation records, which are copied to the hub as the job's events, and pi's own task records, documents and submissions. The job is recovered from it after a restart, and it is deleted with the job's files.
 _Avoid_: log, checkpoint, session
@@ -82,7 +85,7 @@ _Avoid_: live view, status
 
 **Hub**:
 The single central service that every caller and runner connects to; it accepts jobs, keeps the record of every job and runner, decides where each job runs, and relays each job's events.
-_Avoid_: control, control plane, server, coordinator
+_Avoid_: control plane, server, coordinator
 
 **Runner**:
 A process that runs many jobs' agents at once; there can be many, on hosts and in the cloud. A restart is a process, such as a Runner or the hub, stopping and starting again; a job is never restarted, reset, replayed or retried.

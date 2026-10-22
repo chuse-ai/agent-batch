@@ -3,6 +3,7 @@ import { Effect } from "effect";
 
 import { Db } from "./db/database.ts";
 import type { RunnerId } from "./db/types.ts";
+import { RunnerConnections } from "./platform.ts";
 
 // Runners are recorded only by when the hub last heard from them. These writes may arrive late or out
 // of order, so each one moves `lastSeenAt` forward or does nothing, and their order never matters.
@@ -55,17 +56,18 @@ export const SYNC_INTERVAL_MS = 180_000;
 export const GONE_AFTER_MS = 2 * SYNC_INTERVAL_MS + 60_000;
 
 /**
- * Tells every Runner heard from within the last `GONE_AFTER_MS` to sync now, through `requestSync`,
- * which reaches the Runner's connection on this platform. A Runner that is not connected after all
- * misses nothing: its next sync finds the same jobs.
+ * Tells every Runner heard from within the last `GONE_AFTER_MS` to sync now, as for a new job. A
+ * Runner that is not connected after all misses nothing: its next sync finds the same jobs.
  */
-export function hintLiveRunners(requestSync: (runnerId: RunnerId) => Promise<void>) {
-  return Effect.gen(function* () {
-    const database = yield* Db;
-    const since = new Date(Date.now() - GONE_AFTER_MS);
-    const runners = yield* database.query((db) =>
-      db.selectFrom("runner").select("id").where("lastSeenAt", ">", since).execute(),
-    );
-    yield* Effect.tryPromise(() => Promise.all(runners.map((runner) => requestSync(runner.id))));
-  }).pipe(Effect.asVoid);
-}
+export const hintLiveRunners = Effect.gen(function* () {
+  const database = yield* Db;
+  const connections = yield* RunnerConnections;
+  const since = new Date(Date.now() - GONE_AFTER_MS);
+  const runners = yield* database.query((db) =>
+    db.selectFrom("runner").select("id").where("lastSeenAt", ">", since).execute(),
+  );
+  yield* Effect.forEach(runners, (runner) => connections.hint(runner.id), {
+    concurrency: "unbounded",
+    discard: true,
+  });
+});

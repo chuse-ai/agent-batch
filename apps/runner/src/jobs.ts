@@ -2,6 +2,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Harness } from "@earendil-works/pi-durable";
 import type {
   DesiredState,
+  Intent,
   JobActivity,
   JobContent,
   JobReport,
@@ -12,22 +13,25 @@ import type {
 import { Array, Effect, Equal, Fiber, Latch, Option, Order, type Scope } from "effect";
 import ensureError from "ensure-error";
 
-import { type AgentSettings, journalExists, openJob } from "./agent.ts";
+import { type AgentSettings, journalExists, openJob, recordCancel } from "./agent.ts";
 import { readActivity, readEvents } from "./journal.ts";
 
 // The Runner's jobs: each placement the hub gives it runs as one supervised fiber (ADR 0022), and
 // its journal's new events, its usage and what it is doing are reported to the hub. The hub's
 // answer to every sync and report is the desired state, which this brings the jobs to: placements
-// it does not hold start, and held placements the hub no longer lists are stopped and forgotten
-// (ADR 0026).
+// it does not hold start, held placements the hub cancels are stopped and their cancel recorded,
+// and held placements the hub no longer lists are stopped and forgotten (ADR 0026).
 
 /**
  * One placement the Runner holds: its job's journal and the hub's position in it, a failure its
- * journal could not record, and the latch the hub's dropping it opens, which aborts the job's agent
- * and then closes the journal.
+ * journal could not record, the intent it has applied, and the latches the hub's cancelling and
+ * dropping it open. Either interrupts the job's run, which leaves its work pending in the journal; a
+ * cancel then settles that work and records the job's end.
  */
 interface HeldJob {
   placement: PlacementRef;
+  /** What the Runner has done with the placement: run it, or stopped it and recorded its cancel. */
+  intent: Intent;
   /** The hub's position in the job's journal, as its last answer gave it. */
   position: number;
   /** The job's journal, from when it opens until the hub drops the placement. */
@@ -48,6 +52,7 @@ interface HeldJob {
   activityReported?: JobActivity;
   usageReported?: JobUsage;
   ended: boolean;
+  cancelled: Latch.Latch;
   dropped: Latch.Latch;
 }
 
@@ -123,13 +128,17 @@ export class JobRunner {
           more = true;
           break;
         }
-        const report = { ...job.placement, intent: "run" as const, position: job.position };
+        const report = { ...job.placement, intent: job.intent, position: job.position };
         // Taken before the read: a failure is set after the job's last entry, so the read holds it.
         const { failedAt, journal } = job;
         if (!journal) {
           // A journal that did not exist before holds nothing of the job until its start is
-          // written, which happens only once it has opened.
+          // written, which happens only once it has opened. A cancel of a job without a journal
+          // records nothing, so the report alone says the job never started.
           if (failedAt && job.journalKnownAbsent) jobs.push({ ...report, events: [], failedAt });
+          else if (job.intent === "cancel" && job.journalKnownAbsent) {
+            jobs.push({ ...report, events: [] });
+          }
           continue;
         }
         const read = yield* readOrNone("events", () => readEvents(journal, job.position, budget));
@@ -147,10 +156,13 @@ export class JobRunner {
         const usage = Option.getOrUndefined(
           yield* readOrNone("usage", () => journal.usage(BACKGROUND_CONTEXT)),
         );
+        // A cancel is reported until the hub drops the placement, as a failure is, so a journal
+        // that holds no end, as one that never started its job, still says the job stopped.
         const due =
           all ||
           events.length > 0 ||
           failedAt !== undefined ||
+          job.intent === "cancel" ||
           (activity !== undefined && !Equal.equals(activity, job.activityReported)) ||
           (usage !== undefined && !Equal.equals(usage, job.usageReported));
         if (!due) continue;
@@ -170,19 +182,28 @@ export class JobRunner {
 
   /**
    * Brings the jobs to `desired`, the hub's answer to a sync or a report: takes the hub's
-   * positions, stops held placements no longer listed, and starts those not held while slots are
-   * free.
+   * positions, stops held placements no longer listed, cancels those the hub cancels, and starts
+   * those not held while slots are free. A cancel of a placement the Runner does not hold, as after
+   * it restarted, is recorded without running the job, and takes no slot.
    */
   reconcile(desired: DesiredState): void {
     for (const placement of desired.placements) {
       const job = this.#held.get(keyOf(placement));
-      if (job) job.position = placement.position;
+      if (!job) continue;
+      job.position = placement.position;
+      // A job that has ended keeps its end, which reaches the hub with its events.
+      if (placement.intent === "cancel" && !job.ended) job.cancelled.openUnsafe();
     }
     const listed = new Set(desired.placements.map(keyOf));
     for (const [key, job] of this.#held) {
       if (listed.has(key)) continue;
       this.#held.delete(key);
       job.dropped.openUnsafe();
+    }
+    for (const placement of desired.placements) {
+      if (placement.intent === "cancel" && !this.#held.has(keyOf(placement))) {
+        this.#start(placement, undefined);
+      }
     }
     // A Runner that starts with fewer slots than the jobs placed on it, as when its allowance was
     // lowered, recovers only as many as it has slots for, those the hub has events of first, since
@@ -207,15 +228,22 @@ export class JobRunner {
     return Array.countBy(this.#held.values(), (job) => !job.ended);
   }
 
-  #start(placement: Placement, job: JobContent): void {
+  /**
+   * Holds `placement` and runs its job, `job`, until the hub cancels or drops the placement. A
+   * placement the hub has already cancelled, given without its job, only has its cancel recorded.
+   */
+  #start(placement: Placement, job: JobContent | undefined): void {
     const ref = { jobId: placement.jobId, generation: placement.generation };
     const key = keyOf(ref);
     const held: HeldJob = {
       placement: ref,
+      intent: "run",
       position: placement.position,
       journalKnownAbsent: false,
       seen: new Map(),
-      ended: false,
+      // A placement given without its job is only to have its cancel recorded: it takes no slot.
+      ended: job === undefined,
+      cancelled: Latch.makeUnsafe(job === undefined),
       dropped: Latch.makeUnsafe(false),
     };
     // Held before the fiber starts: its first report may come before the fork returns.
@@ -224,64 +252,119 @@ export class JobRunner {
       // A placement stopped meanwhile reports nothing: the hub no longer wants it.
       if (this.#held.get(key) === held) this.#onChange();
     };
+    const forget = () => {
+      if (this.#held.get(key) === held) this.#held.delete(key);
+    };
     const openedBefore = this.#opened.has(ref.jobId);
-    this.#opened.add(ref.jobId);
+    if (job) this.#opened.add(ref.jobId);
     const settings = this.#agent;
     const runs = this.#runs;
     const previous = runs.get(ref.jobId);
-    const run = Effect.gen(function* () {
-      // The hub may place a job here again while its dropped run is still closing the journal.
-      if (previous) yield* Fiber.await(previous);
-      // Looked up once the earlier run is done, since it may have created the journal. A journal
-      // that cannot be looked up may be there.
-      held.journalKnownAbsent =
-        !openedBefore &&
-        !(yield* journalExists(settings, ref.jobId).pipe(
-          Effect.tapError((error) =>
-            Effect.logError("A job's journal could not be looked up", error),
-          ),
-          Effect.orElseSucceed(() => true),
-        ));
-      const agent = {
-        ...settings,
-        dropped: held.dropped.await,
-        generation: ref.generation,
-        openedBefore,
-        // Held as soon as it opens, so whatever fails after that is read from the journal.
-        journalOpened: (journal: Harness) => {
-          held.journal = journal;
-        },
-      };
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const agentRun = yield* openJob(ref.jobId, job, agent);
-          changed();
-          yield* agentRun;
-        }).pipe(
-          // A fault in the Runner itself, such as its storage failing, fails the job rather than
-          // leaving it running for as long as the Runner stays connected, though its journal
-          // records no end. Telling such a failure apart is planned with structured failure reasons. A stopping Runner interrupts
-          // the job instead, which reports nothing.
-          Effect.catchDefect((defect) =>
-            Effect.logError("A job's agent failed", ensureError(defect)).pipe(
-              Effect.andThen(
-                Effect.sync(() => {
-                  held.failedAt = new Date().toISOString();
-                }),
+
+    /** Runs the job, keeping its journal open after it ends, until interrupted. */
+    const working = (content: JobContent) =>
+      Effect.gen(function* () {
+        // Looked up once the earlier run is done, since it may have created the journal. A journal
+        // that cannot be looked up may be there.
+        held.journalKnownAbsent =
+          !openedBefore &&
+          !(yield* journalExists(settings, ref.jobId).pipe(
+            Effect.tapError((error) =>
+              Effect.logError("A job's journal could not be looked up", error),
+            ),
+            Effect.orElseSucceed(() => true),
+          ));
+        const agent = {
+          ...settings,
+          generation: ref.generation,
+          openedBefore,
+          // Held as soon as it opens, so whatever fails after that is read from the journal.
+          journalOpened: (journal: Harness) => {
+            held.journal = journal;
+          },
+        };
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentRun = yield* openJob(ref.jobId, content, agent);
+            changed();
+            yield* agentRun;
+          }).pipe(
+            // A fault in the Runner itself, such as its storage failing, fails the job rather than
+            // leaving it running for as long as the Runner stays connected, though its journal
+            // records no end. Telling such a failure apart is planned with structured failure reasons. A stopping Runner interrupts
+            // the job instead, which reports nothing.
+            Effect.catchDefect((defect) =>
+              Effect.logError("A job's agent failed", ensureError(defect)).pipe(
+                Effect.andThen(
+                  Effect.sync(() => {
+                    held.failedAt = new Date().toISOString();
+                  }),
+                ),
               ),
             ),
+            Effect.tap(() =>
+              Effect.sync(() => {
+                held.ended = true;
+                changed();
+              }),
+            ),
+            // The journal stays open until the hub drops the placement, which it does once it has
+            // stored the job's end with every entry before it.
+            Effect.andThen(Effect.never),
           ),
-          Effect.tap(() =>
+        );
+      });
+
+    /**
+     * Records the job's cancel once its run has stopped, and keeps the journal open for its reports
+     * until the hub drops the placement, which it does once it has stored the job's end.
+     */
+    const recording = Effect.scoped(
+      Effect.gen(function* () {
+        const journal = yield* recordCancel(ref.jobId, ref.generation, settings);
+        held.journal = journal;
+        held.journalKnownAbsent = journal === undefined;
+        held.intent = "cancel";
+        held.ended = true;
+        changed();
+        yield* held.dropped.await;
+      }),
+    ).pipe(
+      // A cancel that cannot be recorded, as when the journal cannot be looked up or opened, is
+      // tried again: the placement is forgotten, so the hub's next answer, which lists the cancel
+      // again, records it anew. Its run has stopped, so it takes no slot meanwhile.
+      Effect.catchCause((cause) =>
+        Effect.logError("A job's cancel could not be recorded", cause).pipe(
+          Effect.andThen(
             Effect.sync(() => {
               held.ended = true;
-              changed();
+              forget();
             }),
           ),
-          // The journal stays open until the hub drops the placement, which it does once it has
-          // stored the job's end with every entry before it.
-          Effect.andThen(held.dropped.await),
+        ),
+      ),
+    );
+
+    const run = Effect.gen(function* () {
+      // The hub may place a job here again while its earlier run is still closing the journal.
+      if (previous) yield* Fiber.await(previous);
+      // A cancel or a drop interrupts the job's run at once, which leaves its work pending in the
+      // journal; recording a cancel then settles it.
+      const stopped = yield* Effect.raceFirst(
+        job ? working(job) : Effect.never,
+        Effect.raceFirst(
+          held.dropped.await.pipe(Effect.as("dropped" as const)),
+          held.cancelled.await.pipe(Effect.as("cancelled" as const)),
+        ).pipe(
+          // Let go of the journal before the run's scope closes it, so no report reads it closed.
+          Effect.tap(() =>
+            Effect.sync(() => {
+              held.journal = undefined;
+            }),
+          ),
         ),
       );
+      if (stopped === "cancelled") yield* recording;
     }).pipe(
       Effect.ensuring(
         Effect.sync(() => {

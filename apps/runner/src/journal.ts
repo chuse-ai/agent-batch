@@ -3,21 +3,27 @@ import {
   type ConversationId,
   type ConversationRecord,
   defineEntry,
+  type Entry,
   type EntryId,
   type Harness,
   LiveDoc,
   type Session,
+  type Tx,
+  type TypedEntryDraft,
 } from "@earendil-works/pi-durable";
 import {
   type ConversationActivity,
   isoDate,
-  JOB_ENDED,
+  JOB_CANCELLED,
+  JOB_FAILED,
   JOB_RECOVERED,
   JOB_STARTED,
+  JOB_SUCCEEDED,
   type JobActivity,
   type JobEnding,
   type JobEvent,
   type JobOpening,
+  type JobSuccess,
 } from "contract";
 import { Array, Order } from "effect";
 
@@ -25,8 +31,8 @@ import runnerPackage from "../package.json" with { type: "json" };
 
 // What the Runner records in a job's journal, and how it reads the journal's events for the hub.
 // The journal's entries and conversation records become the job's events; our own entries
-// record the job's start, its recovery after a Runner restart, and its end with its result, and the
-// hub reads the job's lifecycle from them. Their kinds and data are the contract's: kinds name their
+// record the job's start, its recovery after a Runner restart, and its end, one kind per outcome,
+// and the hub reads the job's lifecycle from them. Their kinds and data are the contract's: kinds name their
 // subject in the past tense under `agent-batch.`, and each carries its time as `timestamp`, Unix
 // milliseconds by the Runner's clock, as pi-ai's messages do.
 
@@ -42,11 +48,49 @@ export const JobStarted = defineEntry<JobOpening>(JOB_STARTED);
 /** Written each time a restarted Runner reopens the job and it carries on from its journal. */
 export const JobRecovered = defineEntry<JobOpening>(JOB_RECOVERED);
 
-/** Written once, when the job's agent has ended, with its result when it succeeded. */
-export const JobEnded = defineEntry<JobEnding>(JOB_ENDED);
+/** Written once per placement, as its end, when the job's agent submitted an accepted result. */
+export const JobSucceeded = defineEntry<JobSuccess>(JOB_SUCCEEDED);
 
-/** The request ID that writes `JobEnded` once, and by which a reopened journal finds it. */
-export const JOB_ENDED_REQUEST = JobEnded.kind;
+/** Written once per placement, as its end, when the job's agent stopped without a result. */
+export const JobFailed = defineEntry<JobEnding>(JOB_FAILED);
+
+/** Written once per placement, as its end, when the hub cancelled the job and the Runner stopped it. */
+export const JobCancelled = defineEntry<JobEnding>(JOB_CANCELLED);
+
+/**
+ * The request ID a placement writes its job's end with, whatever the outcome, and by which a
+ * reopened journal finds it. pi keeps one submission per request ID (`admitSubmission`), so the end
+ * is written once per placement, also when a restarted Runner finds the job ended; a job placed
+ * again, as after a resume, can end again.
+ */
+export function endRequest(generation: number): string {
+  return `agent-batch.job.end:${generation}`;
+}
+
+/**
+ * Appends the job's end, an `end` entry from `draft`, to `conversationId` in the commit `tx`, as a
+ * passive write's submission records it, unless the placement has already written its end: what
+ * `submit` would do, without asking pi to run anything, so a journal reopened only to record a stop
+ * runs none of the work left pending in it.
+ */
+export async function appendEndOnce<D extends JobSuccess | JobEnding>(
+  tx: Tx,
+  conversationId: ConversationId,
+  generation: number,
+  end: Entry<D>,
+  draft: TypedEntryDraft<NoInfer<D>>,
+): Promise<void> {
+  const requestId = endRequest(generation);
+  if (await tx.submissionByRequest(conversationId, requestId)) return;
+  const entry = await tx.appendEntry(end, conversationId, draft);
+  await tx.createSubmission({
+    conversationId,
+    requestId,
+    type: "write",
+    status: "done",
+    entry: entry.id,
+  });
+}
 
 /**
  * Whether `id` can be an entry ID: pi's IDs are positive integers from one counter that entries,

@@ -3,7 +3,6 @@ import { Context, Effect, Layer } from "effect";
 import { databaseAndAuthLayer } from "../auth/auth.ts";
 import type { Db } from "../db/database.ts";
 import { RunnerConnections } from "../platform.ts";
-import { hintLiveRunners } from "../runners.ts";
 import { authSettings, type HubSettings } from "../settings.ts";
 import { RunnerSockets } from "./runner-sockets.ts";
 
@@ -35,7 +34,7 @@ export function nodeServices(settings: HubSettings, connectionString: string) {
     NodeRunnerSockets.use((sockets) =>
       Effect.succeed({
         drop: (runnerId) => Effect.sync(() => sockets.drop(runnerId)),
-        hintLive: hintLiveRunners(async (runnerId) => sockets.requestSync(runnerId)),
+        hint: (runnerId) => Effect.sync(() => sockets.requestSync(runnerId)),
       }),
     ),
   ).pipe(Layer.provide(socketsLayer));

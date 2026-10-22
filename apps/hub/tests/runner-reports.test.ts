@@ -7,7 +7,7 @@ import path from "node:path";
 import {
   type DesiredState,
   HEARTBEAT_PING,
-  JOB_ENDED,
+  JOB_SUCCEEDED,
   HEARTBEAT_PONG,
   type JobReport,
   registeredRunnerSchema,
@@ -20,9 +20,11 @@ import * as z from "zod/mini";
 
 import { callTool, scriptedModel } from "./scripted-model.ts";
 
-/** Whether `report` carries the job's end, the entry the Runner writes when the job's agent ends. */
-function carriesEnd(report: JobReport) {
-  return report.events.some((event) => event.type === "entry" && event.record.kind === JOB_ENDED);
+/** Whether `report` carries the job's success, the end the Runner writes for its accepted result. */
+function carriesSuccess(report: JobReport) {
+  return report.events.some(
+    (event) => event.type === "entry" && event.record.kind === JOB_SUCCEEDED,
+  );
 }
 
 // What a Runner reports must reach the hub even when the hub loses it: the connection drops while
@@ -112,17 +114,17 @@ test("a report the hub never answered is read again on the next connection", asy
         applied.push(report);
         position = report.events.at(-1)?.id ?? position;
       }
-      return { placements: applied.some(carriesEnd) ? [] : [{ ...PLACEMENT, position }] };
+      return { placements: applied.some(carriesSuccess) ? [] : [{ ...PLACEMENT, position }] };
     },
     () => position,
-    () => applied.some(carriesEnd),
+    () => applied.some(carriesSuccess),
   );
   const kinds = applied.flatMap((report) =>
     report.events.flatMap((event) => (event.type === "entry" ? [event.record.kind] : [])),
   );
   // The job's start went with the report that was never answered.
   expect(kinds).toContain("agent-batch.job.started");
-  expect(kinds).toContain("agent-batch.job.ended");
+  expect(kinds).toContain("agent-batch.job.succeeded");
 }, 15_000);
 
 test("a job whose end the hub lost after dropping it ends again with the same events, without running again", async () => {
@@ -132,7 +134,7 @@ test("a job whose end the hub lost after dropping it ends again with the same ev
     (jobs) => {
       for (const report of jobs.filter((job) => job.position === position)) {
         position = report.events.at(-1)?.id ?? position;
-        if (!carriesEnd(report)) continue;
+        if (!carriesSuccess(report)) continue;
         ends.push(report);
         // The hub stores the first end and drops the placement. Its database then goes back to
         // before that end, as a failover loses the last transaction, so it lists the job again.

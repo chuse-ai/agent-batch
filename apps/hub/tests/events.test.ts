@@ -29,13 +29,13 @@ const SUBMISSION = {
   },
 } satisfies JobSubmission;
 
-/** A job's events from the start, read `limit` at a time until a page says no more will come. */
+/** An ended job's events from the start, read `limit` at a time until a page has no more. */
 async function readAll(client: HubClient, id: string, limit: number) {
   const events: JobEvent[] = [];
   for (;;) {
     const page = await client.jobs.events({ id, after: events.at(-1)?.id ?? 0, limit });
     events.push(...page.events);
-    if (page.done) return events;
+    if (!page.hasMore && page.status === "succeeded") return events;
     // The job has ended, so a page that is not the last says more is stored.
     expect(page.hasMore).toBe(true);
   }
@@ -64,7 +64,7 @@ test("a finished job's events, read in pages, run from its start to its end with
   expect(kindsOf(events)[0]).toBe("agent-batch.job.started");
   expect(events.at(-1)).toMatchObject({
     type: "entry",
-    record: { kind: "agent-batch.job.ended", data: { status: "succeeded" } },
+    record: { kind: "agent-batch.job.succeeded", data: { result: { greeting: "Hello" } } },
   });
 });
 
@@ -76,7 +76,7 @@ test("reading the events of a job the hub does not have fails with 404", async (
 });
 
 // Last in the file: the job runs until the system stops.
-test("a running job's pages say more may come", async () => {
+test("a running job's pages say it is running", async () => {
   system.model.setResponses([untilAborted]);
   const client = await system.clientWithNewJobsKey();
   const { id } = await client.jobs.submit(SUBMISSION);
@@ -86,6 +86,5 @@ test("a running job's pages say more may come", async () => {
 
   const { events } = await client.jobs.events({ id });
   const page = await client.jobs.events({ id, after: events.at(-1)?.id ?? 0 });
-  expect(page).toMatchObject({ hasMore: false, done: false });
-  expect((await client.jobs.get({ id })).status).toBe("running");
+  expect(page).toMatchObject({ hasMore: false, status: "running" });
 });

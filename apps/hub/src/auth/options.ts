@@ -24,7 +24,7 @@ const statements = {
   apiKey: ["create", "read", "update", "delete"],
   // `register` is for the shared key Runners start with; `connect`, for a Runner's own key.
   runner: ["register", "connect"],
-  job: ["create", "read"],
+  job: ["create", "read", "cancel"],
 } as const;
 
 const ac = createAccessControl(statements);
@@ -35,7 +35,7 @@ const ac = createAccessControl(statements);
  */
 export const GRANTABLE_KEY_PERMISSIONS = ac.newRole({
   runner: ["register"],
-  job: ["create", "read"],
+  job: ["create", "read", "cancel"],
 });
 
 /**

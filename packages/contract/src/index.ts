@@ -66,6 +66,9 @@ export const jobStatusSchema = z.enum([
 ]);
 export type JobStatus = z.infer<typeof jobStatusSchema>;
 
+/** The statuses a job ends in: once a job reaches one, nothing more happens to it unless it is resumed. */
+export const FINAL_JOB_STATUSES: readonly JobStatus[] = ["succeeded", "failed", "cancelled"];
+
 /** Any JSON value, such as a job's result: what its Result contract's schema accepts. */
 export type { JsonValue } from "type-fest";
 
@@ -100,6 +103,12 @@ export const jobSchema = z.object({
   activity: z.optional(jobActivitySchema),
   /** The job's result, once it has succeeded. */
   result: z.optional(z.unknown()),
+  /**
+   * A control the job's Runner has not yet acted on, beside the last `status` it confirmed: present
+   * only while it waits. A cancel waits for a job its Runner may be running, until the Runner
+   * stops the job, which then ends `cancelled`, or the job ends first with its own status and result.
+   */
+  pendingControl: z.optional(z.object({ type: z.enum(["cancel"]), requestedAt: z.date() })),
 });
 export type Job = z.infer<typeof jobSchema>;
 
@@ -120,7 +129,8 @@ export type JobSubmission = z.infer<typeof jobSubmissionSchema>;
 
 /**
  * A page of a job's events. A caller reads the next page after the last event's `id`: at once while
- * `hasMore`, or after a few seconds when neither field is set, until `done`.
+ * `hasMore`, or after a few seconds otherwise, and stops once a page without more has a final
+ * `status`.
  */
 export const jobEventsPageSchema = z.object({
   /** The job's events after the position asked for, in ID order. */
@@ -128,11 +138,11 @@ export const jobEventsPageSchema = z.object({
   /** Whether more of the job's events are already stored after this page. */
   hasMore: z.boolean(),
   /**
-   * Whether no more events will come: the job has ended and this page reaches its last event. A job
-   * whose Host is lost may end without some of its events, so it says nothing will follow, not that
-   * every event is here.
+   * The job's status as of this page, read with its events: once it is final, the job's events are
+   * stored up to its end. A job whose Host is lost may end without some of its events, so a final
+   * status says nothing follows, not that every event is here.
    */
-  done: z.boolean(),
+  status: jobStatusSchema,
 });
 export type JobEventsPage = z.infer<typeof jobEventsPageSchema>;
 
@@ -222,6 +232,18 @@ export const contract = {
     get: authenticated
       .errors({ [NotFound.code]: NotFound })
       .meta(openapi({ method: "GET", path: "/jobs/{id}" }))
+      .input(z.object({ id: z.string() }))
+      .output(jobSchema),
+    /**
+     * Cancels a job, called by a signed-in member or with an API key holding `job: ["cancel"]`, and
+     * answers with the job. A job not yet sent to a Runner ends `cancelled` at once. Otherwise the
+     * cancel waits for its Runner, shown as `pendingControl`, and the job ends `cancelled` once the
+     * Runner has stopped it, keeping its events and costs. A job that has ended, or ends before its
+     * Runner stops it, keeps the status and result it ended with.
+     */
+    cancel: authenticated
+      .errors({ [NotFound.code]: NotFound })
+      .meta(openapi({ method: "POST", path: "/jobs/{id}/cancel" }))
       .input(z.object({ id: z.string() }))
       .output(jobSchema),
     /**
