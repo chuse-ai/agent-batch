@@ -33,7 +33,8 @@ import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
 import { Db } from "./db/database.ts";
 import { ApikeyId, EventId, JobId, RunnerId } from "./db/types.ts";
 import {
-  cancelJob,
+  type Control,
+  controlJob,
   getJob,
   resultContractProblems,
   readJobEvents,
@@ -50,6 +51,28 @@ interface ApiContext extends WithEffectContext<HubServices> {
 }
 
 const os = implement<typeof contract, ApiContext>(contract);
+
+/**
+ * Applies `control` to the job `jobId` and tells the Runners it concerns to sync now. They learn of
+ * it at their next sync anyway; the hint only makes it sooner, so a failed one is only logged.
+ */
+function controlJobAndHint(jobId: JobId, control: Control) {
+  return Effect.gen(function* () {
+    const { job, hint } = yield* controlJob(jobId, control);
+    if (hint !== undefined) {
+      yield* (
+        hint === "live"
+          ? hintLiveRunners
+          : RunnerConnections.use((connections) => connections.hint(hint))
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => console.error("Hinting Runners to sync failed", cause)),
+        ),
+      );
+    }
+    return job;
+  });
+}
 
 const router = os.router({
   runners: {
@@ -144,19 +167,20 @@ const router = os.router({
       // The ID enters the hub here.
       return yield* getJob(JobId(input.id));
     }),
+    pause: os.jobs.pause.effect(function* ({ input, context }) {
+      yield* requireKeyOrMember(context.headers, { job: ["pause"] });
+      // The ID enters the hub here.
+      return yield* controlJobAndHint(JobId(input.id), "pause");
+    }),
+    resume: os.jobs.resume.effect(function* ({ input, context }) {
+      yield* requireKeyOrMember(context.headers, { job: ["resume"] });
+      // The ID enters the hub here.
+      return yield* controlJobAndHint(JobId(input.id), "resume");
+    }),
     cancel: os.jobs.cancel.effect(function* ({ input, context }) {
       yield* requireKeyOrMember(context.headers, { job: ["cancel"] });
       // The ID enters the hub here.
-      const { job, hint } = yield* cancelJob(JobId(input.id));
-      // The Runner learns of the cancel at its next sync anyway; the hint only makes it sooner.
-      if (hint !== undefined) {
-        yield* RunnerConnections.use((connections) => connections.hint(hint)).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => console.error("Hinting a Runner to sync failed", cause)),
-          ),
-        );
-      }
-      return job;
+      return yield* controlJobAndHint(JobId(input.id), "cancel");
     }),
     events: os.jobs.events.effect(function* ({ input, context }) {
       yield* requireKeyOrMember(context.headers, { job: ["read"] });

@@ -1,28 +1,32 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
+  type Conversation,
   type ConversationId,
   type ConversationRecord,
   defineEntry,
   type Entry,
   type EntryId,
+  type EntryRecord,
   type Harness,
   LiveDoc,
   type Session,
   type Tx,
-  type TypedEntryDraft,
 } from "@earendil-works/pi-durable";
 import {
   type ConversationActivity,
   isoDate,
   JOB_CANCELLED,
   JOB_FAILED,
+  JOB_PAUSED,
   JOB_RECOVERED,
+  JOB_RESUMED,
   JOB_STARTED,
   JOB_SUCCEEDED,
   type JobActivity,
   type JobEnding,
   type JobEvent,
   type JobOpening,
+  type JobPause,
   type JobSuccess,
 } from "contract";
 import { Array, Order } from "effect";
@@ -31,10 +35,10 @@ import runnerPackage from "../package.json" with { type: "json" };
 
 // What the Runner records in a job's journal, and how it reads the journal's events for the hub.
 // The journal's entries and conversation records become the job's events; our own entries
-// record the job's start, its recovery after a Runner restart, and its end, one kind per outcome,
-// and the hub reads the job's lifecycle from them. Their kinds and data are the contract's: kinds name their
-// subject in the past tense under `agent-batch.`, and each carries its time as `timestamp`, Unix
-// milliseconds by the Runner's clock, as pi-ai's messages do.
+// record the job's start, its recovery after a Runner restart, each pause and resume, and its end,
+// one kind per outcome, and the hub reads the job's lifecycle from them. Their kinds and data
+// are the contract's: kinds name their subject in the past tense under `agent-batch.`, and each
+// carries its time as `timestamp`, Unix milliseconds by the Runner's clock, as pi-ai's messages do.
 
 /**
  * The Runner's version, which each entry written on opening a journal carries: each release fixes
@@ -42,47 +46,58 @@ import runnerPackage from "../package.json" with { type: "json" };
  */
 export const RUNNER_VERSION: string = runnerPackage.version;
 
-/** Written once, in the commit that creates the job's conversation, when its agent first starts. */
+/**
+ * Written once, in the commit that creates the job's conversation, when its agent first starts: the
+ * opening of the job's first placement.
+ */
 export const JobStarted = defineEntry<JobOpening>(JOB_STARTED);
 
 /** Written each time a restarted Runner reopens the job and it carries on from its journal. */
 export const JobRecovered = defineEntry<JobOpening>(JOB_RECOVERED);
 
-/** Written once per placement, as its end, when the job's agent submitted an accepted result. */
+/**
+ * Written once, as its opening, by a placement that carries on a job its journal already holds: a
+ * job the hub resumed after a pause, a failure or a cancel.
+ */
+export const JobResumed = defineEntry<JobOpening>(JOB_RESUMED);
+
+/** Written once per placement, as its closing, when the hub paused the job and the Runner stopped it. */
+export const JobPaused = defineEntry<JobPause>(JOB_PAUSED);
+
+/** Written once per placement, as its closing, when the job's agent submitted an accepted result. */
 export const JobSucceeded = defineEntry<JobSuccess>(JOB_SUCCEEDED);
 
-/** Written once per placement, as its end, when the job's agent stopped without a result. */
+/** Written once per placement, as its closing, when the job's agent stopped without a result. */
 export const JobFailed = defineEntry<JobEnding>(JOB_FAILED);
 
-/** Written once per placement, as its end, when the hub cancelled the job and the Runner stopped it. */
+/** Written once per placement, as its closing, when the hub cancelled the job and the Runner stopped it. */
 export const JobCancelled = defineEntry<JobEnding>(JOB_CANCELLED);
 
 /**
- * The request ID a placement writes its job's end with, whatever the outcome, and by which a
- * reopened journal finds it. pi keeps one submission per request ID (`admitSubmission`), so the end
- * is written once per placement, also when a restarted Runner finds the job ended; a job placed
- * again, as after a resume, can end again.
+ * The request IDs a placement writes its opening and its closing with, and by which a reopened
+ * journal finds them. pi keeps one submission per request ID (`admitSubmission`), so each is written
+ * once per placement, also when a restarted Runner finds it; a job placed again, as after a resume,
+ * opens and closes again.
  */
-export function endRequest(generation: number): string {
-  return `agent-batch.job.end:${generation}`;
+export function openingRequest(generation: number): string {
+  return `agent-batch.job.opening:${generation}`;
+}
+export function closingRequest(generation: number): string {
+  return `agent-batch.job.closing:${generation}`;
 }
 
 /**
- * Appends the job's end, an `end` entry from `draft`, to `conversationId` in the commit `tx`, as a
- * passive write's submission records it, unless the placement has already written its end: what
- * `submit` would do, without asking pi to run anything, so a journal reopened only to record a stop
- * runs none of the work left pending in it.
+ * Appends an entry to `conversationId` in the commit `tx` under `requestId`, as a passive write's
+ * submission records it, for a placement's opening: written in the commit that creates the
+ * conversation, where pi forbids reading its tables, or with the reads that decide it.
  */
-export async function appendEndOnce<D extends JobSuccess | JobEnding>(
+export async function appendUnderRequest(
   tx: Tx,
   conversationId: ConversationId,
-  generation: number,
-  end: Entry<D>,
-  draft: TypedEntryDraft<NoInfer<D>>,
+  requestId: string,
+  append: () => Promise<EntryRecord>,
 ): Promise<void> {
-  const requestId = endRequest(generation);
-  if (await tx.submissionByRequest(conversationId, requestId)) return;
-  const entry = await tx.appendEntry(end, conversationId, draft);
+  const entry = await append();
   await tx.createSubmission({
     conversationId,
     requestId,
@@ -90,6 +105,23 @@ export async function appendEndOnce<D extends JobSuccess | JobEnding>(
     status: "done",
     entry: entry.id,
   });
+}
+
+/**
+ * Writes the placement `generation`'s closing, the job's end or its pause, to `conversation` as a
+ * `closing` entry with `data`, once: a placement that has closed keeps its closing. A write of only
+ * a kind and data is appended at once, also while a run is working.
+ */
+export async function submitClosing<D extends JobSuccess | JobEnding | JobPause>(
+  conversation: Conversation,
+  generation: number,
+  closing: Entry<D>,
+  data: NoInfer<D>,
+): Promise<void> {
+  await conversation.submit(
+    { type: "write", entry: { kind: closing.kind, data }, requestId: closingRequest(generation) },
+    BACKGROUND_CONTEXT,
+  );
 }
 
 /**

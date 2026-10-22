@@ -13,14 +13,21 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("runnerId", "text")
     // 0 until the job is first placed; each placement raises it by one.
     .addColumn("generation", "integer", (col) => col.notNull().defaultTo(0))
-    // The hub's clock at placement; the deadline for the Runner to confirm it reads it.
+    // The hub's clock when the placement was sent to its Runner, null until then; the deadline for
+    // the Runner to confirm it reads it.
     .addColumn("placedAt", "timestamptz")
     .addColumn("startedAt", "timestamptz")
     .addColumn("endedAt", "timestamptz")
     .addColumn("result", "jsonb")
     .execute();
-  // A Runner's sync reads its unfinished jobs; placement reads the queued jobs without a Runner in
-  // the order they were accepted, which their IDs (UUID v7) follow.
+  // A placement is sent to a Runner, so a job sent has one; a resumed job has its Runner, the one
+  // holding its journal, before it is sent. Placement reads the queued jobs not yet sent by this.
+  await schema
+    .alterTable("job")
+    .addCheckConstraint("job_placedAt_check", sql`"placedAt" is null or "runnerId" is not null`)
+    .execute();
+  // A Runner's sync reads its unfinished jobs; placement reads the queued jobs not yet sent to a
+  // Runner in the order they were accepted, which their IDs (UUID v7) follow.
   await schema
     .createIndex("job_runnerId_unfinished_idx")
     .on("job")
@@ -28,18 +35,19 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .where(sql.ref("status"), "in", sql`('queued', 'running')`)
     .execute();
   await schema
-    .createIndex("job_queued_unplaced_idx")
+    .createIndex("job_queued_unsent_idx")
     .on("job")
     .columns(["id"])
     .where(sql.ref("status"), "=", "queued")
-    .where(sql.ref("runnerId"), "is", null)
+    .where(sql.ref("placedAt"), "is", null)
     .execute();
 }
 
 export async function down(db: Kysely<unknown>): Promise<void> {
   const schema = db.schema.withSchema("agent_batch");
-  await schema.dropIndex("job_queued_unplaced_idx").execute();
+  await schema.dropIndex("job_queued_unsent_idx").execute();
   await schema.dropIndex("job_runnerId_unfinished_idx").execute();
+  await schema.alterTable("job").dropConstraint("job_placedAt_check").execute();
   await schema
     .alterTable("job")
     .dropColumn("result")

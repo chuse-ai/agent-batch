@@ -14,23 +14,28 @@ import {
   Harness,
   hook,
   ROOT_CONVERSATION_ID,
+  type Submission,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import type { JobContent } from "contract";
+import type { Intent, JobContent } from "contract";
 import { Effect, Exit, type FileSystem, type PlatformError, Scope } from "effect";
 import ensureError from "ensure-error";
 import { compileSchema } from "json-schema-library";
 
 import {
-  appendEndOnce,
-  endRequest,
+  appendUnderRequest,
+  closingRequest,
   JobCancelled,
   JobFailed,
+  JobPaused,
   JobRecovered,
+  JobResumed,
   JobStarted,
   JobSucceeded,
+  openingRequest,
   RUNNER_VERSION,
+  submitClosing,
 } from "./journal.ts";
 import type { JobEnvironments } from "./sandbox.ts";
 
@@ -58,6 +63,12 @@ export interface AgentSettings {
   models: Models;
   model: AgentModel;
 }
+
+/**
+ * What a resumed job whose run pi had settled is told, as the user's message, so that it carries on;
+ * the transcript before it is unchanged.
+ */
+const CONTINUATION_NOTE = "Carry on with the job from where you stopped.";
 
 /**
  * The result `submit_result` accepted first, committed in its own transaction before the call's
@@ -182,10 +193,10 @@ function submitResultTool(schema: Record<string, unknown>) {
  *
  * Gives back the job's run, which runs its agent until it submits an accepted result or ends without
  * one, and records the job's end in the journal. Interrupting the run, as a Runner that stops, a
- * placement the hub drops and a cancel do, aborts none of the job's work: the caller's scope
- * then closes the journal and then the sandbox, which cuts the work off and leaves it pending in the
- * journal, so the job carries on from it when it is opened again, unless recording a cancel settles
- * it (`recordCancel`).
+ * placement the hub drops, a pause and a cancel do, aborts none of the job's work: the caller's
+ * scope then closes the journal and then the sandbox, which cuts the work off and leaves it pending
+ * in the journal, so the job carries on from it when it is opened again, unless recording a pause or
+ * cancel settles it (`recordStop`).
  */
 export function openJob(
   jobId: string,
@@ -271,38 +282,80 @@ export function openJob(
         // The commit that creates the job's conversation, so the start is recorded exactly once.
         init: async (tx, conversationId) => {
           created = true;
-          await tx.appendEntry(JobStarted, conversationId, { data: opening() });
+          await appendUnderRequest(tx, conversationId, openingRequest(options.generation), () =>
+            tx.appendEntry(JobStarted, conversationId, { data: opening() }),
+          );
           await writeInputFiles(paths.workspace, job.inputFiles);
         },
       }),
     );
     conversation = root;
-    // A placement that has ended is not recovered, nor run again: its cancel leaves its work
-    // pending, and only a new placement carries that on. Whether it has ended.
-    const ended =
-      !created &&
-      (yield* Effect.promise(() =>
-        root.commit(async (tx) => {
-          if (await tx.submissionByRequest(root.id, endRequest(options.generation))) return true;
-          if (!options.openedBefore) {
-            await tx.appendEntry(JobRecovered, root.id, { data: opening() });
-          }
-          return false;
-        }, context),
-      ));
+    // A placement that opens a journal already holding the job either carries on its own placement,
+    // left when the Runner restarted, or resumes the job as a new one. A placement that has
+    // closed is not recovered, nor run again, also when its pause or cancel was recorded before it
+    // opened: the stop settled its work, and only a new placement carries the job on. Whether it is
+    // a resume, and whether it has closed.
+    const { resumed, closed } = created
+      ? { resumed: false, closed: false }
+      : yield* Effect.promise(() =>
+          root.commit(async (tx) => {
+            // Reads first: pi forbids reading the tables after a commit's first write.
+            const opened = await tx.submissionByRequest(
+              root.id,
+              openingRequest(options.generation),
+            );
+            if (await tx.submissionByRequest(root.id, closingRequest(options.generation))) {
+              return { resumed: false, closed: true };
+            }
+            if (!opened) {
+              await appendUnderRequest(tx, root.id, openingRequest(options.generation), () =>
+                tx.appendEntry(JobResumed, root.id, { data: opening() }),
+              );
+              return { resumed: true, closed: false };
+            }
+            const resumedBefore =
+              opened.entry !== undefined &&
+              (await tx.entry(JobResumed, opened.entry)) !== undefined;
+            if (!options.openedBefore) {
+              await tx.appendEntry(JobRecovered, root.id, { data: opening() });
+            }
+            return { resumed: resumedBefore, closed: false };
+          }, context),
+        );
     // pi's plain abort leaves background work, such as a compaction, running, so this abort includes
     // it and waits until all of it has stopped: nothing then adds to the journal after the job's end
     // or runs on in its sandbox.
     const stopWork = Effect.promise(() => root.abort(context, { background: true }));
+    /**
+     * Submits the input this placement's run answers, or finds it submitted before by its request
+     * ID, which makes each happen once, also when a restarted Runner opens the same journal again:
+     * the job's Prompt, also on a resume when the job stopped before submitting it, as while its
+     * Input files were being written; otherwise, on a resume, a short note asking the agent to carry
+     * on, as a pi user types the next message after Esc, since the job's pause or cancel or
+     * pi's failure settled its work. Work a Runner's restart left pending carries on from the input
+     * it was answering: the cut-off model call is made again, and a cut-off tool call gets an
+     * `interrupted` result.
+     */
+    const submitInput = async (): Promise<Submission> => {
+      const prompt = await root.submit(
+        { type: "input", content: job.prompt, requestId: `job:${jobId}` },
+        context,
+      );
+      const { status } = await prompt.status(context);
+      if (!resumed || status === "queued" || status === "placed") return prompt;
+      return await root.submit(
+        {
+          type: "input",
+          content: CONTINUATION_NOTE,
+          requestId: `job:${jobId}:resume:${options.generation}`,
+        },
+        context,
+      );
+    };
     const run = Effect.gen(function* () {
-      if (ended) return;
-      // The request ID makes the Prompt's submission happen once, also when a restarted Runner
-      // opens the same journal again.
+      if (closed) return;
       const answered = Effect.promise(async () => {
-        const submission = await root.submit(
-          { type: "input", content: job.prompt, requestId: `job:${jobId}` },
-          context,
-        );
+        const submission = await submitInput();
         await submission.wait(context);
       });
       // Once the job has finished, or pi has failed, all of its work stops. Interrupting the run
@@ -322,15 +375,9 @@ export function openJob(
       const result = accepted?.result;
       const timestamp = Date.now();
       yield* Effect.promise(() =>
-        root.commit(
-          (tx) =>
-            result === undefined
-              ? appendEndOnce(tx, root.id, options.generation, JobFailed, { data: { timestamp } })
-              : appendEndOnce(tx, root.id, options.generation, JobSucceeded, {
-                  data: { timestamp, result },
-                }),
-          context,
-        ),
+        result === undefined
+          ? submitClosing(root, options.generation, JobFailed, { timestamp })
+          : submitClosing(root, options.generation, JobSucceeded, { timestamp, result }),
       );
     }).pipe(
       // However the run ends, its sandbox goes, and with it every process the job left running. A
@@ -344,21 +391,25 @@ export function openJob(
   });
 }
 
+/** A stop the hub asks a Runner to record: a pause or a cancel. */
+export type Stop = Extract<Intent, "pause" | "cancel">;
+
 /**
- * Records the cancel of the job `jobId`'s placement `generation`, once its run has been
- * interrupted. A cancel is a decision about the job, so it settles the work the interrupt left
- * pending, as pi's Esc does (ADR 0028): opens the job's journal without letting any of that work
- * run, since pi runs nothing until asked to (`Harness.resume`), aborts it, which writes the cut-off
- * answer and tool calls into the conversation with their usage, and appends the job's end, so that
- * the end is the journal's last entry. A job whose accepted result the interrupted run had not yet
- * recorded as its end succeeded, since completion ends a run (ADR 0009); one whose placement has
- * already ended keeps that end. Gives back the journal, open until the caller's scope closes, or
- * nothing when the job has no journal on this Runner: a job its Runner never started has nothing to
- * record.
+ * Records the pause or cancel `intent` of the job `jobId`'s placement `generation`, once its
+ * run has been interrupted. A pause or cancel is a decision about the job, so it settles the work
+ * the interrupt left pending, as pi's Esc does (ADR 0028): opens the job's journal, where pi runs
+ * nothing until asked to, aborts that work, which pi settles without running it, writing the
+ * cut-off answer and tool calls into the conversation with their usage, and writes the placement's
+ * closing, the job's pause or its cancel, so that it is the journal's last entry. A job whose
+ * accepted result the interrupted run had not yet recorded as its end succeeded, since completion
+ * ends a run (ADR 0009); a placement that has already closed keeps its closing. Gives back the
+ * journal, open until the caller's scope closes, or nothing when the job has no journal on this
+ * Runner: a job its Runner never started has nothing to record.
  */
-export function recordCancel(
+export function recordStop(
   jobId: string,
   generation: number,
+  intent: Stop,
   settings: AgentSettings,
 ): Effect.Effect<Harness | undefined, PlatformError.PlatformError, Scope.Scope> {
   const context = BACKGROUND_CONTEXT;
@@ -384,21 +435,18 @@ export function recordCancel(
     if (!root) return journal;
     // Background work, such as a compaction, is aborted too, as at the job's own end.
     yield* Effect.promise(() => root.abort(context, { background: true }));
-    // Read before the commit, where reading the document would create it; nothing runs to change it.
+    // Read once the work is settled, so nothing runs to change it.
     const result = (yield* Effect.promise(() => journal.snapshot(AcceptedResult, root.id, context)))
       ?.result;
     const timestamp = Date.now();
-    yield* Effect.promise(() =>
-      root.commit(
-        (tx) =>
-          result === undefined
-            ? appendEndOnce(tx, root.id, generation, JobCancelled, { data: { timestamp } })
-            : appendEndOnce(tx, root.id, generation, JobSucceeded, {
-                data: { timestamp, result },
-              }),
-        context,
-      ),
-    );
+    yield* Effect.promise(() => {
+      if (result !== undefined) {
+        return submitClosing(root, generation, JobSucceeded, { timestamp, result });
+      }
+      return intent === "cancel"
+        ? submitClosing(root, generation, JobCancelled, { timestamp })
+        : submitClosing(root, generation, JobPaused, { timestamp, reason: "pausedByUser" });
+    });
     return journal;
   });
 }

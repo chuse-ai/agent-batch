@@ -7,6 +7,7 @@ import type { ColumnType, Selectable, Insertable, Updateable } from "kysely";
 
 import type { ApikeyId } from "./Apikey.js";
 import type { default as JobControl } from "./JobControl.js";
+import type { default as JobReason } from "./JobReason.js";
 import type { default as JobStatus } from "./JobStatus.js";
 import type { MemberId } from "./Member.js";
 import type { OrganizationId } from "./Organization.js";
@@ -54,6 +55,8 @@ export default interface JobTable {
   pendingControl: ColumnType<JobControl | null, JobControl | null, JobControl | null>;
 
   pendingControlRequestedAt: ColumnType<Date | null, Date | string | null, Date | string | null>;
+
+  reason: ColumnType<JobReason | null, JobReason | null, JobReason | null>;
 }
 
 export type Job = Selectable<JobTable>;

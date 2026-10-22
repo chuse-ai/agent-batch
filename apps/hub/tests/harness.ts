@@ -224,11 +224,11 @@ export function startSystem(
     signIn,
     /** A client signed in as `OWNER`. */
     owner: () => owner,
-    /** Creates an API key allowed to submit, read and cancel jobs, and returns a client sending it. */
+    /** Creates an API key allowed to submit, read and control jobs, and returns a client sending it. */
     async clientWithNewJobsKey() {
       const { key } = await owner.apiKeys.create({
         name: "jobs",
-        permissions: { job: ["create", "read", "cancel"] },
+        permissions: { job: ["create", "read", "pause", "resume", "cancel"] },
       });
       return client({ "x-api-key": key });
     },

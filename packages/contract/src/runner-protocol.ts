@@ -44,8 +44,8 @@ export function selectProtocolVersion(offered: string | null): string | undefine
 
 /**
  * What the hub wants done with a placement, which only ever moves forward: run, then pause or cancel,
- * then purge. Resuming a paused job is a new placement. All four are declared now, though only `run`
- * and `cancel` are sent: a new value in a closed set would bump the protocol version.
+ * then purge. Resuming a job is a new placement. All four are declared now, though only `run`,
+ * `pause` and `cancel` are sent: a new value in a closed set would bump the protocol version.
  */
 export const intentSchema = z.enum(["run", "pause", "cancel", "purge"]);
 export type Intent = z.infer<typeof intentSchema>;
@@ -102,18 +102,21 @@ export type Load = z.infer<typeof loadSchema>;
 
 /**
  * The kinds of the entries the Runner adds to a job's journal about the job, each naming what
- * happened to it: its start, each recovery after a Runner restart, and its end, one kind per outcome.
- * The hub reads the job's lifecycle from them, as they reach it with the job's other events.
+ * happened to it: its start, each recovery after a Runner restart, each pause and resume, and its
+ * end, one kind per outcome. The hub reads the job's lifecycle from them, as they reach it
+ * with the job's other events.
  */
 export const JOB_STARTED = "agent-batch.job.started";
 export const JOB_RECOVERED = "agent-batch.job.recovered";
+export const JOB_PAUSED = "agent-batch.job.paused";
+export const JOB_RESUMED = "agent-batch.job.resumed";
 export const JOB_SUCCEEDED = "agent-batch.job.succeeded";
 export const JOB_FAILED = "agent-batch.job.failed";
 export const JOB_CANCELLED = "agent-batch.job.cancelled";
 
 /**
- * What a start or a recovery records: when, by the Runner's clock in Unix milliseconds as pi-ai's
- * messages keep time, under which placement, and by which Runner.
+ * What a start, a recovery or a resume records: when, by the Runner's clock in Unix milliseconds as
+ * pi-ai's messages keep time, under which placement, and by which Runner.
  */
 export const jobOpeningSchema = z.object({
   timestamp: z.number(),
@@ -121,6 +124,13 @@ export const jobOpeningSchema = z.object({
   runnerVersion: z.string(),
 });
 export type JobOpening = z.infer<typeof jobOpeningSchema>;
+
+/** What a pause records: when, and why the job was paused. */
+export const jobPauseSchema = z.object({
+  timestamp: z.number(),
+  reason: z.enum(["pausedByUser"]),
+});
+export type JobPause = z.infer<typeof jobPauseSchema>;
 
 /** What a success records: when, and the job's result. */
 export const jobSuccessSchema = z.object({ timestamp: z.number(), result: z.json() });
@@ -218,9 +228,10 @@ export type JobActivity = z.infer<typeof jobActivitySchema>;
 /**
  * One job's report: the placement, the intent the Runner applied, the journal's records after the
  * hub's position, and the job's usage and activity. A placement the Runner never started has no
- * journal, so its cancel writes nothing: it reports `cancel` with no events, and the hub ends the
- * job itself. The report is read fresh from the journal after the position the hub last gave, so a
- * report repeated after a lost answer starts from the same position. The job's start and end are entries among its events, so they reach the hub with them.
+ * journal, so its pause or cancel writes nothing: it reports `pause` or `cancel` with no events,
+ * and the hub holds or ends the job itself. The report is read fresh from the journal after the
+ * position the hub last gave, so a report repeated after a lost answer starts from the same position.
+ * The job's start and end are entries among its events, so they reach the hub with them.
  *
  * The hub applies the usage when the Runner and the placement's generation match and neither total
  * is smaller than the one it stored. It applies the events, its position, the activity and a

@@ -3,12 +3,15 @@ import {
   hubNotifications,
   JOB_CANCELLED,
   JOB_FAILED,
+  JOB_PAUSED,
   JOB_RECOVERED,
+  JOB_RESUMED,
   JOB_STARTED,
   JOB_SUCCEEDED,
   isoDate,
   jobEndingSchema,
   jobOpeningSchema,
+  jobPauseSchema,
   jobSuccessSchema,
   notification,
   runnerMethods,
@@ -27,15 +30,18 @@ import { jsonBuildObject } from "kysely/helpers/postgres";
 import * as z from "zod/mini";
 
 import { Db, DB_SCHEMA } from "./db/database.ts";
-import { type Database, JobId, type JobStatus, type RunnerId } from "./db/types.ts";
+import { type Database, JobId, type JobReason, type JobStatus, type RunnerId } from "./db/types.ts";
 import { FINAL_STATUSES, QUEUED_OR_RUNNING } from "./jobs.ts";
 import { recordRunnerHello, recordRunnerSeen, SYNC_INTERVAL_MS } from "./runners.ts";
 
 // The hub's side of the Runner protocol (ADR 0026), shared by both hubs: each answers a Runner's
 // message by calling `handleRunnerMessage` with the Runner's identity and a database. A sync or a
 // report is answered by one statement that records what the Runner said and reads its desired
-// state: every unfinished job placed on it, with the content of those it does not hold, and queued
-// jobs newly placed on its free slots.
+// state: every queued or running job placed on it, with the content of those it does not hold, and
+// queued jobs newly placed on its free slots.
+
+/** The statuses that close a placement: the job's end, or its pause. */
+const CLOSING_STATUSES: JobStatus[] = [...FINAL_STATUSES, "paused"];
 
 /** What a Runner's message is handled with. */
 export interface RunnerMessageContext {
@@ -76,8 +82,15 @@ interface ReportRow {
   status: JobStatus | null;
   startedAt: string | null;
   endedAt: string | null;
+  /** Why the job stopped, for a pause; null otherwise. */
+  reason: JobReason | null;
   /** The result, absent unless the report carries a success; `null` is itself a result. */
   result?: JsonValue;
+  /**
+   * Whether the Runner never started the job, so no Runner holds any of its work: a job held so
+   * may be resumed on any Runner.
+   */
+  neverStarted: boolean;
 }
 
 function reportRow(report: JobReport, now: Date): ReportRow {
@@ -105,39 +118,49 @@ const ENDS: ReadonlyMap<string, JobStatus> = new Map([
 
 /**
  * What a report says of its job's lifecycle, read from the Runner's own entries among its
- * events: a start or recovery makes the job running, and its end, one kind per outcome, makes
- * it succeeded, with its result, failed or cancelled. Each applies with the events that carry it, so
- * a job ends only once every entry before its end is stored, and a hub that loses the end loses those
- * events too and is sent both again. A job that failed without its journal recording an end says so
- * in `failedAt`. A job its Runner never started has no journal, so its cancel arrives with no events
- * at the start of the journal; the hub ends the job itself, at `now`.
+ * events: a start, a recovery or a resume makes the job running, a pause makes it paused, and its
+ * end, one kind per outcome, makes it succeeded, with its result, failed or cancelled. Each
+ * applies with the events that carry it, so a job pauses or ends only once every entry before it is
+ * stored, and a hub that loses one loses those events too and is sent both again. A job that failed
+ * without its journal recording an end says so in `failedAt`. A job its Runner never started has no
+ * journal, so its pause or cancel arrives with no events at the start of the journal; the hub holds
+ * or ends the job itself, at `now`.
  */
 function lifecycleOf(
   report: JobReport,
   now: Date,
-): Pick<ReportRow, "status" | "startedAt" | "endedAt" | "result"> {
+): Pick<ReportRow, "status" | "startedAt" | "endedAt" | "reason" | "result" | "neverStarted"> {
   const records = report.events.flatMap((event) => (event.type === "entry" ? [event.record] : []));
   const started = records.find((record) => record.kind === JOB_STARTED);
   const startedAt = started ? isoDate(z.parse(jobOpeningSchema, started.data).timestamp) : null;
+  const base = { startedAt, endedAt: null, reason: null, neverStarted: false };
   const end = records.find((record) => ENDS.has(record.kind));
   const status = end && ENDS.get(end.kind);
   if (end && status) {
+    const ended = { ...base, status };
     if (status === "succeeded") {
       const { timestamp, result } = z.parse(jobSuccessSchema, end.data);
-      return { status, startedAt, endedAt: isoDate(timestamp), result };
+      return { ...ended, endedAt: isoDate(timestamp), result };
     }
-    return { status, startedAt, endedAt: isoDate(z.parse(jobEndingSchema, end.data).timestamp) };
+    return { ...ended, endedAt: isoDate(z.parse(jobEndingSchema, end.data).timestamp) };
+  }
+  const pause = records.find((record) => record.kind === JOB_PAUSED);
+  if (pause) {
+    return { ...base, status: "paused", reason: z.parse(jobPauseSchema, pause.data).reason };
   }
   if (report.failedAt) {
-    return { status: "failed", startedAt, endedAt: report.failedAt };
+    return { ...base, status: "failed", endedAt: report.failedAt };
   }
-  if (report.intent === "cancel" && report.position === 0 && report.events.length === 0) {
-    return { status: "cancelled", startedAt: null, endedAt: now.toISOString() };
+  if (report.intent !== "run" && report.position === 0 && report.events.length === 0) {
+    return report.intent === "pause"
+      ? { ...base, status: "paused", reason: "pausedByUser", neverStarted: true }
+      : { ...base, status: "cancelled", endedAt: now.toISOString(), neverStarted: true };
   }
   const opened = records.some(
-    (record) => record.kind === JOB_STARTED || record.kind === JOB_RECOVERED,
+    (record) =>
+      record.kind === JOB_STARTED || record.kind === JOB_RECOVERED || record.kind === JOB_RESUMED,
   );
-  return { status: opened ? "running" : null, startedAt, endedAt: null };
+  return { ...base, status: opened ? "running" : null };
 }
 
 /**
@@ -164,6 +187,7 @@ function jsonRows<Row extends object>(eb: ExpressionBuilder<Database, never>, ro
  */
 function applyReports(runnerId: RunnerId, reports: JobReport[]) {
   const jobStatus = sql.id(DB_SCHEMA, "jobStatus");
+  const jobReason = sql.id(DB_SCHEMA, "jobReason");
   const now = new Date();
   return Db.use((database) =>
     database.query(async (db) => {
@@ -192,7 +216,9 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
                 eb.cast<JobStatus | null>(field("status"), jobStatus).as("status"),
                 eb.cast<Date | null>(field("startedAt"), "timestamptz").as("startedAt"),
                 eb.cast<Date | null>(field("endedAt"), "timestamptz").as("endedAt"),
+                eb.cast<JobReason | null>(field("reason"), jobReason).as("reason"),
                 json("result").as("result"),
+                eb.cast<boolean>(field("neverStarted"), "boolean").as("neverStarted"),
               ];
             }),
         )
@@ -272,10 +298,10 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
                 afterUsage(eb.ref("r.usage").$notNull(), eb.ref("p.usage")).as("nextUsage"),
                 afterUsage(eb.ref("totals.tokens"), eb.ref("p.totalTokens")).as("nextTotalTokens"),
                 afterUsage(eb.ref("totals.cost"), eb.ref("p.costUsd")).as("nextCostUsd"),
-                // An ended job is doing nothing, whatever its last report said.
+                // A paused or ended job is doing nothing, whatever its last report said.
                 eb
                   .case()
-                  .when(eb.and([fresh, eb("r.status", "in", FINAL_STATUSES)]))
+                  .when(eb.and([fresh, eb("r.status", "in", CLOSING_STATUSES)]))
                   .then(eb.lit(null))
                   .when(eb.and([fresh, eb("r.activity", "is not", null)]))
                   .then(eb.ref("r.activity"))
@@ -329,7 +355,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
         .with("reported", (qb) =>
           qb
             .selectFrom("current")
-            .select(["jobId", "status", "startedAt", "endedAt", "result"])
+            .select(["jobId", "status", "startedAt", "endedAt", "reason", "result", "neverStarted"])
             .where("fresh", "=", true)
             .where("status", "is not", null)
             .$narrowType<{ status: JobStatus }>(),
@@ -337,35 +363,59 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
         .updateTable("job as j")
         .from("reported as r")
         .set((eb) => {
-          // A control waits until the job ends, whether by it or first.
-          const ended = eb("r.status", "in", FINAL_STATUSES);
+          // A cancel that was waiting when its Runner confirmed a pause ends the paused job at once,
+          // as a cancel of a paused job does.
+          const cancelledOnPause = eb.and([
+            eb("r.status", "=", "paused"),
+            eb("j.pendingControl", "=", "cancel"),
+          ]);
+          // A control waits until the job's status confirms it or the job ends first.
+          const settled = eb("r.status", "in", CLOSING_STATUSES);
+          const unlessSettled = <T>(stored: Expression<T>) =>
+            eb.case().when(settled).then(eb.lit(null)).else(stored).end();
+          const unlessNeverStarted = <T>(stored: Expression<T>) =>
+            eb.case().when("r.neverStarted", "=", true).then(eb.lit(null)).else(stored).end();
           return {
-            status: eb.ref("r.status"),
+            status: eb
+              .case()
+              .when(cancelledOnPause)
+              .then(eb.cast<JobStatus>(eb.val("cancelled"), jobStatus))
+              .else(eb.ref("r.status"))
+              .end(),
             startedAt: eb.fn.coalesce("j.startedAt", "r.startedAt"),
-            endedAt: eb.ref("r.endedAt"),
+            endedAt: eb
+              .case()
+              .when(cancelledOnPause)
+              .then(eb.val(now))
+              .else(eb.ref("r.endedAt"))
+              .end(),
+            reason: eb
+              .case()
+              .when(cancelledOnPause)
+              .then(eb.lit(null))
+              .else(eb.ref("r.reason"))
+              .end(),
             result: eb.ref("r.result"),
-            pendingControl: eb
-              .case()
-              .when(ended)
-              .then(eb.lit(null))
-              .else(eb.ref("j.pendingControl"))
-              .end(),
-            pendingControlRequestedAt: eb
-              .case()
-              .when(ended)
-              .then(eb.lit(null))
-              .else(eb.ref("j.pendingControlRequestedAt"))
-              .end(),
+            pendingControl: unlessSettled(eb.ref("j.pendingControl")),
+            pendingControlRequestedAt: unlessSettled(eb.ref("j.pendingControlRequestedAt")),
+            // A job held before it started has no work on any Runner, so it is no longer sent to
+            // one, and a resume may place it anywhere.
+            runnerId: unlessNeverStarted(eb.ref("j.runnerId")),
+            placedAt: unlessNeverStarted(eb.ref("j.placedAt")),
           };
         })
         .whereRef("j.id", "=", "r.jobId")
-        // Each status moves the job forward once; anything else is stale or repeated. An end applies
-        // to a queued job too: its start may come in the same report, or it failed before its
-        // journal opened, or its Runner was told to cancel it before starting it.
+        // Each status moves the job forward once; anything else is stale or repeated. A pause or an
+        // end applies to a queued job too: its start may come in the same report, or it failed
+        // before its journal opened, or its Runner was told to pause or cancel it before starting
+        // it.
         .where((eb) =>
           eb.or([
             eb.and([eb("r.status", "=", "running"), eb("j.status", "=", "queued")]),
-            eb.and([eb("r.status", "in", FINAL_STATUSES), eb("j.status", "in", QUEUED_OR_RUNNING)]),
+            eb.and([
+              eb("r.status", "in", CLOSING_STATUSES),
+              eb("j.status", "in", QUEUED_OR_RUNNING),
+            ]),
           ]),
         )
         .execute();
@@ -374,23 +424,22 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
 }
 
 /**
- * Places queued jobs on the Runner's free slots and reads its desired state: every unfinished job
- * placed on it, under the intent its pending control gives, with the content of those the
- * Runner does not hold and is to run. One statement, so the jobs just
- * placed come from the placement's `RETURNING`, as Postgres runs a `WITH` clause on the statement's
- * snapshot. Placement takes the oldest queued jobs without a Runner, locking each row it takes so
- * concurrent syncs take different jobs, as queue tables are read in Postgres (`FOR UPDATE SKIP
- * LOCKED`). Reports applied before this are seen; nothing ties the two statements together, since a
- * Runner has one request in flight and a lost answer makes it repeat reports that then change
- * nothing.
+ * Places queued jobs on the Runner's free slots and reads its desired state: every queued or running
+ * job placed on it, under the intent its pending control gives, with the content of those the
+ * Runner does not hold and is to run. One statement, so the jobs just placed come from the
+ * placement's `RETURNING`, as Postgres runs a `WITH` clause on the statement's snapshot. Placement
+ * takes the oldest queued jobs not yet sent to a Runner, new ones without a Runner and resumed ones
+ * waiting for this Runner, which holds their journals, locking each row it takes so concurrent syncs
+ * take different jobs, as queue tables are read in Postgres (`FOR UPDATE SKIP LOCKED`). Reports
+ * applied before this are seen; nothing ties the two statements together, since a Runner has one
+ * request in flight and a lost answer makes it repeat reports that then change nothing.
  *
- * The Runner's free slots count only the jobs it holds, so the unfinished jobs placed on it that it
- * does not hold are subtracted first: it starts them on this answer, as a restarted Runner does with
+ * The Runner's free slots count only the jobs it holds, so the queued or running jobs placed on it
+ * that it does not hold are subtracted first: it starts them on this answer, as a restarted Runner does with
  * every job it ran. kube-scheduler likewise counts every pod assigned to a node, running or not.
  */
 function placeAndRead(runnerId: RunnerId, load: Load) {
   const now = new Date();
-  const unfinished = QUEUED_OR_RUNNING;
   return Db.use((database) =>
     database.query(async (db): Promise<DesiredState> => {
       const rows = await db
@@ -409,7 +458,13 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
             .updateTable("job")
             .set((eb) => ({
               runnerId,
-              generation: eb("generation", "+", 1),
+              // A resume has already made its placement, for the Runner that holds the journal.
+              generation: eb
+                .case()
+                .when("runnerId", "is", null)
+                .then(eb("generation", "+", 1))
+                .else(eb.ref("generation"))
+                .end(),
               placedAt: now,
             }))
             .where("id", "in", (eb) =>
@@ -417,7 +472,13 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                 .selectFrom("job")
                 .select("id")
                 .where("status", "=", "queued")
-                .where("runnerId", "is", null)
+                .where("placedAt", "is", null)
+                .where((runnerEb) =>
+                  runnerEb.or([
+                    runnerEb("runnerId", "is", null),
+                    runnerEb("runnerId", "=", runnerId),
+                  ]),
+                )
                 .orderBy("id")
                 .limit((limitEb) =>
                   limitEb.fn<number>("greatest", [
@@ -429,7 +490,8 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                         .selectFrom("job as unheld")
                         .select((countEb) => countEb.fn.countAll<number>().as("count"))
                         .where("unheld.runnerId", "=", runnerId)
-                        .where("unheld.status", "in", unfinished)
+                        .where("unheld.placedAt", "is not", null)
+                        .where("unheld.status", "in", QUEUED_OR_RUNNING)
                         .where((heldEb) =>
                           heldEb.not(
                             heldEb.exists(
@@ -455,7 +517,8 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
             .selectFrom("job")
             .select(["id", "generation", "prompt", "resultContract", "pendingControl"])
             .where("runnerId", "=", runnerId)
-            .where("status", "in", unfinished)
+            .where("placedAt", "is not", null)
+            .where("status", "in", QUEUED_OR_RUNNING)
             .unionAll(
               qb
                 .selectFrom("placed")

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 
 import canonicalize from "canonicalize";
 import {
+  ControlRefused,
   FINAL_JOB_STATUSES,
   IdempotencyKeyReused,
   NotFound,
@@ -14,22 +15,21 @@ import {
 } from "contract";
 import { Array, Effect, Order, Record, String, Struct } from "effect";
 import { compileSchema, isJsonError } from "json-schema-library";
-import { sql } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { validate as isUuid, v7 as uuidv7 } from "uuid";
 import * as z from "zod/mini";
 
 import { getOrganization, keyMetadataSchema } from "./auth/auth.ts";
-import { Db, DB_SCHEMA } from "./db/database.ts";
+import { Db } from "./db/database.ts";
 import {
   ApikeyId,
   type EventId,
   InputFileName,
-  type JobControl,
   JobId,
   type JobProgressRow,
   type JobRow,
   type JobStatus,
+  type JobUpdate,
   MemberId,
   type RunnerId,
 } from "./db/types.ts";
@@ -51,6 +51,7 @@ const JOB_COLUMNS = [
   "startedAt",
   "endedAt",
   "result",
+  "reason",
   "pendingControl",
   "pendingControlRequestedAt",
 ] as const;
@@ -237,66 +238,151 @@ export function getJob(jobId: JobId) {
   });
 }
 
+/** A control a caller asks of a job. */
+export type Control = "pause" | "resume" | "cancel";
+
+/** What a control is decided on: the job's status, where it runs, and the control waiting. */
+type ControlledJob = Pick<
+  JobRow,
+  "status" | "runnerId" | "generation" | "placedAt" | "startedAt" | "pendingControl"
+>;
+
 /**
- * Cancels the job `jobId` and returns it, or a 404 error, with the Runner to tell to sync now
- * when the cancel waits for one. A job no Runner was sent ends at once, at the hub's clock. One its
- * Runner may be running gets a pending cancel, which the Runner confirms by ending the job, unless
- * the job ends first; repeating the cancel keeps the time it was first asked for. A job that has
- * ended is left as it is. One statement decides, so a placement taking the job at the same moment
- * either finds it cancelled or carries its pending cancel to the Runner.
+ * What a control does to a job as it is: nothing, a refusal saying why, or a change, with the
+ * Runners to tell to sync now: the job's own, or every live one for a job any Runner may take.
  */
-export function cancelJob(jobId: JobId) {
+type Decision =
+  | { kind: "unchanged" }
+  | { kind: "refused"; why: string }
+  | { kind: "changed"; set: JobUpdate; hint?: RunnerId | "live" };
+
+const unchanged: Decision = { kind: "unchanged" };
+const refused = (why: string): Decision => ({ kind: "refused", why });
+
+/**
+ * What `control` does to `job` at `now`, under the control transition rules: a control is a no-op when what it asks
+ * for already holds, and refused when it cannot hold; otherwise the hub applies it where no Runner
+ * can be running the job, and it waits for the job's Runner where one may be.
+ */
+function decide(control: Control, job: ControlledJob, now: Date): Decision {
+  const waiting = job.pendingControl;
+  const ended = { reason: null, pendingControl: null, pendingControlRequestedAt: null };
+  // The job's Runner, told to sync now when a control waits for it or the job resumes there.
+  const toItsRunner = job.runnerId === null ? {} : { hint: job.runnerId };
+  // A resumed job that started carries on from its journal, which only its Runner holds, as a new
+  // placement there (ADR 0026), sent when that Runner next syncs; one that never started has no
+  // work to carry on.
+  const resumeOnItsRunner: Decision = {
+    kind: "changed",
+    set: {
+      status: "queued",
+      generation: job.generation + 1,
+      placedAt: null,
+      endedAt: null,
+      result: null,
+      reason: null,
+    },
+    ...toItsRunner,
+  };
+  switch (job.status) {
+    case "queued":
+    case "running": {
+      // A queued job not yet sent to a Runner, new or resumed: no Runner can be running it.
+      const unsent = job.status === "queued" && job.placedAt === null;
+      if (control === "resume") {
+        if (waiting === "pause") {
+          return refused("The job's pause has not yet been confirmed by its Runner");
+        }
+        if (waiting === "cancel") return refused("The job's cancel is waiting for its Runner");
+        return unchanged;
+      }
+      if (control === "pause") {
+        if (waiting === "cancel") return refused("A pause cannot undo the job's waiting cancel");
+        if (unsent) return { kind: "changed", set: { status: "paused", reason: "pausedByUser" } };
+        if (waiting === "pause") return unchanged;
+        return {
+          kind: "changed",
+          set: { pendingControl: "pause", pendingControlRequestedAt: now },
+          ...toItsRunner,
+        };
+      }
+      if (unsent) return { kind: "changed", set: { status: "cancelled", endedAt: now, ...ended } };
+      if (waiting === "cancel") return unchanged;
+      // A cancel replaces a waiting pause.
+      return {
+        kind: "changed",
+        set: { pendingControl: "cancel", pendingControlRequestedAt: now },
+        ...toItsRunner,
+      };
+    }
+    case "paused":
+      if (control === "pause") return unchanged;
+      // Nothing of a paused job runs, so the hub ends it itself.
+      if (control === "cancel") {
+        return { kind: "changed", set: { status: "cancelled", endedAt: now, ...ended } };
+      }
+      // A job held before it started has no journal, so any Runner may start it.
+      if (job.startedAt === null) {
+        return { kind: "changed", set: { status: "queued", reason: null }, hint: "live" };
+      }
+      return resumeOnItsRunner;
+    case "failed":
+    case "cancelled":
+      if (control === "cancel") return unchanged;
+      if (control === "pause") return refused("The job has ended");
+      if (job.startedAt === null || job.runnerId === null) {
+        return refused("The job ended before it started, so it has no work to carry on");
+      }
+      return resumeOnItsRunner;
+  }
+  // The job succeeded.
+  if (control === "cancel") return unchanged;
+  if (control === "pause") return refused("The job has ended");
+  return refused("A job that succeeded has no work to carry on");
+}
+
+/**
+ * Applies `control` to the job `jobId` and returns the job, or fails with a 404 error or, for
+ * a control that cannot take effect, a 409 saying why; with the Runners to tell to sync now. The
+ * job's row is locked while the control is decided, so placement, the Runner's reports and other
+ * controls take it before or after, not between.
+ */
+export function controlJob(jobId: JobId, control: Control) {
   return Effect.gen(function* () {
     if (!isUuid(jobId)) return yield* Effect.fail(new NotFound());
     const database = yield* Db;
     const now = new Date();
-    const cancelled = yield* database.query((db) =>
-      db
-        .updateTable("job")
-        .from("jobProgress")
-        .set((eb) => {
-          const unsent = eb.and([eb("job.status", "=", "queued"), eb("job.runnerId", "is", null)]);
-          return {
-            status: eb
-              .case()
-              .when(unsent)
-              .then(eb.val<JobStatus>("cancelled"))
-              .else(eb.ref("job.status"))
-              .end(),
-            endedAt: eb.case().when(unsent).then(eb.val(now)).else(eb.ref("job.endedAt")).end(),
-            pendingControl: eb
-              .case()
-              .when(unsent)
-              .then(eb.lit(null))
-              // Cast, since neither branch gives the enum's type.
-              .else(eb.cast<JobControl>(eb.val("cancel"), sql.id(DB_SCHEMA, "jobControl")))
-              .end(),
-            pendingControlRequestedAt: eb
-              .case()
-              .when(unsent)
-              .then(eb.lit(null))
-              .when("job.pendingControl", "=", "cancel")
-              .then(eb.ref("job.pendingControlRequestedAt"))
-              .else(eb.val(now))
-              .end(),
-          };
-        })
-        .whereRef("jobProgress.jobId", "=", "job.id")
-        .where("job.id", "=", jobId)
-        .where("job.status", "in", QUEUED_OR_RUNNING)
-        .returning([
-          ...JOB_COLUMNS.map((column) => `job.${column}` as const),
-          ...PROGRESS_COLUMNS,
-          "job.runnerId",
-        ])
-        .executeTakeFirst(),
+    const controlled = yield* database.query((db) =>
+      db.transaction().execute(async (trx) => {
+        const job = await trx
+          .selectFrom("job")
+          .innerJoin("jobProgress", "jobProgress.jobId", "job.id")
+          .select([...JOB_COLUMNS, ...PROGRESS_COLUMNS, "runnerId", "generation", "placedAt"])
+          .where("id", "=", jobId)
+          .forUpdate("job")
+          .executeTakeFirst();
+        if (!job) return undefined;
+        const decision = decide(control, job, now);
+        if (decision.kind !== "changed") return { decision, job };
+        const changed = await trx
+          .updateTable("job")
+          .set(decision.set)
+          .where("id", "=", jobId)
+          .returning(JOB_COLUMNS)
+          .executeTakeFirstOrThrow();
+        return { decision, job: { ...job, ...changed } };
+      }),
     );
-    if (!cancelled) return { job: yield* getJob(jobId) };
-    const { runnerId, ...job } = cancelled;
+    if (!controlled) return yield* Effect.fail(new NotFound());
+    const { decision, job } = controlled;
+    if (decision.kind === "refused") {
+      return yield* Effect.fail(new ControlRefused({ message: decision.why }));
+    }
+    const hint = decision.kind === "changed" ? decision.hint : undefined;
     return {
-      job: toApiJob(job),
-      ...(job.pendingControl !== null && runnerId !== null ? { hint: runnerId } : {}),
-    } satisfies { job: Job; hint?: RunnerId };
+      job: toApiJob(Struct.pick(job, [...JOB_COLUMNS, ...PROGRESS_COLUMNS])),
+      hint,
+    } satisfies { job: Job; hint?: RunnerId | "live" };
   });
 }
 

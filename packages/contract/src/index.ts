@@ -103,12 +103,17 @@ export const jobSchema = z.object({
   activity: z.optional(jobActivitySchema),
   /** The job's result, once it has succeeded. */
   result: z.optional(z.unknown()),
+  /** Why the job stopped, while it is paused: `pausedByUser` when a caller paused it; else null. */
+  reason: z.nullable(z.enum(["pausedByUser"])),
   /**
    * A control the job's Runner has not yet acted on, beside the last `status` it confirmed: present
-   * only while it waits. A cancel waits for a job its Runner may be running, until the Runner
-   * stops the job, which then ends `cancelled`, or the job ends first with its own status and result.
+   * only while it waits. A pause or cancel waits for a job its Runner may be running, until
+   * the Runner stops the job, which is then `paused` or ends `cancelled`, or the job ends first,
+   * with its own status and result. A cancel replaces a waiting pause.
    */
-  pendingControl: z.optional(z.object({ type: z.enum(["cancel"]), requestedAt: z.date() })),
+  pendingControl: z.optional(
+    z.object({ type: z.enum(["pause", "cancel"]), requestedAt: z.date() }),
+  ),
 });
 export type Job = z.infer<typeof jobSchema>;
 
@@ -152,6 +157,11 @@ export const Unauthorized = error("UNAUTHORIZED");
 export const HubNotSetUp = error("SERVICE_UNAVAILABLE", { message: "The hub is not set up" });
 /** A call naming a Runner, an API key or a job the hub does not have. */
 export const NotFound = error("NOT_FOUND");
+/**
+ * A control that cannot take effect on the job as it is, such as a resume of a job that succeeded;
+ * its message says why.
+ */
+export const ControlRefused = error("CONFLICT");
 /** A job submitted with an idempotency key the Organization already used for a different job. */
 export const IdempotencyKeyReused = error("UNPROCESSABLE_CONTENT", {
   message: "The idempotency key was already used for a different job",
@@ -235,11 +245,36 @@ export const contract = {
       .input(z.object({ id: z.string() }))
       .output(jobSchema),
     /**
+     * Pauses a job, called by a signed-in member or with an API key holding `job: ["pause"]`, and
+     * answers with the job. A job not yet sent to a Runner is held at once as `paused`. Otherwise the
+     * pause waits for its Runner, shown as `pendingControl`, and the job is `paused` once the Runner
+     * has stopped it, its work kept for a resume, holding no capacity. Pausing a paused job, or one
+     * whose pause waits, changes nothing; a job that has ended, or whose cancel waits, is refused.
+     */
+    pause: authenticated
+      .errors({ [NotFound.code]: NotFound, [ControlRefused.code]: ControlRefused })
+      .meta(openapi({ method: "POST", path: "/jobs/{id}/pause" }))
+      .input(z.object({ id: z.string() }))
+      .output(jobSchema),
+    /**
+     * Resumes a stopped job, called by a signed-in member or with an API key holding
+     * `job: ["resume"]`, and answers with the job. A paused, failed or cancelled job goes back to
+     * `queued` and carries on from where it stopped, on the Runner that holds its work; one paused
+     * before it started simply starts. Resuming a job that is queued or running changes nothing. A
+     * job whose pause its Runner has not yet confirmed, whose cancel waits, that succeeded, or that
+     * never started before it ended, is refused.
+     */
+    resume: authenticated
+      .errors({ [NotFound.code]: NotFound, [ControlRefused.code]: ControlRefused })
+      .meta(openapi({ method: "POST", path: "/jobs/{id}/resume" }))
+      .input(z.object({ id: z.string() }))
+      .output(jobSchema),
+    /**
      * Cancels a job, called by a signed-in member or with an API key holding `job: ["cancel"]`, and
-     * answers with the job. A job not yet sent to a Runner ends `cancelled` at once. Otherwise the
-     * cancel waits for its Runner, shown as `pendingControl`, and the job ends `cancelled` once the
-     * Runner has stopped it, keeping its events and costs. A job that has ended, or ends before its
-     * Runner stops it, keeps the status and result it ended with.
+     * answers with the job. A job not yet sent to a Runner, or paused, ends `cancelled` at once.
+     * Otherwise the cancel waits for its Runner, shown as `pendingControl`, replacing a waiting
+     * pause, and the job ends `cancelled` once the Runner has stopped it, keeping its events and
+     * costs. A job that has ended, or ends before its Runner stops it, keeps the status and result it ended with.
      */
     cancel: authenticated
       .errors({ [NotFound.code]: NotFound })
