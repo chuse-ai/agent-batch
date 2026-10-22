@@ -8,6 +8,11 @@ updates:
       # Types must match the Node versions we support (engines), not the newest Node.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+    groups:
+      # oRPC's packages are released together, and mixed versions do not type-check.
+      orpc:
+        patterns:
+          - "@orpc/*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
