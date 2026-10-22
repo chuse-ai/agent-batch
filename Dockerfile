@@ -22,7 +22,7 @@ COPY --chown=vp:vp . .
 RUN vp run hub#build
 
 # --- runtime stage: distroless's Node image, which brings the libraries Node needs ---
-FROM gcr.io/distroless/nodejs26-debian13:nonroot@sha256:044d090d0c3ccfd30722126ebe46704885698970c8a303419dc0d704d628f0da AS hub
+FROM gcr.io/distroless/nodejs26-debian13:nonroot@sha256:b093852cde840e6f7ab2c2081adfbdb81810a340e06a2869fdc4ed31354c9d9e AS hub
 WORKDIR /app
 ENV NODE_ENV=production
 
