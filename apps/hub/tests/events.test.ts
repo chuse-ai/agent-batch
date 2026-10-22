@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { JobEvent, JobSubmission } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
+import { entryKinds } from "./entries.ts";
 import { type HubClient, startSystem } from "./harness.ts";
 import { callTool, untilAborted } from "./scripted-model.ts";
 
@@ -41,11 +42,6 @@ async function readAll(client: HubClient, id: string, limit: number) {
   }
 }
 
-/** The kinds of `events`' entries, in order. */
-function kindsOf(events: JobEvent[]) {
-  return events.flatMap((event) => (event.type === "entry" ? [event.record.kind] : []));
-}
-
 test("a finished job's events, read in pages, run from its start to its end without gaps or repeats", async () => {
   system.model.setResponses([
     callTool("write", { path: "out/greeting.txt", content: "Hello" }),
@@ -60,8 +56,8 @@ test("a finished job's events, read in pages, run from its start to its end with
   const events = await readAll(client, id, 100);
   expect(await readAll(client, id, 2)).toEqual(events);
   expect(events[0]).toMatchObject({ type: "conversation" });
-  expect(kindsOf(events)).toContain("pi.tool-result");
-  expect(kindsOf(events)[0]).toBe("agent-batch.job.started");
+  expect(entryKinds(events)).toContain("pi.tool-result");
+  expect(entryKinds(events)[0]).toBe("agent-batch.job.started");
   expect(events.at(-1)).toMatchObject({
     type: "entry",
     record: { kind: "agent-batch.job.succeeded", data: { result: { greeting: "Hello" } } },
@@ -81,7 +77,7 @@ test("a running job's pages say it is running", async () => {
   const client = await system.clientWithNewJobsKey();
   const { id } = await client.jobs.submit(SUBMISSION);
   await expect
-    .poll(async () => kindsOf((await client.jobs.events({ id })).events), { timeout: 10_000 })
+    .poll(async () => entryKinds((await client.jobs.events({ id })).events), { timeout: 10_000 })
     .toContain("agent-batch.job.started");
 
   const { events } = await client.jobs.events({ id });

@@ -2,9 +2,10 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import type { JobEvent, JobSubmission } from "contract";
+import type { JobSubmission } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
+import { entryKinds, lifecycleOf } from "./entries.ts";
 import { type HubClient, startSystem } from "./harness.ts";
 import { callTool, reply, untilAborted } from "./scripted-model.ts";
 
@@ -22,15 +23,6 @@ const SUBMISSION = {
   inputFiles: {},
   resultContract: { schema: { type: "integer" } },
 } satisfies JobSubmission;
-
-/** The kinds of the Runner's own entries among `events`, in order. */
-function lifecycleOf(events: JobEvent[]) {
-  return events.flatMap((event) =>
-    event.type === "entry" && event.record.kind.startsWith("agent-batch.")
-      ? [event.record.kind]
-      : [],
-  );
-}
 
 /** Waits until the job `id` has `status`. */
 async function untilStatus(client: HubClient, id: string, status: string, timeout = 10_000) {
@@ -102,8 +94,10 @@ test("cancelling a running job stops its work at once and ends it cancelled, wit
     "agent-batch.job.cancelled",
   ]);
   // The command the cancel cut off has its result recorded before the job's end.
-  const kinds = page.events.flatMap((event) => (event.type === "entry" ? [event.record.kind] : []));
-  expect(kinds.slice(-2)).toEqual(["pi.tool-result", "agent-batch.job.cancelled"]);
+  expect(entryKinds(page.events).slice(-2)).toEqual([
+    "pi.tool-result",
+    "agent-batch.job.cancelled",
+  ]);
 });
 
 test("a cancel that reaches the Runner after the job's result was accepted leaves it succeeded", async () => {

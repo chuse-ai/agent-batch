@@ -7,7 +7,6 @@ import path from "node:path";
 import {
   type DesiredState,
   HEARTBEAT_PING,
-  JOB_SUCCEEDED,
   HEARTBEAT_PONG,
   type JobReport,
   registeredRunnerSchema,
@@ -18,13 +17,12 @@ import { assert, expect, test } from "vite-plus/test";
 import { WebSocketServer } from "ws";
 import * as z from "zod/mini";
 
+import { entryKinds } from "./entries.ts";
 import { callTool, scriptedModel } from "./scripted-model.ts";
 
 /** Whether `report` carries the job's success, the end the Runner writes for its accepted result. */
 function carriesSuccess(report: JobReport) {
-  return report.events.some(
-    (event) => event.type === "entry" && event.record.kind === JOB_SUCCEEDED,
-  );
+  return entryKinds(report.events).includes("agent-batch.job.succeeded");
 }
 
 // What a Runner reports must reach the hub even when the hub loses it: the connection drops while
@@ -119,9 +117,7 @@ test("a report the hub never answered is read again on the next connection", asy
     () => position,
     () => applied.some(carriesSuccess),
   );
-  const kinds = applied.flatMap((report) =>
-    report.events.flatMap((event) => (event.type === "entry" ? [event.record.kind] : [])),
-  );
+  const kinds = applied.flatMap((report) => entryKinds(report.events));
   // The job's start went with the report that was never answered.
   expect(kinds).toContain("agent-batch.job.started");
   expect(kinds).toContain("agent-batch.job.succeeded");

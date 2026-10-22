@@ -9,6 +9,7 @@ import { Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
+import { lifecycleOf } from "./entries.ts";
 import { startSystem } from "./harness.ts";
 
 // A Runner can die without running any of its own cleanup, as when the kernel's out-of-memory
@@ -86,8 +87,7 @@ test(
       );
       // The job's events record its recovery by the restarted Runner, between its start and end.
       const { events } = yield* Effect.promise(() => client.jobs.events({ id }));
-      const kinds = events.flatMap((event) => (event.type === "entry" ? [event.record.kind] : []));
-      expect(kinds.filter((kind) => kind.startsWith("agent-batch."))).toEqual([
+      expect(lifecycleOf(events)).toEqual([
         "agent-batch.job.started",
         "agent-batch.job.recovered",
         "agent-batch.job.succeeded",

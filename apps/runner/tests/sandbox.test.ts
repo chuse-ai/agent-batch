@@ -214,6 +214,10 @@ it("a command that goes over the job's memory limit is stopped and the agent tol
     const over = await run(job, "python3 -c 'b = bytearray(1 << 30); print(len(b))'");
     expect(over.exitCode).not.toBe(0);
     expect(over.output).toContain("went over their 256M of memory");
-    expect((await run(job, "echo still here")).output).toBe("still here\n");
+    // The kill count can still rise after the command over the limit has returned, as it has on
+    // CI, and every command that ends while it rises is told, so this one may be too.
+    const next = await run(job, "echo still here");
+    expect(next.exitCode).toBe(0);
+    expect(next.output).toMatch(/^still here\n/);
   });
 });
