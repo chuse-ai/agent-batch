@@ -12,7 +12,6 @@ import {
   isoDate,
   jobEndingSchema,
   jobOpeningSchema,
-  jobPauseSchema,
   jobSuccessSchema,
   notification,
   runnerMethods,
@@ -152,7 +151,7 @@ function lifecycleOf(
   }
   const pause = records.find((record) => record.kind === JOB_PAUSED);
   if (pause) {
-    return { ...base, status: "paused", reason: z.parse(jobPauseSchema, pause.data).reason };
+    return { ...base, status: "paused" };
   }
   if (report.failedAt) {
     return { ...base, status: "failed", endedAt: report.failedAt };
@@ -163,7 +162,7 @@ function lifecycleOf(
     report.events.length === 0
   ) {
     return report.intent === "pause"
-      ? { ...base, status: "paused", reason: "pausedByUser", neverStarted: true }
+      ? { ...base, status: "paused", neverStarted: true }
       : { ...base, status: "cancelled", endedAt: now.toISOString(), neverStarted: true };
   }
   const opened = records.some(

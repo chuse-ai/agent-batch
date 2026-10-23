@@ -322,7 +322,7 @@ function decide(control: Control, job: ControlledJob, now: Date): Decision {
       }
       if (control === "pause") {
         if (waiting === "cancel") return refused("A pause cannot undo the job's waiting cancel");
-        if (unsent) return { kind: "changed", set: { status: "paused", reason: "pausedByUser" } };
+        if (unsent) return { kind: "changed", set: { status: "paused" } };
         if (waiting === "pause") return unchanged;
         return {
           kind: "changed",

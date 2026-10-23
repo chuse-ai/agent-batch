@@ -61,10 +61,7 @@ test("pausing a job no Runner was sent holds it, and resuming it lets it start",
   const client = await system.clientWithNewJobsKey();
   const { id } = await client.jobs.submit(SUBMISSION);
 
-  expect(await client.jobs.pause({ id })).toMatchObject({
-    status: "paused",
-    reason: "pausedByUser",
-  });
+  expect(await client.jobs.pause({ id })).toMatchObject({ status: "paused" });
   expect(await client.jobs.resume({ id })).toMatchObject({ status: "queued" });
   system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
   await system.startRunner();
@@ -153,7 +150,6 @@ test("pausing a running job stops it with its work kept, and resuming it carries
   });
   await untilStatus(client, id, "paused");
   const paused = await client.jobs.get({ id });
-  expect(paused).toMatchObject({ reason: "pausedByUser" });
   expect(paused).not.toHaveProperty("pendingControl");
   expect(paused.endedAt).toBeNull();
 

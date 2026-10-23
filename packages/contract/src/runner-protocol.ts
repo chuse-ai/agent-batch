@@ -125,11 +125,8 @@ export const jobOpeningSchema = z.object({
 });
 export type JobOpening = z.infer<typeof jobOpeningSchema>;
 
-/** What a pause records: when, and why the job was paused. */
-export const jobPauseSchema = z.object({
-  timestamp: z.number(),
-  reason: z.enum(["pausedByUser"]),
-});
+/** What a pause records: when. Only a caller's pause request pauses a job. */
+export const jobPauseSchema = z.object({ timestamp: z.number() });
 export type JobPause = z.infer<typeof jobPauseSchema>;
 
 /** What a success records: when, and the job's result. */

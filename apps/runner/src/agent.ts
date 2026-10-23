@@ -460,7 +460,7 @@ export function recordStop(
       }
       return intent === "cancel"
         ? submitClosing(root, generation, JobCancelled, { timestamp })
-        : submitClosing(root, generation, JobPaused, { timestamp, reason: "pausedByUser" });
+        : submitClosing(root, generation, JobPaused, { timestamp });
     });
     return journal;
   });

@@ -21,7 +21,7 @@ A named credential the organization stores with the hosts it may be sent to; a j
 _Avoid_: API key, token, credential, environment variable
 
 **Job**:
-One self-contained piece of agent work: a prompt, its input files, and a result contract. Runs once, unattended; a person may pause, resume or cancel it.
+One self-contained piece of agent work: a prompt, its input files, and a result contract. Runs once, unattended; a caller may pause, resume or cancel it.
 _Avoid_: task, run, session, conversation
 
 **Label**:

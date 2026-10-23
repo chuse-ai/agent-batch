@@ -60,7 +60,7 @@ export const apiKeySchema = z
   .object({
     id: z.string(),
     name: z.nullable(z.string()),
-    /** The first characters of the key, to recognise it by. */
+    /** The first characters of the key, to recognize it by. */
     start: z.nullable(z.string()),
     permissions: z.nullable(permissionsSchema),
     createdAt: z.date(),
@@ -127,10 +127,11 @@ export const jobSchema = z
     /** The job's result, once it has succeeded. */
     result: z.optional(z.unknown()),
     /**
-     * Why the job stopped: while it is paused, `pausedByUser` when a caller paused it; once it has
-     * failed, `runnerRemoved` when its Runner was removed before it ended; else null.
+     * Why the job is in its status, given only where the status has more than one cause: once it
+     * has failed, `runnerRemoved` when its Runner was removed before it ended; else null. Only a
+     * caller pauses or cancels a job, so `paused` and `cancelled` carry none.
      */
-    reason: z.nullable(z.enum(["pausedByUser", "runnerRemoved"])),
+    reason: z.nullable(z.enum(["runnerRemoved"])),
     /**
      * A control the job's Runner has not yet acted on, beside the last `status` it confirmed: present
      * only while it waits. A pause or cancel waits for a job its Runner may be running, until
