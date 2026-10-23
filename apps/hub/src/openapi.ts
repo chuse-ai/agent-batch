@@ -3,6 +3,7 @@ import { ZodToJsonSchemaConverter } from "@orpc/zod";
 import { getCookies } from "better-auth/cookies";
 import { API_KEY_SECURITY_SCHEME, contract, problemDetailsSchema } from "contract";
 
+import packageJson from "../package.json" with { type: "json" };
 import { Auth } from "./auth/auth.ts";
 
 // The API's OpenAPI document (ADR 0018), generated from the contract by oRPC, so every procedure
@@ -21,8 +22,8 @@ export const sessionCookieName = Auth.use((auth) =>
 export function generateOpenAPIDocument(sessionCookie: string) {
   return generator.generate(contract, {
     base: {
-      // Releases are not versioned yet; publishing them gives the document its version.
-      info: { title: "agent-batch", version: "0.0.0" },
+      // The hub's own version, which a release sets to the release's.
+      info: { title: "agent-batch", version: packageJson.version },
       components: {
         securitySchemes: {
           apiKey: API_KEY_SECURITY_SCHEME,

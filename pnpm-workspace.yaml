@@ -50,6 +50,7 @@ catalog:
   crossws: ^0.4.15
   effect: ^4.0.5
   ensure-error: ^5.0.0
+  generate-license-file: ^4.2.5
   get-port: ^7.2.0
   hono: 5.0.0-rc.1
   hono-problem-details: ^0.12.0
@@ -70,3 +71,5 @@ catalog:
   wrangler: ^4.151.2
   ws: ^8.22.0
   zod: ^4.6.7
+patchedDependencies:
+  generate-license-file: patches/generate-license-file.patch

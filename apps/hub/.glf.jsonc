@@ -1,0 +1,8 @@
+// The notices of every third-party package the image ships, written by generate-license-file.
+{
+  // The hub bundles the workspace package `contract`, so the dependencies it brings ship too.
+  "inputs": ["./package.json", "../../packages/contract/package.json"],
+  "output": "./dist/THIRD_PARTY_NOTICES.txt",
+  // The workspace's own package, under the repository's licence.
+  "exclude": ["contract"],
+}

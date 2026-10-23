@@ -18,19 +18,20 @@ A Runner that stops, or is killed outright (by the out-of-memory killer, `kill -
 
 ## What a host needs
 
-- **Linux**: `bwrap` (bubblewrap), `socat` and `rg` (ripgrep) on `PATH`, for example `sudo apt install bubblewrap socat ripgrep`. On Ubuntu 24.04, AppArmor denies bubblewrap the user namespaces it needs; load the profile Ubuntu ships for it, as Codex CLI documents (Ubuntu 25.04 and later load it already):
-
-  ```sh
-  sudo apt install apparmor-profiles apparmor-utils
-  sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
-  sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
-  ```
-
-  If that does not let the Runner start, `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` lifts the restriction for every program. The memory limit needs a user systemd manager of systemd 254 or later (Ubuntu 24.04, Debian 13): a desktop session has one; on a server, `loginctl enable-linger <user>` keeps one running for the Runner's user. Without it the Runner logs that jobs run without a memory limit.
+- **Linux**: `bwrap` (bubblewrap), `socat` and `rg` (ripgrep) on `PATH`, for example `sudo apt install bubblewrap socat ripgrep`. On Ubuntu 24.04, AppArmor strips the capabilities from the user namespaces that bubblewrap and sandbox-runtime's seccomp helper create, so the host needs `kernel.apparmor_restrict_unprivileged_userns=0` (`sudo sysctl -w`, and a file in `/etc/sysctl.d` to keep it), as sandbox-runtime documents. Ubuntu 25.04 and later also load a profile for bubblewrap, `bwrap-userns-restrict`, that denies capabilities to everything bubblewrap starts, the helper included, so there jobs cannot run in a sandbox until sandbox-runtime no longer needs one ([anthropics/sandbox-runtime#429](https://github.com/anthropics/sandbox-runtime/issues/429)); loading that profile on 24.04 does the same. The memory limit needs a user systemd manager of systemd 254 or later (Ubuntu 24.04, Debian 13): a desktop session has one; on a server, `loginctl enable-linger <user>` keeps one running for the Runner's user. Without it the Runner logs that jobs run without a memory limit.
 
 - **macOS**: nothing to install; the sandbox is Seatbelt, and jobs run without a memory limit.
 - **Windows**: run the Runner in WSL 2, as on Linux.
-- **Docker**: Docker's default seccomp and AppArmor profiles prevent bubblewrap inside a container, so run the Runner on the host.
+- **Docker**: the Runner's image, `ghcr.io/chuse-ai/agent-batch-runner`, runs as a non-root user and needs three options for its jobs' sandboxes, as BuildKit's rootless image does: Docker's defaults deny bubblewrap the namespaces it needs and mask the paths under `/proc` that a sandbox mounts its own over.
+
+  ```sh
+  docker run --security-opt seccomp=unconfined --security-opt systempaths=unconfined \
+    --security-opt apparmor=unconfined --memory 8g --restart unless-stopped --volume runner-data:/data \
+    --env HUB_URL --env RUNNER_REGISTRATION_KEY --env RUNNER_MODEL_PROVIDER --env RUNNER_MODEL_ID \
+    --env ANTHROPIC_API_KEY ghcr.io/chuse-ai/agent-batch-runner
+  ```
+
+  `apparmor=unconfined` is needed only on hosts with AppArmor; on Ubuntu 24.04 the host also needs `kernel.apparmor_restrict_unprivileged_userns=0` (in `/etc/sysctl.d`), as BuildKit's rootless image does, and on Ubuntu 25.04 and later its jobs cannot run in a sandbox yet, as on the host. `--restart` starts the Runner again after it stops, as when it could not reach the hub on its first start. `RUNNER_DATA_DIR` is `/data` in the image, so keep it on a volume. A container has no user systemd, so jobs run without a memory limit of their own: `--memory` caps the Runner and its jobs together. Jobs' commands find the programs of Debian's slim image; for more, build an image from this one.
 
 The Runner proves the sandbox works when it starts, and refuses to start, naming what is missing, if it does not.
 

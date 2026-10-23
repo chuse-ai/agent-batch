@@ -20,7 +20,7 @@ In Docker, also:
 
 ## Docker
 
-Build the image from the repository's root and run one container per hub: it runs as a single process (ADR 0014).
+Each release publishes the hub's image as `ghcr.io/chuse-ai/agent-batch-hub`. Run one container per hub: it runs as a single process (ADR 0014). To build it from the repository's root:
 
 ```sh
 docker build . --target hub --tag agent-batch-hub

@@ -14,7 +14,9 @@ concurrency:
 
 jobs:
   ready:
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04 rather than ubuntu-latest: from 25.04, Ubuntu denies sandbox-runtime's seccomp
+    # helper the capability it needs, so no job could run (anthropics/sandbox-runtime#429).
+    runs-on: &ubuntu ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
@@ -28,8 +30,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap socat ripgrep
-          # Ubuntu 24.04 and later deny bubblewrap the user namespaces it needs; the runner's README
-          # gives the narrower AppArmor profile for real hosts.
+          # Ubuntu 24.04 strips the capabilities from the user namespaces the sandbox creates (ADR 0027).
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: vp run ready
       # The migrations must create everything Better Auth needs.
@@ -48,7 +49,7 @@ jobs:
   # What users run on their own Node (the CLI, and the Runner and contract it bundles) supports Node 22
   # from the lowest release `engines.node` allows (ADR 0024); the hub runs only on Node 26 and workerd.
   node-22:
-    runs-on: ubuntu-latest
+    runs-on: *ubuntu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
@@ -63,13 +64,16 @@ jobs:
         working-directory: apps/hub
 
   hub-image:
-    runs-on: ubuntu-latest
+    runs-on: *ubuntu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
         with:
           cache: true
-      # Builds the hub's Docker image and starts it on a fresh database (ADR 0014); the default test
-      # run skips this tagged test (ADR 0003).
+      # What the Runner's image needs of an Ubuntu 24.04 host, as BuildKit's rootless image
+      # does: AppArmor otherwise denies its jobs' sandboxes the user namespaces they need.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # Builds the hub's and the Runner's Docker images, starts the hub on a fresh database (ADR 0014)
+      # and the Runner beside it; the default test run skips these tagged tests (ADR 0003).
       - run: vp test --project node --tags-filter=container
         working-directory: apps/hub

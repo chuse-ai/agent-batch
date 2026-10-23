@@ -2,6 +2,9 @@
   "name": "runner",
   "version": "0.0.0",
   "private": true,
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -11,7 +14,9 @@
     "build": "vp pack",
     "dev": "vp pack --watch",
     "start": "node dist/main.mjs",
-    "check": "vp check"
+    "check": "vp check",
+    "notices": "generate-license-file --overwrite",
+    "pnpm-deploy": "pnpm --filter runner deploy --prod --ignore-scripts"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "catalog:",

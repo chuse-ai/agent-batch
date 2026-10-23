@@ -13,7 +13,8 @@
     "db:draft-auth-migration": "node scripts/draft-auth-migration.ts",
     "setup": "node scripts/setup.ts",
     "reset-password": "node scripts/reset-password.ts",
-    "test": "vp test"
+    "test": "vp test",
+    "notices": "generate-license-file --overwrite"
   },
   "dependencies": {
     "@better-auth/api-key": "catalog:",

@@ -1,0 +1,48 @@
+diff --git a/dist/generateLicenseFile-Bwwwev3i.mjs b/dist/generateLicenseFile-Bwwwev3i.mjs
+index 47423d73121183a291aa1ac3ea139d8c0c16355a..9fc347a70fa4b738b3ad4551ba7f98b35a329af5 100644
+--- a/dist/generateLicenseFile-Bwwwev3i.mjs
++++ b/dist/generateLicenseFile-Bwwwev3i.mjs
+@@ -1,6 +1,6 @@
+ import cliSpinners from "cli-spinners";
+ import ora from "ora";
+-import { basename, dirname, extname, isAbsolute, join, relative } from "node:path";
++import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+ import fs, { readFile } from "node:fs/promises";
+ import { glob } from "glob";
+ import Arborist from "@npmcli/arborist";
+@@ -534,8 +534,13 @@ const verifyPackageJsonFileName = (packageJson) => {
+ 	throw new Error(`Expected a path to a file named "package.json" but was given "${fileName}" (${packageJson}). Dependencies are resolved by npm and pnpm using the "package.json" file name, so a file with a different name cannot be used as an input.`);
+ };
+ const resolvePackageManager = async (packageJson) => {
+-	if (await doesFileExist(join(dirname(packageJson), "pnpm-lock.yaml"))) return "pnpm";
+-	return "npm";
++	// Patched (TobyAndToby/generate-license-file#784): a workspace keeps one lockfile at its root, so
++	// the nearest lockfile above the input decides.
++	for (let directory = dirname(resolve(packageJson)); ; directory = dirname(directory)) {
++		if (await doesFileExist(join(directory, "pnpm-lock.yaml"))) return "pnpm";
++		if (await doesFileExist(join(directory, "package-lock.json"))) return "npm";
++		if (dirname(directory) === directory) return "npm";
++	}
+ };
+ 
+ //#endregion
+diff --git a/dist/generateLicenseFile-VeTr3dl_.cjs b/dist/generateLicenseFile-VeTr3dl_.cjs
+index e650c1a081a0feaa10e4ebacfb1e766c2a837ff8..7a43d2adff571c885e71ae9957f7c71226704057 100644
+--- a/dist/generateLicenseFile-VeTr3dl_.cjs
++++ b/dist/generateLicenseFile-VeTr3dl_.cjs
+@@ -566,8 +566,13 @@ const verifyPackageJsonFileName = (packageJson) => {
+ 	throw new Error(`Expected a path to a file named "package.json" but was given "${fileName}" (${packageJson}). Dependencies are resolved by npm and pnpm using the "package.json" file name, so a file with a different name cannot be used as an input.`);
+ };
+ const resolvePackageManager = async (packageJson) => {
+-	if (await doesFileExist((0, node_path.join)((0, node_path.dirname)(packageJson), "pnpm-lock.yaml"))) return "pnpm";
+-	return "npm";
++	// Patched (TobyAndToby/generate-license-file#784): a workspace keeps one lockfile at its root, so
++	// the nearest lockfile above the input decides.
++	for (let directory = (0, node_path.dirname)((0, node_path.resolve)(packageJson)); ; directory = (0, node_path.dirname)(directory)) {
++		if (await doesFileExist((0, node_path.join)(directory, "pnpm-lock.yaml"))) return "pnpm";
++		if (await doesFileExist((0, node_path.join)(directory, "package-lock.json"))) return "npm";
++		if ((0, node_path.dirname)(directory) === directory) return "npm";
++	}
+ };
+ 
+ //#endregion

@@ -7,7 +7,7 @@ import { MODEL_THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-sch
 // The shared package rather than `@effect/platform-node`, whose required `redis` peer the Runner
 // would install without using.
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
-import { Config, Effect, Option, Redacted } from "effect";
+import { Config, Data, Effect, Option, Redacted, Runtime } from "effect";
 
 import { DEFAULT_SANDBOX_SETTINGS, runRunner } from "./index.ts";
 
@@ -64,12 +64,18 @@ const runnerSettings = Config.all({
   ),
 });
 
+/**
+ * The Runner refused to start, having told the operator why. It fails the program, so Effect's
+ * `runMain` ends the process with a failing exit code, even with sandbox-runtime's proxies running.
+ */
+class Refused extends Data.TaggedError("Refused") {
+  // Told already, in the operator's words, so `runMain` does not log it again.
+  readonly [Runtime.errorReported] = false;
+}
+
 /** Tells the operator why the Runner cannot start, and ends it with a failing exit code. */
 function refuse(message: string) {
-  return Effect.sync(() => {
-    console.error(message);
-    process.exitCode = 1;
-  });
+  return Effect.sync(() => console.error(message)).pipe(Effect.andThen(Effect.fail(new Refused())));
 }
 
 Effect.gen(function* () {

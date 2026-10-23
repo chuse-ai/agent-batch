@@ -4,22 +4,43 @@
 import path from "node:path";
 import { text } from "node:stream/consumers";
 
+import { createORPCClient } from "@orpc/client";
+import type { ContractRouterClient } from "@orpc/contract";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
-import { RUNNER_CONNECT_PATH, RUNNER_NOT_FOUND, RUNNER_PROTOCOL_VERSION } from "contract";
+import {
+  contract,
+  createProblemDetailsLink,
+  RUNNER_CONNECT_PATH,
+  RUNNER_NOT_FOUND,
+  RUNNER_PROTOCOL_VERSION,
+} from "contract";
 import { GenericContainer, Network, Wait } from "testcontainers";
 import { describe, expect, inject, test } from "vite-plus/test";
 import WebSocket from "ws";
 
 import { OWNER } from "./harness.ts";
 
-// The hub's Docker image as an operator runs it: built from the repository and started against a
-// fresh database, which it migrates and sets up as it starts (ADR 0014, ADR 0015). It needs Docker
-// and an image build, so it is tagged and the default run skips it (ADR 0003).
+// The hub's and a Runner's Docker images as an operator runs them: built from the repository, the hub
+// started against a fresh database, which it migrates and sets up as it starts (ADR 0014, ADR 0015),
+// and the Runner with the options its sandbox needs. They need Docker and image builds, so they
+// are tagged and the default run skips them (ADR 0003).
 
 const HUB_ORIGIN = "http://hub.test";
 
+/**
+ * A container whose `/proc` Docker leaves unmasked, as `docker run --security-opt
+ * systempaths=unconfined` does: the Engine API takes that as empty masked and read-only paths.
+ */
+class UnmaskedProcContainer extends GenericContainer {
+  constructor(image: string) {
+    super(image);
+    this.hostConfig.MaskedPaths = [];
+    this.hostConfig.ReadonlyPaths = [];
+  }
+}
+
 // The image is the same for both projects, so one of them runs it.
-describe.skipIf(inject("hub") !== "node")("the hub's Docker image", () => {
+describe.skipIf(inject("hub") !== "node")("the Docker images", () => {
   test("sets up a fresh database as it starts, serves the API, and stops gracefully", async () => {
     await using network = await new Network().start();
     await using database = await new PostgreSqlContainer("postgres:18-alpine")
@@ -71,5 +92,68 @@ describe.skipIf(inject("hub") !== "node")("the hub's Docker image", () => {
     const stopping = Date.now();
     await hub.stop({ timeout: 10_000 });
     expect(Date.now() - stopping).toBeLessThan(5_000);
+  });
+
+  test("a Runner's image passes its sandbox check and registers with the hub", async () => {
+    await using network = await new Network().start();
+    await using database = await new PostgreSqlContainer("postgres:18-alpine")
+      .withNetwork(network)
+      .withNetworkAliases("database")
+      .start();
+    const [hubImage] = await Promise.all(
+      (["hub", "runner"] as const).map((target) =>
+        GenericContainer.fromDockerfile(path.join(import.meta.dirname, "../../.."))
+          .withBuildkit()
+          .withTarget(target)
+          .build(`agent-batch-${target}:test`),
+      ),
+    );
+    await using hub = await hubImage
+      .withNetwork(network)
+      .withNetworkAliases("hub")
+      .withEnvironment({
+        DATABASE_URL: `postgres://${database.getUsername()}:${database.getPassword()}@database:5432/${database.getDatabase()}`,
+        BETTER_AUTH_SECRET: "a-secret-only-for-tests-0123456789abcdef",
+        HUB_URL: HUB_ORIGIN,
+        ADMIN_EMAIL: OWNER.email,
+        ADMIN_PASSWORD: OWNER.password,
+      })
+      .withExposedPorts(8787)
+      .withWaitStrategy(Wait.forHttp("/runners", 8787).forStatusCode(401))
+      .start();
+    const url = `http://${hub.getHost()}:${hub.getMappedPort(8787)}`;
+    const signIn = await fetch(`${url}/api/auth/sign-in/email`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: HUB_ORIGIN },
+      body: JSON.stringify(OWNER),
+    });
+    const owner: ContractRouterClient<typeof contract> = createORPCClient(
+      createProblemDetailsLink(contract, {
+        origin: url,
+        headers: { cookie: signIn.headers.getSetCookie().join("; "), origin: HUB_ORIGIN },
+      }),
+    );
+    const { key } = await owner.apiKeys.create({
+      name: "runners",
+      permissions: { runner: ["register"] },
+    });
+
+    // The Runner registers only once a sandboxed command has run: without one it refuses to start.
+    await using runner = await new UnmaskedProcContainer("agent-batch-runner:test")
+      .withNetwork(network)
+      .withSecurityOpt("seccomp=unconfined", "apparmor=unconfined")
+      .withEnvironment({
+        HUB_URL: "http://hub:8787",
+        RUNNER_REGISTRATION_KEY: key,
+        // Pi needs a model it knows and a key for its provider; no job runs here.
+        RUNNER_MODEL_PROVIDER: "anthropic",
+        RUNNER_MODEL_ID: "claude-haiku-4-5",
+        ANTHROPIC_API_KEY: "not a key",
+      })
+      .start();
+    // A Runner registers under its host's name, which Docker makes the start of the container's ID.
+    await expect
+      .poll(() => owner.runners.list(), { timeout: 30_000 })
+      .toMatchObject([{ name: runner.getId().slice(0, 12) }]);
   });
 });
