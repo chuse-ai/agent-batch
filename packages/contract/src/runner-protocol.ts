@@ -43,20 +43,18 @@ export function selectProtocolVersion(offered: string | null): string | undefine
 }
 
 /**
- * What the hub wants done with a placement, which only ever moves forward: run, then pause or cancel,
- * then delete. Resuming a job is a new placement. A delete asks the Runner to delete the files of a
- * job the hub has deleted, under the job's last placement, and comes without the job.
+ * What the hub wants done with a run, which only ever moves forward: run, then pause or
+ * cancel. Resuming a job is a new run.
  */
-export const intentSchema = z.enum(["run", "pause", "cancel", "delete"]);
+export const intentSchema = z.enum(["run", "pause", "cancel"]);
 export type Intent = z.infer<typeof intentSchema>;
 
-/** One placement of a job on the Runner: the job and the generation of its placement. */
-const placementRefSchema = z.object({
-  jobId: jobIdSchema,
-  /** Counts the job's placements from 1; a job placed again, such as after a pause, gets the next. */
-  generation: z.int(),
-});
-export type PlacementRef = z.infer<typeof placementRefSchema>;
+/**
+ * One run of a job on the Runner: the job's stay there, under the ID the hub gave it when it
+ * placed the job there or resumed it. Its reports apply only while it is the job's current one.
+ */
+const runRefSchema = z.object({ jobId: jobIdSchema, runId: z.uuid() });
+export type RunRef = z.infer<typeof runRefSchema>;
 
 /**
  * Where the hub's copy of a job's journal ends: the ID of the last record it has stored, 0 before
@@ -73,28 +71,32 @@ export const jobContentSchema = z.object({
 export type JobContent = z.infer<typeof jobContentSchema>;
 
 /**
- * What the Runner is to do with one job. The job's content comes only with a placement the Runner
- * said it does not hold and is to run, so a sync repeats placements but not jobs.
+ * What the Runner is to do with one job. The job's content comes only with a run the Runner
+ * said it does not hold and is to run, so a sync repeats runs but not jobs.
  */
-const placementSchema = z.object({
-  ...placementRefSchema.shape,
+const runSchema = z.object({
+  ...runRefSchema.shape,
   intent: intentSchema,
   job: z.optional(jobContentSchema),
   /** The hub's position in the job's journal, which the Runner reads after. */
   position: positionSchema,
 });
-export type Placement = z.infer<typeof placementSchema>;
+export type Run = z.infer<typeof runSchema>;
 
-/** The hub's answer to a sync or a report: the full desired state of the Runner's jobs. */
+/**
+ * The hub's answer to a sync or a report: the full desired state of the Runner's jobs, and the
+ * deleted jobs whose files it is to delete from its host, every run's.
+ */
 export const desiredStateSchema = z.object({
-  placements: z.array(placementSchema),
+  runs: z.array(runSchema),
+  deletions: z.array(jobIdSchema),
 });
 export type DesiredState = z.infer<typeof desiredStateSchema>;
 
 /** What the Runner tells the hub about its load in every sync and report. */
 const loadSchema = z.object({
-  /** The placements the Runner holds, running or not. */
-  held: z.array(placementRefSchema),
+  /** The runs the Runner holds, running or not. */
+  held: z.array(runRefSchema),
   /** How many more jobs the Runner can take. */
   free: z.int().check(z.nonnegative()),
 });
@@ -116,11 +118,11 @@ export const JOB_CANCELLED = "agent-batch.job.cancelled";
 
 /**
  * What a start, a recovery or a resume records: when, by the Runner's clock in Unix milliseconds as
- * pi-ai's messages keep time, under which placement, and by which Runner.
+ * pi-ai's messages keep time, under which run, and by which Runner.
  */
 export const jobOpeningSchema = z.object({
   timestamp: z.number(),
-  generation: z.int(),
+  runId: z.uuid(),
   runnerVersion: z.string(),
 });
 export type JobOpening = z.infer<typeof jobOpeningSchema>;
@@ -225,21 +227,20 @@ export const jobActivitySchema = z.array(conversationActivitySchema);
 export type JobActivity = z.infer<typeof jobActivitySchema>;
 
 /**
- * One job's report: the placement, the intent the Runner applied, the journal's records after the
- * hub's position, and the job's usage and activity. A placement the Runner never started has no
+ * One job's report: the run, the intent the Runner applied, the journal's records after the
+ * hub's position, and the job's usage and activity. A run the Runner never started has no
  * journal, so its pause or cancel writes nothing: it reports `pause` or `cancel` with no events,
  * and the hub holds or ends the job itself. The report is read fresh from the journal after the
  * position the hub last gave, so a report repeated after a lost answer starts from the same position.
- * The job's start and end are entries among its events, so they reach the hub with them. A `delete`
- * report, with no events, says the deleted job's files are gone from the host.
+ * The job's start and end are entries among its events, so they reach the hub with them.
  *
- * The hub applies the usage when the Runner and the placement's generation match and neither total
+ * The hub applies the usage when the Runner and the job's current run match and neither total
  * is smaller than the one it stored. It applies the events, its position, the activity and a
  * failure only when `position` also matches its own, so a repeated report changes nothing.
  */
 const jobReportSchema = z
   .object({
-    ...placementRefSchema.shape,
+    ...runRefSchema.shape,
     intent: intentSchema,
     /** The hub's position the Runner read the journal after. */
     position: positionSchema,
@@ -251,7 +252,7 @@ const jobReportSchema = z
     activity: z.optional(jobActivitySchema),
     /**
      * When the job failed without its journal recording its end, as when the journal could not be
-     * opened or the Runner faulted. Sent until the hub drops the placement, but only with a report
+     * opened or the Runner faulted. Sent until the hub drops the run, but only with a report
      * that reaches the end of what the journal holds, or with no events when the job's journal never
      * held any, so the hub never ends a job without an entry its journal holds.
      */
@@ -280,7 +281,10 @@ export const runnerMethods = {
   },
   /** Asks for the desired state, offering the Runner's load; the hub places queued jobs on free slots. */
   sync: { params: loadSchema, result: desiredStateSchema },
-  /** Reports what became of placements, with the load, and gets the desired state back. */
+  /**
+   * Reports what became of runs, and of the deletions the hub asked for, with the load, and
+   * gets the desired state back.
+   */
   report: {
     params: z.object({
       ...loadSchema.shape,
@@ -293,6 +297,8 @@ export const runnerMethods = {
             "Each job appears once",
           ),
         ),
+      /** The deleted jobs whose files are gone from the host, until the hub stops listing them. */
+      deleted: z.array(jobIdSchema),
     }),
     result: desiredStateSchema,
   },

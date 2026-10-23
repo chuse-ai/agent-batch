@@ -42,7 +42,7 @@ export default interface JobTable {
 
   runnerId: ColumnType<RunnerId | null, RunnerId | null, RunnerId | null>;
 
-  generation: ColumnType<number, number | undefined, number>;
+  runId: ColumnType<string | null, string | null, string | null>;
 
   placedAt: ColumnType<Date | null, Date | string | null, Date | string | null>;
 

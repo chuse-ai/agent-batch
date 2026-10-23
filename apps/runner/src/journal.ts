@@ -48,7 +48,7 @@ export const RUNNER_VERSION: string = runnerPackage.version;
 
 /**
  * Written once, in the commit that creates the job's conversation, when its agent first starts: the
- * opening of the job's first placement.
+ * opening of the job's first run.
  */
 export const JobStarted = defineEntry<JobOpening>(JOB_STARTED);
 
@@ -56,39 +56,45 @@ export const JobStarted = defineEntry<JobOpening>(JOB_STARTED);
 export const JobRecovered = defineEntry<JobOpening>(JOB_RECOVERED);
 
 /**
- * Written once, as its opening, by a placement that carries on a job its journal already holds: a
+ * Written once, as its opening, by a run that carries on a job its journal already holds: a
  * job the hub resumed after a pause, a failure or a cancel.
  */
 export const JobResumed = defineEntry<JobOpening>(JOB_RESUMED);
 
-/** Written once per placement, as its closing, when the hub paused the job and the Runner stopped it. */
+/**
+ * Written once per run, as its closing, when the hub paused the job and the Runner
+ * stopped it.
+ */
 export const JobPaused = defineEntry<JobPause>(JOB_PAUSED);
 
-/** Written once per placement, as its closing, when the job's agent submitted an accepted result. */
+/** Written once per run, as its closing, when the job's agent submitted an accepted result. */
 export const JobSucceeded = defineEntry<JobSuccess>(JOB_SUCCEEDED);
 
-/** Written once per placement, as its closing, when the job's agent stopped without a result. */
+/** Written once per run, as its closing, when the job's agent stopped without a result. */
 export const JobFailed = defineEntry<JobEnding>(JOB_FAILED);
 
-/** Written once per placement, as its closing, when the hub cancelled the job and the Runner stopped it. */
+/**
+ * Written once per run, as its closing, when the hub cancelled the job and the Runner
+ * stopped it.
+ */
 export const JobCancelled = defineEntry<JobEnding>(JOB_CANCELLED);
 
 /**
- * The request IDs a placement writes its opening and its closing with, and by which a reopened
+ * The request IDs a run writes its opening and its closing with, and by which a reopened
  * journal finds them. pi keeps one submission per request ID (`admitSubmission`), so each is written
- * once per placement, also when a restarted Runner finds it; a job placed again, as after a resume,
- * opens and closes again.
+ * once per run, also when a restarted Runner finds it; a job's next run, as after a
+ * resume, opens and closes again.
  */
-export function openingRequest(generation: number): string {
-  return `agent-batch.job.opening:${generation}`;
+export function openingRequest(runId: string): string {
+  return `agent-batch.job.opening:${runId}`;
 }
-export function closingRequest(generation: number): string {
-  return `agent-batch.job.closing:${generation}`;
+export function closingRequest(runId: string): string {
+  return `agent-batch.job.closing:${runId}`;
 }
 
 /**
  * Appends an entry to `conversationId` in the commit `tx` under `requestId`, as a passive write's
- * submission records it, for a placement's opening: written in the commit that creates the
+ * submission records it, for a run's opening: written in the commit that creates the
  * conversation, where pi forbids reading its tables, or with the reads that decide it.
  */
 export async function appendUnderRequest(
@@ -108,18 +114,18 @@ export async function appendUnderRequest(
 }
 
 /**
- * Writes the placement `generation`'s closing, the job's end or its pause, to `conversation` as a
- * `closing` entry with `data`, once: a placement that has closed keeps its closing. A write of only
- * a kind and data is appended at once, also while a run is working.
+ * Writes the run `runId`'s closing, the job's end or its pause, to `conversation` as
+ * a `closing` entry with `data`, once: a run that has closed keeps its closing. A write of
+ * only a kind and data is appended at once, also while a run is working.
  */
 export async function submitClosing<D extends JobSuccess | JobEnding | JobPause>(
   conversation: Conversation,
-  generation: number,
+  runId: string,
   closing: Entry<D>,
   data: NoInfer<D>,
 ): Promise<void> {
   await conversation.submit(
-    { type: "write", entry: { kind: closing.kind, data }, requestId: closingRequest(generation) },
+    { type: "write", entry: { kind: closing.kind, data }, requestId: closingRequest(runId) },
     BACKGROUND_CONTEXT,
   );
 }

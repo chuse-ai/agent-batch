@@ -14,16 +14,13 @@ import type { OrganizationId } from "./Organization.js";
 import type { RunnerId } from "./Runner.js";
 
 /** Identifier type for agent_batch.usageRecord */
-export type UsageRecordJobId = Brand.Branded<string, "agent_batch.usageRecord">;
-
-/** Identifier type for agent_batch.usageRecord */
-export type UsageRecordGeneration = Brand.Branded<number, "agent_batch.usageRecord">;
+export type UsageRecordId = Brand.Branded<number, "agent_batch.usageRecord">;
 
 /** Represents the table agent_batch.usageRecord */
 export default interface UsageRecordTable {
-  jobId: ColumnType<JobId, JobId, JobId>;
+  id: ColumnType<UsageRecordId, never, never>;
 
-  generation: ColumnType<number, number, number>;
+  jobId: ColumnType<JobId, JobId, JobId>;
 
   organizationId: ColumnType<OrganizationId, OrganizationId, OrganizationId>;
 

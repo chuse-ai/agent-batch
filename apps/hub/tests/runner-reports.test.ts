@@ -30,9 +30,9 @@ function carriesSuccess(report: JobReport) {
 // made to do either, so these run a Runner against a stand-in that keeps the job's position and
 // applies a report as the real one does, only from that position.
 
-const PLACEMENT = {
+const RUN = {
   jobId: randomUUID(),
-  generation: 1,
+  runId: randomUUID(),
   intent: "run" as const,
   job: { prompt: "hello", inputFiles: {}, resultContract: { schema: {} } },
 };
@@ -67,7 +67,7 @@ async function runAgainstStandIn(
           return reply({ syncIntervalMs: 200, reportIntervalMs: 50 });
         }
         if (request.method === "sync") {
-          return reply({ placements: [{ ...PLACEMENT, position: position() }] });
+          return reply({ runs: [{ ...RUN, position: position() }], deletions: [] });
         }
         if (request.method !== "report") return;
         const { jobs } = z.parse(runnerMethods.report.params, request.params);
@@ -112,7 +112,10 @@ test("a report the hub never answered is read again on the next connection", asy
         applied.push(report);
         position = report.events.at(-1)?.id ?? position;
       }
-      return { placements: applied.some(carriesSuccess) ? [] : [{ ...PLACEMENT, position }] };
+      return {
+        runs: applied.some(carriesSuccess) ? [] : [{ ...RUN, position }],
+        deletions: [],
+      };
     },
     () => position,
     () => applied.some(carriesSuccess),
@@ -135,9 +138,9 @@ test("a job whose end the hub lost after dropping it ends again with the same ev
         // The hub stores the first end and drops the placement. Its database then goes back to
         // before that end, as a failover loses the last transaction, so it lists the job again.
         if (ends.length === 1) position = report.position;
-        return { placements: [] };
+        return { runs: [], deletions: [] };
       }
-      return { placements: [{ ...PLACEMENT, position }] };
+      return { runs: [{ ...RUN, position }], deletions: [] };
     },
     () => position,
     () => ends.length === 2,

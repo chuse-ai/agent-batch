@@ -18,9 +18,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .execute();
   await schema
     .createTable("usageRecord")
+    // Ends are written one at a time under their job's row lock, so a job's records follow their IDs.
+    .addColumn("id", "bigint", (col) => col.primaryKey().generatedAlwaysAsIdentity())
     .addColumn("jobId", "uuid", (col) => col.notNull())
-    // The placement that ended, 0 for a job that ended before any.
-    .addColumn("generation", "integer", (col) => col.notNull())
     .addColumn("organizationId", "text", (col) => col.notNull())
     .addColumn("status", sql`agent_batch."jobStatus"`, (col) => col.notNull())
     // Null unless the end has a reason, as a job its Runner's removal ended has. Read by a deleted
@@ -52,7 +52,6 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     // an admin reads, to show whether a deleted job's files left its host.
     .addColumn("hostDeletionOutcome", sql`agent_batch."hostDeletionOutcome"`)
     .addColumn("hostDeletionOutcomeAt", "timestamptz")
-    .addPrimaryKeyConstraint("usageRecord_pkey", ["jobId", "generation"])
     .addForeignKeyConstraint(
       "usageRecord_organizationId_fkey",
       ["organizationId"],
@@ -74,8 +73,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("jobId", "uuid", (col) => col.primaryKey())
     .addColumn("organizationId", "text", (col) => col.notNull())
     .addColumn("runnerId", "text", (col) => col.notNull())
-    // The job's last placement, under which the Runner holds its files.
-    .addColumn("generation", "integer", (col) => col.notNull())
+    // The Usage record the delete marked, where the Runner's confirmation records what became of
+    // the files.
+    .addColumn("usageRecordId", "bigint", (col) => col.notNull())
     // When the job was deleted, by the hub's clock.
     .addColumn("requestedAt", "timestamptz", (col) => col.notNull())
     // The deleted job as it reads while the deletion waits, which can outlast its Usage records'
@@ -100,6 +100,12 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .createIndex("jobDeletion_runnerId_idx")
     .on("jobDeletion")
     .column("runnerId")
+    .execute();
+  // A job's Usage records in the order of their ends, for its latest, which a delete marks.
+  await schema
+    .createIndex("usageRecord_jobId_id_idx")
+    .on("usageRecord")
+    .columns(["jobId", "id"])
     .execute();
   // A Runner's removal lists its deleted jobs whose files were abandoned.
   await schema

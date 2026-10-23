@@ -21,8 +21,8 @@ A named credential the organization stores with the hosts it may be sent to; a j
 _Avoid_: API key, token, credential, environment variable
 
 **Job**:
-One self-contained piece of agent work: a prompt, its input files, and a result contract. Runs once, unattended; a caller may pause, resume or cancel it.
-_Avoid_: task, run, session, conversation
+One self-contained piece of agent work: a prompt, its input files, and a result contract. It succeeds at most once, unattended, possibly over several runs; a caller may pause, resume or cancel it.
+_Avoid_: task, session, conversation
 
 **Label**:
 A key and value attached to a job when it is submitted, such as `customer = acme`, used to find jobs, group them, and attribute their cost.
@@ -110,6 +110,10 @@ _Avoid_: node, server, box
 **Placement**:
 The hub's choice of runner for a job: hosts with free capacity first, Cloudflare when they are full.
 _Avoid_: scheduling, routing, spill-over
+
+**Run**:
+One stretch of a job running on a runner. It begins with one input, the job's prompt or a resume's note, when the hub places the job there or resumes it, and ends when the job pauses or ends, a decided stop, or when the hub drops it; a restart of its runner does not end it. Its ID fences what the runner reports, so nothing a past run does touches the next.
+_Avoid_: execution, invocation
 
 **Extension**:
 A Pi extension listed in configuration and bundled into runners at deploy time, changing how the agent loop behaves.

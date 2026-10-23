@@ -49,7 +49,6 @@ const MAX_PAGE_BYTES = 1024 * 1024;
 
 /** What a job's Usage record copies from the job's row at its end, beside the job's ID. */
 export const USAGE_COPIED_COLUMNS = [
-  "generation",
   "organizationId",
   "status",
   "reason",
@@ -79,8 +78,8 @@ const PROGRESS_COLUMNS = ["totalTokens", "costUsd", "activity"] as const;
 /**
  * A job as the API reports it: its result only once it has succeeded, its cost as the decimal text
  * Postgres gives for `numeric`, its activity only while it runs, and a control only while it waits
- * for the job's Runner. The report that starts a placement carries its first activity, so a job
- * running again never shows the last placement's.
+ * for the job's Runner. The report that starts a run carries its first activity, so a job
+ * running again never shows the last run's.
  */
 function toApiJob(
   job: Pick<JobRow, (typeof JOB_COLUMNS)[number]> &
@@ -266,7 +265,7 @@ export type Control = "pause" | "resume" | "cancel";
  */
 type ControlledJob = Pick<
   JobRow,
-  "status" | "runnerId" | "generation" | "placedAt" | "startedAt" | "pendingControl"
+  "status" | "runnerId" | "placedAt" | "startedAt" | "pendingControl"
 > & { runnerExists: boolean };
 
 /**
@@ -292,15 +291,20 @@ function decide(control: Control, job: ControlledJob, now: Date): Decision {
   // The job's Runner, told to sync now when a control waits for it or the job resumes there.
   const toItsRunner = job.runnerId === null ? {} : { hint: job.runnerId };
   // A resumed job that started carries on from its journal, which only its Runner holds, as a new
-  // placement there (ADR 0026), sent when that Runner next syncs; one that never started has no
-  // work to carry on.
+  // run there (ADR 0026), sent when that Runner next syncs; one that never started has
+  // no work to carry on.
   const resumeOnItsRunner: Decision = !job.runnerExists
     ? refused("The job's Runner was removed, so the work its host holds cannot be carried on")
     : {
         kind: "changed",
         set: {
           status: "queued",
-          generation: job.generation + 1,
+          // A resume starts a new run. A pause is often the last thing that happens to a job, so it
+          // aborts the step in flight and records what it cut off, rather than leaving it pending,
+          // which would keep that step's answer and cost out of a job never resumed for good
+          // (ADR 0028); a resume then answers a new input, the note, and the paused run's late
+          // reports must not touch it.
+          runId: crypto.randomUUID(),
           placedAt: null,
           endedAt: null,
           result: null,
@@ -384,7 +388,6 @@ export function controlJob(jobId: JobId, control: Control) {
             ...JOB_COLUMNS.map((column) => `job.${column}` as const),
             ...PROGRESS_COLUMNS,
             "job.runnerId",
-            "job.generation",
             "job.placedAt",
             // The Runner's row is locked, so a removal of the Runner waits for this control and then
             // ends the job a resume queued on it, or comes first, and the resume is refused.
@@ -544,7 +547,6 @@ export function deleteJob(jobId: JobId) {
           .select((eb) => [
             "job.status",
             "job.runnerId",
-            "job.generation",
             // A removed Runner's host is beyond the hub's reach, so its files are abandoned at once.
             // The Runner's row is locked while the deletion is recorded, so a removal of the
             // Runner sees it and abandons it in turn.
@@ -593,8 +595,13 @@ export function deleteJob(jobId: JobId) {
                         hostDeletionOutcomeAt: now,
                       },
               )
-              .where("jobId", "=", jobId)
-              .where("generation", "=", job.generation)
+              // The job's latest record: a job's records follow their IDs.
+              .where("id", "=", (eb) =>
+                eb
+                  .selectFrom("usageRecord")
+                  .select((max) => max.fn.max("id").as("id"))
+                  .where("jobId", "=", jobId),
+              )
               .returning([
                 "jobId",
                 "status",
@@ -605,7 +612,7 @@ export function deleteJob(jobId: JobId) {
                 "jobTotalTokens as totalTokens",
                 "jobCostUsd as costUsd",
                 "organizationId",
-                "generation",
+                "id",
               ]),
           )
           .with("deletion", (qb) =>
@@ -614,7 +621,7 @@ export function deleteJob(jobId: JobId) {
               .columns([
                 ...DELETED_JOB_COLUMNS,
                 "organizationId",
-                "generation",
+                "usageRecordId",
                 "runnerId",
                 "requestedAt",
               ])
@@ -625,7 +632,7 @@ export function deleteJob(jobId: JobId) {
                   .select([
                     ...DELETED_JOB_COLUMNS.map((column) => `usage.${column}` as const),
                     "usage.organizationId",
-                    "usage.generation",
+                    "usage.id as usageRecordId",
                     "runner.id as runnerId",
                     eb.val(now).as("requestedAt"),
                   ]),
@@ -635,7 +642,7 @@ export function deleteJob(jobId: JobId) {
           .with("gone", (qb) => qb.deleteFrom("job").where("id", "=", jobId).returning("id"))
           .selectFrom("usage")
           .select(DELETED_JOB_COLUMNS)
-          // Every end writes the Usage record of the job's generation, so a finished job has one.
+          // Every end writes a Usage record, so a finished job has one.
           .executeTakeFirstOrThrow();
         return {
           deleted: toDeletedJob(snapshot, now, job.runnerExists ? now : null),
@@ -751,13 +758,12 @@ export function deleteRunnerWithItsWork(runnerId: RunnerId) {
             qb
               .deleteFrom("jobDeletion")
               .where("runnerId", "=", runnerId)
-              .returning(["jobId", "generation"]),
+              .returning("usageRecordId"),
           )
           .updateTable("usageRecord as u")
           .from("abandoned as a")
           .set({ hostDeletionOutcome: "abandoned", hostDeletionOutcomeAt: now })
-          .whereRef("u.jobId", "=", "a.jobId")
-          .whereRef("u.generation", "=", "a.generation")
+          .whereRef("u.id", "=", "a.usageRecordId")
           .execute();
         // Its jobs not yet deleted, and its deleted jobs whose files were abandoned, here or by a
         // delete that found the Runner gone.

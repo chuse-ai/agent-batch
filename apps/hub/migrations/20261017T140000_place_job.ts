@@ -1,6 +1,6 @@
 import { type Kysely, sql } from "kysely";
 
-// A job's current placement and what came of it: the Runner, the placement's generation (ADR 0026),
+// A job's current run and what came of it: the Runner, the run's ID (ADR 0026),
 // when its agent's loop started and ended, and its result. The Runner is copied, not referenced, so
 // a removed Runner stays on the jobs it ran: it identifies where they ran. The loop's times
 // are the Runner's clock, as its reports give them, since a report may arrive a sync interval late;
@@ -11,9 +11,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await schema
     .alterTable("job")
     .addColumn("runnerId", "text")
-    // 0 until the job is first placed; each placement raises it by one.
-    .addColumn("generation", "integer", (col) => col.notNull().defaultTo(0))
-    // The hub's clock when the placement was sent to its Runner, null until then; the deadline for
+    // The job's current stay on a Runner, null until it is first placed; a resume mints the next.
+    .addColumn("runId", "uuid")
+    // The hub's clock when the run was sent to its Runner, null until then; the deadline for
     // the Runner to confirm it reads it.
     .addColumn("placedAt", "timestamptz")
     .addColumn("startedAt", "timestamptz")
@@ -54,7 +54,7 @@ export async function down(db: Kysely<unknown>): Promise<void> {
     .dropColumn("endedAt")
     .dropColumn("startedAt")
     .dropColumn("placedAt")
-    .dropColumn("generation")
+    .dropColumn("runId")
     .dropColumn("runnerId")
     .execute();
 }

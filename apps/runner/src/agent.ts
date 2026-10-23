@@ -127,7 +127,7 @@ export function journalExists(
  * Writes the Input files into the Workspace's `inputs/` folder, once, as the job's conversation is
  * created: a job recovered after its Runner restarts keeps the agent's edits to them. Their
  * names are flat file names valid on every platform: the contract's schema checked them again
- * when the placement reached the Runner, so none leaves the folder.
+ * when the run reached the Runner, so none leaves the folder.
  */
 async function writeInputFiles(workspace: string, files: JobContent["inputFiles"]) {
   const inputs = path.join(workspace, "inputs");
@@ -204,11 +204,11 @@ function submitResultTool(schema: Record<string, unknown>) {
  * the first time, or that it was recovered: a journal that already holds the job, unless
  * `openedBefore` says this process opened it, is one the Runner left before it restarted, since the
  * hub places a started job on no other Runner, and not here again while it runs. A job whose
- * placement has ended is not recovered.
+ * run has ended is not recovered.
  *
  * Gives back the job's run, which runs its agent until it submits an accepted result or ends without
  * one, and records the job's end in the journal. Interrupting the run, as a Runner that stops, a
- * placement the hub drops, a pause and a cancel do, aborts none of the job's work: the caller's
+ * run the hub drops, a pause and a cancel do, aborts none of the job's work: the caller's
  * scope then closes the journal and then the sandbox, which cuts the work off and leaves it pending
  * in the journal, so the job carries on from it when it is opened again, unless recording a pause or
  * cancel settles it (`recordStop`).
@@ -217,7 +217,7 @@ export function openJob(
   jobId: string,
   job: JobContent,
   options: AgentSettings & {
-    generation: number;
+    runId: string;
     openedBefore: boolean;
     journalOpened: (journal: Harness) => void;
   },
@@ -282,7 +282,7 @@ export function openJob(
     options.journalOpened(harness);
     const opening = () => ({
       timestamp: Date.now(),
-      generation: options.generation,
+      runId: options.runId,
       runnerVersion: RUNNER_VERSION,
     });
     let created = false;
@@ -297,7 +297,7 @@ export function openJob(
         // The commit that creates the job's conversation, so the start is recorded exactly once.
         init: async (tx, conversationId) => {
           created = true;
-          await appendUnderRequest(tx, conversationId, openingRequest(options.generation), () =>
+          await appendUnderRequest(tx, conversationId, openingRequest(options.runId), () =>
             tx.appendEntry(JobStarted, conversationId, { data: opening() }),
           );
           await writeInputFiles(paths.workspace, job.inputFiles);
@@ -305,67 +305,71 @@ export function openJob(
       }),
     );
     conversation = root;
-    // A placement that opens a journal already holding the job either carries on its own placement,
-    // left when the Runner restarted, or resumes the job as a new one. A placement that has
+    // A run that opens a journal already holding the job either carries on itself, left when
+    // the Runner restarted, or resumes the job as a new run. A run that has
     // closed is not recovered, nor run again, also when its pause or cancel was recorded before it
-    // opened: the stop settled its work, and only a new placement carries the job on. Whether it is
+    // opened: the stop settled its work, and only a new run carries the job on. Whether it is
     // a resume, and whether it has closed.
-    const { resumed, closed } = created
-      ? { resumed: false, closed: false }
-      : yield* Effect.promise(() =>
-          root.commit(async (tx) => {
-            // Reads first: pi forbids reading the tables after a commit's first write.
-            const opened = await tx.submissionByRequest(
-              root.id,
-              openingRequest(options.generation),
+    const closed =
+      !created &&
+      (yield* Effect.promise(() =>
+        root.commit(async (tx) => {
+          // Reads first: pi forbids reading the tables after a commit's first write.
+          const opened = await tx.submissionByRequest(root.id, openingRequest(options.runId));
+          if (await tx.submissionByRequest(root.id, closingRequest(options.runId))) {
+            return true;
+          }
+          if (!opened) {
+            await appendUnderRequest(tx, root.id, openingRequest(options.runId), () =>
+              tx.appendEntry(JobResumed, root.id, { data: opening() }),
             );
-            if (await tx.submissionByRequest(root.id, closingRequest(options.generation))) {
-              return { resumed: false, closed: true };
-            }
-            if (!opened) {
-              await appendUnderRequest(tx, root.id, openingRequest(options.generation), () =>
-                tx.appendEntry(JobResumed, root.id, { data: opening() }),
-              );
-              return { resumed: true, closed: false };
-            }
-            const resumedBefore =
-              opened.entry !== undefined &&
-              (await tx.entry(JobResumed, opened.entry)) !== undefined;
-            if (!options.openedBefore) {
-              await tx.appendEntry(JobRecovered, root.id, { data: opening() });
-            }
-            return { resumed: resumedBefore, closed: false };
-          }, context),
-        );
+          } else if (!options.openedBefore) {
+            await tx.appendEntry(JobRecovered, root.id, { data: opening() });
+          }
+          return false;
+        }, context),
+      ));
     // pi's plain abort leaves background work, such as a compaction, running, so this abort includes
     // it and waits until all of it has stopped: nothing then adds to the journal after the job's end
     // or runs on in its sandbox.
     const stopWork = Effect.promise(() => root.abort(context, { background: true }));
     /**
-     * Submits the input this placement's run answers, or finds it submitted before by its request
-     * ID, which makes each happen once, also when a restarted Runner opens the same journal again:
-     * the job's Prompt, also on a resume when the job stopped before submitting it, as while its
-     * Input files were being written; otherwise, on a resume, a short note asking the agent to carry
-     * on, as a pi user types the next message after Esc, since the job's pause or cancel or
-     * pi's failure settled its work. Work a Runner's restart left pending carries on from the input
-     * it was answering: the cut-off model call is made again, and a cut-off tool call gets an
-     * `interrupted` result.
+     * The input this run answers, the same each time the run opens, as when a restarted
+     * Runner opens the journal again: the continuation note it submitted, if any; else an input
+     * still waiting for its answer, which it carries on, as one a failed run left; else the
+     * job's Prompt, which it submits if the journal has none and which is its own when it entered the
+     * conversation after the run's opening; else, on a resume, a short note asking the agent
+     * to carry on, as a pi user types the next message after Esc, since the job's pause or
+     * cancel or pi's failure settled its work. Each is submitted once under its request ID. Work a
+     * Runner's restart left pending carries on from the input it was answering: the cut-off model
+     * call is made again, and a cut-off tool call gets an `interrupted` result.
      */
     const submitInput = async (): Promise<Submission> => {
-      const prompt = await root.submit(
-        { type: "input", content: job.prompt, requestId: `job:${jobId}` },
+      const promptRequest = `job:${jobId}`;
+      const noteRequest = `job:${jobId}:resume:${options.runId}`;
+      const submit = (content: string, requestId: string) =>
+        root.submit({ type: "input", content, requestId }, context);
+      const { note, prompt, opened } = await root.commit(
+        async (tx) => ({
+          note: await tx.submissionByRequest(root.id, noteRequest),
+          prompt: await tx.submissionByRequest(root.id, promptRequest),
+          opened: await tx.submissionByRequest(root.id, openingRequest(options.runId)),
+        }),
         context,
       );
-      const { status } = await prompt.status(context);
-      if (!resumed || status === "queued" || status === "placed") return prompt;
-      return await root.submit(
-        {
-          type: "input",
-          content: CONTINUATION_NOTE,
-          requestId: `job:${jobId}:resume:${options.generation}`,
-        },
-        context,
+      if (note) return submit(CONTINUATION_NOTE, noteRequest);
+      const { submissions } = await harness.inspect(context);
+      const waiting = submissions.find(
+        (submission) => submission.type === "input" && submission.conversationId === root.id,
       );
+      const carried = waiting && (await harness.submission(waiting.id, context));
+      if (carried) return carried;
+      const promptIsOwn =
+        !prompt ||
+        (prompt.entry !== undefined && opened?.entry !== undefined && prompt.entry > opened.entry);
+      return promptIsOwn
+        ? submit(job.prompt, promptRequest)
+        : submit(CONTINUATION_NOTE, noteRequest);
     };
     const run = Effect.gen(function* () {
       if (closed) return;
@@ -391,8 +395,8 @@ export function openJob(
       const timestamp = Date.now();
       yield* Effect.promise(() =>
         result === undefined
-          ? submitClosing(root, options.generation, JobFailed, { timestamp })
-          : submitClosing(root, options.generation, JobSucceeded, { timestamp, result }),
+          ? submitClosing(root, options.runId, JobFailed, { timestamp })
+          : submitClosing(root, options.runId, JobSucceeded, { timestamp, result }),
       );
     }).pipe(
       // However the run ends, its sandbox goes, and with it every process the job left running. A
@@ -410,20 +414,20 @@ export function openJob(
 export type Stop = Extract<Intent, "pause" | "cancel">;
 
 /**
- * Records the pause or cancel `intent` of the job `jobId`'s placement `generation`, once its
+ * Records the pause or cancel `intent` of the job `jobId`'s run `runId`, once its
  * run has been interrupted. A pause or cancel is a decision about the job, so it settles the work
  * the interrupt left pending, as pi's Esc does (ADR 0028): opens the job's journal, where pi runs
  * nothing until asked to, aborts that work, which pi settles without running it, writing the
- * cut-off answer and tool calls into the conversation with their usage, and writes the placement's
+ * cut-off answer and tool calls into the conversation with their usage, and writes the run's
  * closing, the job's pause or its cancel, so that it is the journal's last entry. A job whose
  * accepted result the interrupted run had not yet recorded as its end succeeded, since completion
- * ends a run (ADR 0009); a placement that has already closed keeps its closing. Gives back the
+ * ends a run (ADR 0009); a run that has already closed keeps its closing. Gives back the
  * journal, open until the caller's scope closes, or nothing when the job has no journal on this
  * Runner: a job its Runner never started has nothing to record.
  */
 export function recordStop(
   jobId: string,
-  generation: number,
+  runId: string,
   intent: Stop,
   settings: AgentSettings,
 ): Effect.Effect<Harness | undefined, PlatformError.PlatformError, Scope.Scope> {
@@ -456,11 +460,11 @@ export function recordStop(
     const timestamp = Date.now();
     yield* Effect.promise(() => {
       if (result !== undefined) {
-        return submitClosing(root, generation, JobSucceeded, { timestamp, result });
+        return submitClosing(root, runId, JobSucceeded, { timestamp, result });
       }
       return intent === "cancel"
-        ? submitClosing(root, generation, JobCancelled, { timestamp })
-        : submitClosing(root, generation, JobPaused, { timestamp });
+        ? submitClosing(root, runId, JobCancelled, { timestamp })
+        : submitClosing(root, runId, JobPaused, { timestamp });
     });
     return journal;
   });

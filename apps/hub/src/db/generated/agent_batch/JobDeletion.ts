@@ -9,6 +9,7 @@ import type { default as JobReason } from "./JobReason.js";
 import type { default as JobStatus } from "./JobStatus.js";
 import type { OrganizationId } from "./Organization.js";
 import type { RunnerId } from "./Runner.js";
+import type { UsageRecordId } from "./UsageRecord.js";
 
 /** Identifier type for agent_batch.jobDeletion */
 export type JobDeletionJobId = Brand.Branded<string, "agent_batch.jobDeletion">;
@@ -21,7 +22,7 @@ export default interface JobDeletionTable {
 
   runnerId: ColumnType<RunnerId, RunnerId, RunnerId>;
 
-  generation: ColumnType<number, number, number>;
+  usageRecordId: ColumnType<UsageRecordId, UsageRecordId, UsageRecordId>;
 
   requestedAt: ColumnType<Date, Date | string, Date | string>;
 

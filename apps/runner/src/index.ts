@@ -416,10 +416,13 @@ function connectAndSync(
       for (;;) {
         const prompted = yield* context.syncNow.close;
         const all = Date.now() >= syncAt;
-        const { jobs, more } = yield* context.jobs.readAndRecordReports(MAX_REPORT_BYTES, all);
+        const { jobs, deleted, more } = yield* context.jobs.readAndRecordReports(
+          MAX_REPORT_BYTES,
+          all,
+        );
         const load = context.jobs.load();
-        if (jobs.length > 0) {
-          context.jobs.reconcile(yield* request("report", { ...load, jobs }));
+        if (jobs.length > 0 || deleted.length > 0) {
+          context.jobs.reconcile(yield* request("report", { ...load, jobs, deleted }));
         } else if (prompted || all) {
           context.jobs.reconcile(yield* request("sync", load));
         }

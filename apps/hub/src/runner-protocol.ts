@@ -22,11 +22,10 @@ import {
   type JobUsage,
   type JsonValue,
   type Load,
-  type Placement,
 } from "contract";
 import { type Context, Effect } from "effect";
 import { type Expression, type ExpressionBuilder, sql } from "kysely";
-import { jsonBuildObject } from "kysely/helpers/postgres";
+import { jsonArrayFrom, jsonBuildObject } from "kysely/helpers/postgres";
 import * as z from "zod/mini";
 
 import { Db, DB_SCHEMA } from "./db/database.ts";
@@ -45,7 +44,7 @@ import { recordRunnerHello, recordRunnerSeen, SYNC_INTERVAL_MS } from "./runners
 // state: every queued or running job placed on it, with the content of those it does not hold,
 // queued jobs newly placed on its free slots, and the deletions of deleted jobs' files it owes.
 
-/** The statuses that close a placement: the job's end, or its pause. */
+/** The statuses that close a run: the job's end, or its pause. */
 const CLOSING_STATUSES: JobStatus[] = [...FINAL_STATUSES, "paused"];
 
 /** What a Runner's message is handled with. */
@@ -66,14 +65,17 @@ export interface RunnerMessageContext {
 type Usage = JobUsage["models"][string];
 
 /** Runs `effect` with the context's services. */
-function run<A, E>(context: RunnerMessageContext, effect: Effect.Effect<A, E, Db>): Promise<A> {
+function runWithServices<A, E>(
+  context: RunnerMessageContext,
+  effect: Effect.Effect<A, E, Db>,
+): Promise<A> {
   return Effect.runPromise(Effect.provide(effect, context.services));
 }
 
 /** A job's report as the statement below reads it, with what the hub derives from its events. */
 interface ReportRow {
   jobId: JobId;
-  generation: number;
+  runId: string;
   position: number;
   /** The events as JSON Lines, each line ending in `\n`, or null when there are none. */
   events: string | null;
@@ -99,10 +101,10 @@ interface ReportRow {
 }
 
 function reportRow(report: JobReport, now: Date): ReportRow {
-  const { jobId, generation, position, events, usage, activity } = report;
+  const { jobId, runId, position, events, usage, activity } = report;
   const row = {
     jobId: JobId(jobId),
-    generation,
+    runId,
     position,
     // `JSON.stringify` writes no raw newline inside a string, so each event is one line.
     events: events.length > 0 ? events.map((event) => `${JSON.stringify(event)}\n`).join("") : null,
@@ -185,14 +187,15 @@ function jsonRows<Row extends object>(eb: ExpressionBuilder<Database, never>, ro
 }
 
 /**
- * Applies the Runner's reports in one statement, each to the job placed on the Runner under the
- * reported generation. A job's usage applies when neither total is smaller than the stored
- * one, as pi's totals only grow. Its events, its position, its activity and its status apply only
- * when the report's position is the hub's, so a report repeated after a lost answer changes
- * nothing, and only while the job has not ended, so a page of its events that says no more will
- * come stays true; the answer then gives the Runner the position to read after. An end clears the
- * activity. The job's progress row is locked while the statement reads it, so two reports of one
- * job apply one after the other.
+ * Applies the Runner's reports in one statement, each to its job while the reported run is
+ * the job's current one on the Runner. A job's usage applies when neither total is
+ * smaller than the stored one, as pi's totals only grow. Its events, its position, its activity and
+ * its status apply only when the report's position is the hub's, so a report repeated after a lost
+ * answer changes nothing, and only while the job is queued or running, the statuses a report may
+ * move it from, so a page of its events that says no more will come stays true, and a paused
+ * run's later reports change nothing but its usage; the answer then gives the Runner the
+ * position to read after. An end clears the activity. The job's progress row is locked while the
+ * statement reads it, so two reports of one job apply one after the other.
  */
 function applyReports(runnerId: RunnerId, reports: JobReport[]) {
   const jobStatus = sql.id(DB_SCHEMA, "jobStatus");
@@ -216,7 +219,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
                   eb.ref("row.value", "->").key(name);
                 return [
                   eb.cast<JobId>(field("jobId"), "uuid").as("jobId"),
-                  eb.cast<number>(field("generation"), "integer").as("generation"),
+                  eb.cast<string>(field("runId"), "uuid").as("runId"),
                   eb.cast<number>(field("position"), "bigint").as("position"),
                   eb.cast<string | null>(field("events"), "text").as("events"),
                   eb.cast<number | null>(field("firstId"), "bigint").as("firstId"),
@@ -232,7 +235,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
                 ];
               }),
           )
-          // Each report of a job placed on the Runner under its generation, whether its position is
+          // Each report of a job's current run on the Runner, whether its position is
           // the hub's, and what the job's progress row holds once the report applies.
           .with("current", (qb) =>
             qb
@@ -240,7 +243,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
               .innerJoin("job as j", (join) =>
                 join
                   .onRef("j.id", "=", "r.jobId")
-                  .onRef("j.generation", "=", "r.generation")
+                  .onRef("j.runId", "=", "r.runId")
                   .on("j.runnerId", "=", runnerId),
               )
               .innerJoin("jobProgress as p", "p.jobId", "r.jobId")
@@ -293,9 +296,11 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
               })
               .selectAll("r")
               .select((eb) => {
+                // Events apply while the job may run, the statuses a report may move it from, so a
+                // paused run's later reports change nothing but its usage.
                 const fresh = eb.and([
                   eb("p.position", "=", eb.ref("r.position")),
-                  eb("j.status", "not in", FINAL_STATUSES),
+                  eb("j.status", "in", QUEUED_OR_RUNNING),
                 ]);
                 const usageApplies = eb.and([
                   eb("r.usage", "is not", null),
@@ -494,46 +499,33 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
  * the Runner owes, and the job's latest Usage record keeps the outcome, `confirmed`, with its time.
  * A deletion reported again after that changes nothing.
  */
-function confirmDeletions(runnerId: RunnerId, reports: JobReport[]) {
+function confirmDeletions(runnerId: RunnerId, deleted: string[]) {
   const now = new Date();
-  const deletedFiles = reports.map(({ jobId, generation }) => ({ jobId, generation }));
   return Db.use((database) =>
-    database.query(async (db) => {
-      await db
-        .with("deleted", (qb) =>
-          qb
-            .selectFrom((eb) => jsonRows(eb, deletedFiles))
-            .select((eb) => [
-              eb.cast<JobId>(eb.ref("row.value", "->>").key("jobId"), "uuid").as("jobId"),
-              eb
-                .cast<number>(eb.ref("row.value", "->>").key("generation"), "integer")
-                .as("generation"),
-            ]),
-        )
+    database.query((db) =>
+      db
         .with("confirmed", (qb) =>
           qb
-            .deleteFrom("jobDeletion as p")
-            .using("deleted")
-            .whereRef("p.jobId", "=", "deleted.jobId")
-            .whereRef("p.generation", "=", "deleted.generation")
-            .where("p.runnerId", "=", runnerId)
-            .returning(["p.jobId", "p.generation"]),
+            .deleteFrom("jobDeletion")
+            // The job IDs as one array parameter, however many the Runner reports.
+            .where((eb) => eb("jobId", "=", eb.fn.any(eb.val(deleted.map((id) => JobId(id))))))
+            .where("runnerId", "=", runnerId)
+            .returning("usageRecordId"),
         )
         .updateTable("usageRecord as u")
         .from("confirmed as c")
         .set({ hostDeletionOutcome: "confirmed", hostDeletionOutcomeAt: now })
-        .whereRef("u.jobId", "=", "c.jobId")
-        .whereRef("u.generation", "=", "c.generation")
-        .execute();
-    }),
+        .whereRef("u.id", "=", "c.usageRecordId")
+        .execute(),
+    ),
   );
 }
 
 /**
  * Places queued jobs on the Runner's free slots and reads its desired state: every queued or running
  * job placed on it, under the intent its pending control gives, with the content of those the
- * Runner does not hold and is to run, and the deletions of deleted jobs' files it owes, as `delete`
- * placements under each job's last generation. One statement, so the jobs just placed come from the
+ * Runner does not hold and is to run, and the deleted jobs whose files it owes the deletion of.
+ * One statement, so the jobs just placed come from the
  * placement's `RETURNING`, as Postgres runs a `WITH` clause on the statement's snapshot. Placement
  * takes the oldest queued jobs not yet sent to a Runner, new ones without a Runner and resumed ones
  * waiting for this Runner, which holds their journals, locking each row it takes so concurrent syncs
@@ -555,9 +547,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
             .selectFrom((eb) => jsonRows(eb, load.held))
             .select((eb) => [
               eb.cast<JobId>(eb.ref("row.value", "->>").key("jobId"), "uuid").as("jobId"),
-              eb
-                .cast<number>(eb.ref("row.value", "->>").key("generation"), "integer")
-                .as("generation"),
+              eb.cast<string>(eb.ref("row.value", "->>").key("runId"), "uuid").as("runId"),
             ]),
         )
         .with("placed", (qb) =>
@@ -565,12 +555,13 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
             .updateTable("job")
             .set((eb) => ({
               runnerId,
-              // A resume has already made its placement, for the Runner that holds the journal.
-              generation: eb
+              // A new job's first run; a resume has already minted its own, for the Runner that
+              // holds the journal.
+              runId: eb
                 .case()
                 .when("runnerId", "is", null)
-                .then(eb("generation", "+", 1))
-                .else(eb.ref("generation"))
+                .then(eb.fn<string>("gen_random_uuid", []))
+                .else(eb.ref("runId"))
                 .end(),
               placedAt: now,
             }))
@@ -617,7 +608,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                                 .selectFrom("held")
                                 .select("held.jobId")
                                 .whereRef("held.jobId", "=", "unheld.id")
-                                .whereRef("held.generation", "=", "unheld.generation"),
+                                .whereRef("held.runId", "=", "unheld.runId"),
                             ),
                           ),
                         )
@@ -628,92 +619,92 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                 .forUpdate()
                 .skipLocked(),
             )
-            .returning(["id", "generation", "prompt", "resultContract", "pendingControl"]),
+            .returning(["id", "runId", "prompt", "resultContract", "pendingControl"]),
         )
         .with("wanted", (qb) =>
           qb
             .selectFrom("job")
-            .select(["id", "generation", "prompt", "resultContract", "pendingControl"])
+            .select(["id", "runId", "prompt", "resultContract", "pendingControl"])
             .where("runnerId", "=", runnerId)
             .where("placedAt", "is not", null)
             .where("status", "in", QUEUED_OR_RUNNING)
             .unionAll(
               qb
                 .selectFrom("placed")
-                .select(["id", "generation", "prompt", "resultContract", "pendingControl"]),
+                .select(["id", "runId", "prompt", "resultContract", "pendingControl"]),
             ),
         )
-        .selectFrom("wanted")
-        .innerJoin("jobProgress", "jobProgress.jobId", "wanted.id")
-        .select((eb) => [
-          "id",
-          "generation",
-          eb.fn.coalesce(eb.cast<string>("pendingControl", "text"), eb.val("run")).as("intent"),
-          "jobProgress.position",
-          eb
-            .case()
-            .when(
-              eb.or([
-                eb("pendingControl", "is not", null),
-                eb.exists(
-                  eb
-                    .selectFrom("held")
-                    .select("held.jobId")
-                    .whereRef("held.jobId", "=", "wanted.id")
-                    .whereRef("held.generation", "=", "wanted.generation"),
-                ),
-              ]),
-            )
-            .then(eb.lit(null))
-            .else(
-              jsonBuildObject({
-                prompt: eb.ref("prompt"),
-                resultContract: eb.ref("resultContract"),
-                inputFiles: eb
-                  .selectFrom("inputFile")
-                  .select((fileEb) =>
-                    fileEb.fn
-                      .coalesce(
-                        // The files by name, as the contract carries them.
-                        fileEb.fn<JobContent["inputFiles"]>("jsonb_object_agg", [
-                          "name",
-                          jsonBuildObject({ content: fileEb.ref("content") }),
-                        ]),
-                        fileEb.cast<JobContent["inputFiles"]>(fileEb.val("{}"), "jsonb"),
-                      )
-                      .as("files"),
+        .selectNoFrom((answer) => [
+          jsonArrayFrom(
+            answer
+              .selectFrom("wanted")
+              .innerJoin("jobProgress", "jobProgress.jobId", "wanted.id")
+              .select((eb) => [
+                "id",
+                "runId",
+                eb.fn
+                  .coalesce(eb.cast<string>("pendingControl", "text"), eb.val("run"))
+                  .as("intent"),
+                "jobProgress.position",
+                eb
+                  .case()
+                  .when(
+                    eb.or([
+                      eb("pendingControl", "is not", null),
+                      eb.exists(
+                        eb
+                          .selectFrom("held")
+                          .select("held.jobId")
+                          .whereRef("held.jobId", "=", "wanted.id")
+                          .whereRef("held.runId", "=", "wanted.runId"),
+                      ),
+                    ]),
                   )
-                  .whereRef("inputFile.jobId", "=", "wanted.id")
-                  .$asScalar(),
-              }),
-            )
-            .end()
-            .as("job"),
+                  .then(eb.lit(null))
+                  .else(
+                    jsonBuildObject({
+                      prompt: eb.ref("prompt"),
+                      resultContract: eb.ref("resultContract"),
+                      inputFiles: eb
+                        .selectFrom("inputFile")
+                        .select((fileEb) =>
+                          fileEb.fn
+                            .coalesce(
+                              // The files by name, as the contract carries them.
+                              fileEb.fn<JobContent["inputFiles"]>("jsonb_object_agg", [
+                                "name",
+                                jsonBuildObject({ content: fileEb.ref("content") }),
+                              ]),
+                              fileEb.cast<JobContent["inputFiles"]>(fileEb.val("{}"), "jsonb"),
+                            )
+                            .as("files"),
+                        )
+                        .whereRef("inputFile.jobId", "=", "wanted.id")
+                        .$asScalar(),
+                    }),
+                  )
+                  .end()
+                  .as("job"),
+              ])
+              .orderBy("id")
+              // A job sent to a Runner has its run, minted when it was placed or resumed.
+              .$narrowType<{ runId: string }>(),
+          ).as("runs"),
+          // The deleted jobs whose files the Runner still owes the deletion of.
+          jsonArrayFrom(
+            answer.selectFrom("jobDeletion").select("jobId").where("runnerId", "=", runnerId),
+          ).as("deletions"),
         ])
-        // The deleted jobs whose files the Runner still owes the deletion of, under their last
-        // placement.
-        .unionAll((eb) =>
-          eb
-            .selectFrom("jobDeletion")
-            .select((deletion) => [
-              deletion.ref("jobId").as("id"),
-              "generation",
-              deletion.val("delete").as("intent"),
-              deletion.lit(0).as("position"),
-              deletion.lit(null).as("job"),
-            ])
-            .where("runnerId", "=", runnerId),
-        )
-        .orderBy("id")
-        .execute();
+        .executeTakeFirstOrThrow();
       return {
-        placements: rows.map((row): Placement => ({
+        runs: rows.runs.map((row) => ({
           jobId: row.id,
-          generation: row.generation,
+          runId: row.runId,
           intent: z.parse(intentSchema, row.intent),
           ...(row.job === null ? {} : { job: row.job }),
           position: row.position,
         })),
+        deletions: rows.deletions.map(({ jobId }) => jobId),
       };
     }),
   );
@@ -724,20 +715,21 @@ export const handleRunnerMessage = createProtocolServer<typeof runnerMethods, Ru
   runnerMethods,
   {
     hello: async ({ name }, context) => {
-      await run(context, recordRunnerHello(context.runnerId, name, new Date()));
+      await runWithServices(context, recordRunnerHello(context.runnerId, name, new Date()));
       return { syncIntervalMs: SYNC_INTERVAL_MS, reportIntervalMs: context.reportIntervalMs };
     },
     sync: async (load, context) => {
-      if (context.recordSeen) await run(context, recordRunnerSeen(context.runnerId, new Date()));
-      return await run(context, placeAndRead(context.runnerId, load));
+      if (context.recordSeen)
+        await runWithServices(context, recordRunnerSeen(context.runnerId, new Date()));
+      return await runWithServices(context, placeAndRead(context.runnerId, load));
     },
-    report: async ({ jobs, ...load }, context) => {
-      if (context.recordSeen) await run(context, recordRunnerSeen(context.runnerId, new Date()));
-      const applied = jobs.filter((job) => job.intent !== "delete");
-      if (applied.length > 0) await run(context, applyReports(context.runnerId, applied));
-      const deleted = jobs.filter((job) => job.intent === "delete");
-      if (deleted.length > 0) await run(context, confirmDeletions(context.runnerId, deleted));
-      return await run(context, placeAndRead(context.runnerId, load));
+    report: async ({ jobs, deleted, ...load }, context) => {
+      if (context.recordSeen)
+        await runWithServices(context, recordRunnerSeen(context.runnerId, new Date()));
+      if (jobs.length > 0) await runWithServices(context, applyReports(context.runnerId, jobs));
+      if (deleted.length > 0)
+        await runWithServices(context, confirmDeletions(context.runnerId, deleted));
+      return await runWithServices(context, placeAndRead(context.runnerId, load));
     },
   },
 );

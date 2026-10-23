@@ -52,10 +52,10 @@ test("a job submitted while a runner is connected succeeds, and its result is re
     await db
       .withSchema(DB_SCHEMA)
       .selectFrom("job")
-      .select(["runnerId", "generation"])
+      .select(["runnerId", "runId"])
       .where("id", "=", JobId(id))
       .executeTakeFirst(),
-  ).toEqual({ runnerId, generation: 1 });
+  ).toEqual({ runnerId, runId: expect.any(String) });
 });
 
 test("a job submitted while no runner is connected stays queued, and runs once one connects", async () => {

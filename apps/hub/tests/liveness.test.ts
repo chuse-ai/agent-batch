@@ -27,7 +27,10 @@ test("a runner's sync records it as seen", async () => {
   );
 
   await expect.poll(() => replies.length).toBe(1);
-  expect(JSON.parse(replies[0] ?? "")).toMatchObject({ id: 1, result: { placements: [] } });
+  expect(JSON.parse(replies[0] ?? "")).toMatchObject({
+    id: 1,
+    result: { runs: [], deletions: [] },
+  });
   expect(await system.lastSeen(runnerId)).toBeGreaterThan(before);
   socket.close(1000);
 });
