@@ -1,7 +1,7 @@
 import { ORPCError, type ORPCErrorCode } from "@orpc/server";
 import { betterAuth } from "better-auth";
 import { isAPIError } from "better-auth/api";
-import { HubNotSetUp, Unauthorized } from "contract";
+import { type Access, HubNotSetUp, Unauthorized } from "contract";
 import { Cause, Context, Effect, Layer } from "effect";
 import type { Kysely } from "kysely";
 import * as z from "zod/mini";
@@ -78,7 +78,7 @@ export const getOrganization = Effect.gen(function* () {
 });
 
 /** The signed-in member making the request, or a 401 error. */
-export function requireMember(headers: Headers) {
+function requireMember(headers: Headers) {
   return Effect.gen(function* () {
     const auth = yield* Auth;
     const session = yield* auth.call((instance) => instance.api.getSession({ headers }));
@@ -111,10 +111,40 @@ export function requireKey(headers: Headers, permissions: Record<string, string[
 export const keyMetadataSchema = z.object({ createdBy: z.string() });
 export type KeyMetadata = z.infer<typeof keyMetadataSchema>;
 
+/** Who made a call: the API key it was sent with, as Better Auth verified it, or the member. */
+export type Caller =
+  | { kind: "key"; key: Effect.Success<ReturnType<typeof requireKey>> }
+  | { kind: "member"; member: Effect.Success<ReturnType<typeof requireMember>> };
+
 /**
- * The API key sent in `x-api-key`, verified to hold `permissions`, or else the signed-in member; a
- * 401 error if neither is given.
+ * The caller `headers` identify, as `access` allows: the API key sent in `x-api-key`, verified to
+ * hold `access.key`, whenever a key is accepted and one is sent; else the signed-in member, where a
+ * member is accepted; else a 401 error.
  */
-export function requireKeyOrMember(headers: Headers, permissions: Record<string, string[]>) {
-  return headers.has("x-api-key") ? requireKey(headers, permissions) : requireMember(headers);
+export function authenticate(headers: Headers, access: Access) {
+  if (access.key && headers.has("x-api-key")) {
+    return requireKey(headers, access.key).pipe(
+      Effect.map((key): Caller => ({ kind: "key", key })),
+    );
+  }
+  if (access.member) {
+    return requireMember(headers).pipe(
+      Effect.map((member): Caller => ({ kind: "member", member })),
+    );
+  }
+  return Effect.fail(new Unauthorized());
+}
+
+/** The key that made a call the contract declares as by key; a member there is a hub defect. */
+export function callerKey(caller: Caller) {
+  return caller.kind === "key"
+    ? Effect.succeed(caller.key)
+    : Effect.die(new Error("A member made a call the contract declares as by key"));
+}
+
+/** The member who made a call the contract declares as by member; a key there is a hub defect. */
+export function callerMember(caller: Caller) {
+  return caller.kind === "member"
+    ? Effect.succeed(caller.member)
+    : Effect.die(new Error("A key made a call the contract declares as by member"));
 }

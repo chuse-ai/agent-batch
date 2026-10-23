@@ -21,6 +21,19 @@ test("calls without a member's session or a key are refused", async () => {
   expect((await system.connect()).status).toBe(401);
 });
 
+test("a call sent with a key is decided by the key, whatever session it carries", async () => {
+  const id = crypto.randomUUID();
+  const member = system.client({ cookie: system.ownerCookie() });
+  await expect(member.jobs.get({ id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  const memberWithUnknownKey = system.client({
+    cookie: system.ownerCookie(),
+    "x-api-key": "not-a-key",
+  });
+  await expect(memberWithUnknownKey.jobs.get({ id })).rejects.toMatchObject({
+    code: "UNAUTHORIZED",
+  });
+});
+
 test("API errors are RFC 9457 Problem Details", async () => {
   const refused = await system.hub.fetch("/runners");
   expect(refused.headers.get("content-type")).toMatch(/^application\/problem\+json/);

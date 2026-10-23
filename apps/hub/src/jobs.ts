@@ -17,7 +17,7 @@ import { Array, Effect, Order, Record, String, Struct } from "effect";
 import { compileSchema, isJsonError } from "json-schema-library";
 import { type Kysely, type QueryCreator, sql, type Transaction } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
-import { validate as isUuid, v7 as uuidv7 } from "uuid";
+import { v7 as uuidv7 } from "uuid";
 import * as z from "zod/mini";
 
 import { getOrganization, keyMetadataSchema } from "./auth/auth.ts";
@@ -241,8 +241,6 @@ export function submitJob(submission: JobSubmission, submitter: Submitter) {
 /** The job `jobId`, or a 404 error. */
 export function getJob(jobId: JobId) {
   return Effect.gen(function* () {
-    // An ID that is not a UUID names no job; Postgres would refuse it in a `uuid` column.
-    if (!isUuid(jobId)) return yield* Effect.fail(new NotFound());
     const database = yield* Db;
     const job = yield* database.query((db) =>
       db
@@ -375,7 +373,6 @@ function decide(control: Control, job: ControlledJob, now: Date): Decision {
  */
 export function controlJob(jobId: JobId, control: Control) {
   return Effect.gen(function* () {
-    if (!isUuid(jobId)) return yield* Effect.fail(new NotFound());
     const database = yield* Db;
     const now = new Date();
     const controlled = yield* database.query((db) =>
@@ -538,7 +535,6 @@ async function recordUsageOfEnd(trx: Transaction<Database>, jobId: JobId) {
  */
 export function deleteJob(jobId: JobId) {
   return Effect.gen(function* () {
-    if (!isUuid(jobId)) return yield* Effect.fail(new NotFound());
     const database = yield* Db;
     const now = new Date();
     const deleted = yield* database.query((db) =>
@@ -835,7 +831,6 @@ async function readDeletedJob(db: Kysely<Database>, jobId: JobId): Promise<Job |
  */
 export function readJobEvents(jobId: JobId, after: EventId, limit: number) {
   return Effect.gen(function* () {
-    if (!isUuid(jobId)) return yield* Effect.fail(new NotFound());
     const database = yield* Db;
     // One statement, so the job's status, its position and its events are read at one moment. Read
     // apart, events stored between two reads would be missing from a page whose status is final.

@@ -9,16 +9,21 @@ import * as z from "zod/mini";
 // The API's errors as RFC 9457 Problem Details (ADR 0023), as clients read them back into oRPC's
 // errors; the hub produces them.
 
-/** An error as the API answers it: a Problem Details document. */
-export const problemDetailsSchema = z.object({
-  /** Always `about:blank` for now; a client reads any type by its status. */
-  type: z.string(),
-  /** The status's reason phrase, such as "Not Found". */
-  title: z.string(),
-  status: z.int(),
-  /** What went wrong, when it says more than the title. */
-  detail: z.optional(z.string()),
-});
+/** The content type of the API's errors. */
+export const PROBLEM_DETAILS_CONTENT_TYPE = "application/problem+json; charset=utf-8";
+
+/** An error as the API answers it: a Problem Details document, which RFC 9457 lets carry more members. */
+export const problemDetailsSchema = z
+  .looseObject({
+    /** Always `about:blank` for now; a client reads any type by its status. */
+    type: z.string(),
+    /** The status's reason phrase, such as "Not Found". */
+    title: z.string(),
+    status: z.int(),
+    /** What went wrong, when it says more than the title. */
+    detail: z.optional(z.string()),
+  })
+  .register(z.globalRegistry, { id: "ProblemDetails" });
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 
 /** The oRPC code for `status`, such as `NOT_FOUND` for 404. */

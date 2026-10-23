@@ -9,6 +9,7 @@ import {
   memberAc,
   ownerAc,
 } from "better-auth/plugins/organization/access";
+import { KEY_PERMISSIONS } from "contract";
 import type { Kysely } from "kysely";
 
 import { DB_SCHEMA } from "../db/database.ts";
@@ -22,9 +23,7 @@ const statements = {
   // Better Auth's own names for managing organization-owned keys. Only members manage keys: Better
   // Auth lists and deletes keys for a signed-in member's session, not for an API key.
   apiKey: ["create", "read", "update", "delete"],
-  // `register` is for the shared key Runners start with; `connect`, for a Runner's own key.
-  runner: ["register", "connect"],
-  job: ["create", "read", "pause", "resume", "cancel", "delete"],
+  ...KEY_PERMISSIONS,
 } as const;
 
 const ac = createAccessControl(statements);
@@ -35,7 +34,7 @@ const ac = createAccessControl(statements);
  */
 export const GRANTABLE_KEY_PERMISSIONS = ac.newRole({
   runner: ["register"],
-  job: ["create", "read", "pause", "resume", "cancel", "delete"],
+  job: KEY_PERMISSIONS.job,
 });
 
 /**

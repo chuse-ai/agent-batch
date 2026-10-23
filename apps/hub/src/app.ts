@@ -1,11 +1,17 @@
-import { catchORPCErrorCode, type WithEffectContext } from "@orpc/experimental-effect";
+import {
+  catchORPCErrorCode,
+  middlewareGen,
+  type WithEffectContext,
+} from "@orpc/experimental-effect";
 import "@orpc/experimental-effect/extensions/effect";
 import { SmartCoercionHandlerPlugin } from "@orpc/json-schema";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
+import { OpenAPIReferenceHandlerPlugin } from "@orpc/openapi/plugins";
 import { implement, ValidationError } from "@orpc/server";
 import { ZodToJsonSchemaConverter } from "@orpc/zod";
 import {
   contract,
+  getAccess,
   PROTOCOL_UNSUPPORTED,
   RUNNER_CONNECT_PATH,
   RUNNER_NOT_FOUND,
@@ -23,11 +29,13 @@ import { sql } from "kysely";
 
 import {
   Auth,
+  authenticate,
+  type Caller,
+  callerKey,
+  callerMember,
   getOrganization,
   type KeyMetadata,
   requireKey,
-  requireKeyOrMember,
-  requireMember,
 } from "./auth/auth.ts";
 import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
 import { Db } from "./db/database.ts";
@@ -42,6 +50,7 @@ import {
   submitJob,
   submitterOf,
 } from "./jobs.ts";
+import { generateOpenAPIDocument, sessionCookieName } from "./openapi.ts";
 import { RunnerConnections, type HubServices } from "./platform.ts";
 import { toProblemDetails } from "./problem-details.ts";
 import { findRunnerByKey, registerRunner, removeRunner } from "./runner-registration.ts";
@@ -51,7 +60,24 @@ interface ApiContext extends WithEffectContext<HubServices> {
   headers: Headers;
 }
 
-const os = implement<typeof contract, ApiContext>(contract);
+/**
+ * Checks every call against who its contract says may make it, before its input is validated, and
+ * hands the handler its `caller`. A procedure that declares no access is a hub defect, and never runs.
+ */
+const requireDeclaredAccess = middlewareGen<ApiContext, { caller: Caller }>(function* ({
+  context,
+  procedure,
+  path,
+  next,
+}) {
+  const access = getAccess(procedure);
+  if (!access) return yield* Effect.die(new Error(`${path.join(".")} declares no access`));
+  const caller = yield* authenticate(context.headers, access);
+  return yield* next({ context: { caller } });
+});
+
+/** The handlers' builder: each runs with the `caller` the router's access check hands it. */
+const os = implement<typeof contract, ApiContext & { caller: Caller }>(contract);
 
 /**
  * Tells the Runners a change to a job concerns to sync now: one Runner, or every live one for a job
@@ -80,134 +106,140 @@ function controlJobAndHint(jobId: JobId, control: Control) {
   });
 }
 
-const router = os.router({
-  runners: {
-    list: os.runners.list.effect(function* ({ context }) {
-      yield* requireMember(context.headers);
-      return yield* listRunners;
-    }),
-    register: os.runners.register.effect(function* ({ input, context }) {
-      yield* requireKey(context.headers, { runner: ["register"] });
-      return yield* registerRunner(input.name);
-    }),
-    delete: os.runners.delete.effect(function* ({ input, context }) {
-      yield* requireMember(context.headers);
-      // The ID enters the hub here.
-      const runnerId = RunnerId(input.id);
-      // Its steps run to the end once begun, also when the caller goes away and the Node hub
-      // interrupts the request, so a removal leaves no Runner gone with its jobs still running.
-      return yield* Effect.uninterruptible(
-        removeRunner(context.headers, runnerId).pipe(
-          Effect.tap(() => RunnerConnections.use((connections) => connections.drop(runnerId))),
-        ),
-      );
-    }),
-  },
-  apiKeys: {
-    create: os.apiKeys.create.effect(function* ({ input, context, errors }) {
-      const member = yield* requireMember(context.headers);
-      const grant = GRANTABLE_KEY_PERMISSIONS.authorize(input.permissions);
-      if (!grant.success) return yield* Effect.fail(errors.BAD_REQUEST({ message: grant.error }));
-      const organization = yield* getOrganization;
-      const auth = yield* Auth;
-      // Without request headers, as a call from the hub itself: Better Auth sets a key's permissions
-      // only then, and still checks that the member may create the Organization's keys.
-      const key = yield* auth.call((betterAuth) =>
-        betterAuth.api.createApiKey({
-          body: {
-            configId: API_KEY_CONFIG,
-            organizationId: organization.id,
-            userId: member.id,
-            name: input.name,
-            permissions: input.permissions,
-            expiresIn: input.expiresIn,
-            metadata: { createdBy: member.id } satisfies KeyMetadata,
-          },
-        }),
-      );
-      return { id: key.id, key: key.key };
-    }),
-    list: os.apiKeys.list.effect(function* ({ context }) {
-      yield* requireMember(context.headers);
-      const organization = yield* getOrganization;
-      const auth = yield* Auth;
-      const { apiKeys } = yield* auth.call((betterAuth) =>
-        betterAuth.api.listApiKeys({
-          headers: context.headers,
-          query: { organizationId: organization.id, configId: API_KEY_CONFIG },
-        }),
-      );
-      return apiKeys;
-    }),
-    revoke: os.apiKeys.revoke.effect(function* ({ input, context }) {
-      yield* requireMember(context.headers);
-      const auth = yield* Auth;
-      yield* auth.call((betterAuth) =>
-        betterAuth.api.deleteApiKey({
-          headers: context.headers,
-          body: { keyId: input.id, configId: API_KEY_CONFIG },
-        }),
-      );
-    }),
-  },
-  jobs: {
-    submit: os.jobs.submit.effect(function* ({ input, context, errors }) {
-      const key = yield* requireKey(context.headers, { job: ["create"] });
-      const problems = resultContractProblems(input.resultContract.schema);
-      if (problems.length > 0) {
-        // Raised as oRPC raises invalid input, so the answer lists the problems the same way.
-        const path = ["resultContract", "schema"];
-        const cause = new ValidationError({
-          message: "Input validation failed",
-          issues: problems.map((message) => ({ message, path })),
-          invalidData: input,
-        });
-        return yield* Effect.fail(errors.BAD_REQUEST({ cause }));
-      }
-      const job = yield* submitJob(input, submitterOf(key));
-      yield* hintRunners("live");
-      return job;
-    }),
-    get: os.jobs.get.effect(function* ({ input, context }) {
-      yield* requireKeyOrMember(context.headers, { job: ["read"] });
-      // The ID enters the hub here.
-      return yield* getJob(JobId(input.id));
-    }),
-    pause: os.jobs.pause.effect(function* ({ input, context }) {
-      yield* requireKeyOrMember(context.headers, { job: ["pause"] });
-      // The ID enters the hub here.
-      return yield* controlJobAndHint(JobId(input.id), "pause");
-    }),
-    resume: os.jobs.resume.effect(function* ({ input, context }) {
-      yield* requireKeyOrMember(context.headers, { job: ["resume"] });
-      // The ID enters the hub here.
-      return yield* controlJobAndHint(JobId(input.id), "resume");
-    }),
-    cancel: os.jobs.cancel.effect(function* ({ input, context }) {
-      yield* requireKeyOrMember(context.headers, { job: ["cancel"] });
-      // The ID enters the hub here.
-      return yield* controlJobAndHint(JobId(input.id), "cancel");
-    }),
-    delete: os.jobs.delete.effect(function* ({ input, context }) {
-      yield* requireKeyOrMember(context.headers, { job: ["delete"] });
-      // The ID enters the hub here.
-      const { job, hint } = yield* deleteJob(JobId(input.id));
-      yield* hintRunners(hint);
-      return job;
-    }),
-    events: os.jobs.events.effect(function* ({ input, context }) {
-      yield* requireKeyOrMember(context.headers, { job: ["read"] });
-      // The IDs enter the hub here.
-      return yield* readJobEvents(JobId(input.id), EventId(input.after), input.limit);
-    }),
-  },
-});
+// The access check is the router's alone, as oRPC's docs extend a router: applied to the handlers
+// too, it would run twice on every call.
+const router = implement<typeof contract, ApiContext>(contract)
+  .use(requireDeclaredAccess)
+  .router({
+    runners: {
+      list: os.runners.list.effect(function* () {
+        return yield* listRunners;
+      }),
+      register: os.runners.register.effect(function* ({ input }) {
+        return yield* registerRunner(input.name);
+      }),
+      delete: os.runners.delete.effect(function* ({ input, context }) {
+        // The ID enters the hub here.
+        const runnerId = RunnerId(input.id);
+        // Its steps run to the end once begun, also when the caller goes away and the Node hub
+        // interrupts the request, so a removal leaves no Runner gone with its jobs still running.
+        return yield* Effect.uninterruptible(
+          removeRunner(context.headers, runnerId).pipe(
+            Effect.tap(() => RunnerConnections.use((connections) => connections.drop(runnerId))),
+          ),
+        );
+      }),
+    },
+    apiKeys: {
+      create: os.apiKeys.create.effect(function* ({ input, context, errors }) {
+        const member = yield* callerMember(context.caller);
+        const grant = GRANTABLE_KEY_PERMISSIONS.authorize(input.permissions);
+        if (!grant.success) return yield* Effect.fail(errors.BAD_REQUEST({ message: grant.error }));
+        const organization = yield* getOrganization;
+        const auth = yield* Auth;
+        // Without request headers, as a call from the hub itself: Better Auth sets a key's permissions
+        // only then, and still checks that the member may create the Organization's keys.
+        const key = yield* auth.call((betterAuth) =>
+          betterAuth.api.createApiKey({
+            body: {
+              configId: API_KEY_CONFIG,
+              organizationId: organization.id,
+              userId: member.id,
+              name: input.name,
+              permissions: input.permissions,
+              expiresIn: input.expiresIn,
+              metadata: { createdBy: member.id } satisfies KeyMetadata,
+            },
+          }),
+        );
+        return { id: key.id, key: key.key };
+      }),
+      list: os.apiKeys.list.effect(function* ({ context }) {
+        const organization = yield* getOrganization;
+        const auth = yield* Auth;
+        const { apiKeys } = yield* auth.call((betterAuth) =>
+          betterAuth.api.listApiKeys({
+            headers: context.headers,
+            query: { organizationId: organization.id, configId: API_KEY_CONFIG },
+          }),
+        );
+        return apiKeys;
+      }),
+      revoke: os.apiKeys.revoke.effect(function* ({ input, context }) {
+        const auth = yield* Auth;
+        yield* auth.call((betterAuth) =>
+          betterAuth.api.deleteApiKey({
+            headers: context.headers,
+            body: { keyId: input.id, configId: API_KEY_CONFIG },
+          }),
+        );
+      }),
+    },
+    jobs: {
+      submit: os.jobs.submit.effect(function* ({ input, context, errors }) {
+        const key = yield* callerKey(context.caller);
+        const problems = resultContractProblems(input.resultContract.schema);
+        if (problems.length > 0) {
+          // Raised as oRPC raises invalid input, so the answer lists the problems the same way.
+          const path = ["resultContract", "schema"];
+          const cause = new ValidationError({
+            message: "Input validation failed",
+            issues: problems.map((message) => ({ message, path })),
+            invalidData: input,
+          });
+          return yield* Effect.fail(errors.BAD_REQUEST({ cause }));
+        }
+        const job = yield* submitJob(input, submitterOf(key));
+        yield* hintRunners("live");
+        return job;
+      }),
+      get: os.jobs.get.effect(function* ({ input }) {
+        // The ID enters the hub here.
+        return yield* getJob(JobId(input.id));
+      }),
+      pause: os.jobs.pause.effect(function* ({ input }) {
+        // The ID enters the hub here.
+        return yield* controlJobAndHint(JobId(input.id), "pause");
+      }),
+      resume: os.jobs.resume.effect(function* ({ input }) {
+        // The ID enters the hub here.
+        return yield* controlJobAndHint(JobId(input.id), "resume");
+      }),
+      cancel: os.jobs.cancel.effect(function* ({ input }) {
+        // The ID enters the hub here.
+        return yield* controlJobAndHint(JobId(input.id), "cancel");
+      }),
+      delete: os.jobs.delete.effect(function* ({ input }) {
+        // The ID enters the hub here.
+        const { job, hint } = yield* deleteJob(JobId(input.id));
+        yield* hintRunners(hint);
+        return job;
+      }),
+      events: os.jobs.events.effect(function* ({ input }) {
+        // The IDs enter the hub here.
+        return yield* readJobEvents(JobId(input.id), EventId(input.after), input.limit);
+      }),
+    },
+  });
 
 const api = new OpenAPIHandler(router, {
   customErrorResponseBodyEncoder: toProblemDetails,
-  // A query string's values arrive as text; this turns them into what the input's schema expects,
-  // such as `after=42` into a number.
-  plugins: [new SmartCoercionHandlerPlugin({ converters: [new ZodToJsonSchemaConverter()] })],
+  plugins: [
+    // A query string's values arrive as text; this turns them into what the input's schema
+    // expects, such as `after=42` into a number.
+    new SmartCoercionHandlerPlugin({ converters: [new ZodToJsonSchemaConverter()] }),
+    // The OpenAPI document at `/spec.json` and a browsable reference of it at `/`, oRPC's defaults.
+    // The document names the session cookie of the hub's deployment, so it is generated from the
+    // request's services. The reference page runs on the origin where members sign in, so its
+    // script is pinned to a version rather than whatever the CDN serves as latest.
+    new OpenAPIReferenceHandlerPlugin({
+      spec: ({ context }) =>
+        Effect.runPromiseWith(context["effect/context"])(sessionCookieName).then(
+          generateOpenAPIDocument,
+        ),
+      providerScriptUrl: "https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.75.1",
+    }),
+  ],
 });
 
 /**
@@ -340,7 +372,8 @@ export function createApp<Bindings extends object>(platform: HubPlatform<Binding
       ),
     );
     if (!matched) return c.notFound();
-    // oRPC labels every JSON body `application/json`; its error bodies are Problem Details.
+    // oRPC labels every JSON body `application/json`, errors included, with no setting to change
+    // it (middleapi/orpc#2317); its error bodies are Problem Details.
     if (response.status >= 400) response.headers.set("content-type", PROBLEM_JSON_CONTENT_TYPE);
     return response;
   });

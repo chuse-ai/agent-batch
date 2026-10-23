@@ -150,18 +150,20 @@ export function isoDate(at: number): string {
  * conversation records, unchanged under `record`. The record's fields are pi's, so `record` keeps
  * those this schema does not name.
  */
-export const jobEventSchema = z.discriminatedUnion("type", [
-  z.object({
-    id: z.int().check(z.positive()),
-    type: z.literal("entry"),
-    record: z.looseObject({ kind: z.string() }),
-  }),
-  z.object({
-    id: z.int().check(z.positive()),
-    type: z.literal("conversation"),
-    record: z.looseObject({}),
-  }),
-]);
+export const jobEventSchema = z
+  .discriminatedUnion("type", [
+    z.object({
+      id: z.int().check(z.positive()),
+      type: z.literal("entry"),
+      record: z.looseObject({ kind: z.string() }),
+    }),
+    z.object({
+      id: z.int().check(z.positive()),
+      type: z.literal("conversation"),
+      record: z.looseObject({}),
+    }),
+  ])
+  .register(z.globalRegistry, { id: "JobEvent" });
 export type JobEvent = z.infer<typeof jobEventSchema>;
 
 /** One model's or tool's usage as pi-ai counts it; the hub reads its tokens and cost and keeps the rest. */
