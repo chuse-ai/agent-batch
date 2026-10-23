@@ -9,6 +9,7 @@ import {
   HEARTBEAT_PING,
   HEARTBEAT_PONG,
   type JobReport,
+  jobReportSchema,
   registeredRunnerSchema,
   runnerMethods,
 } from "contract";
@@ -70,10 +71,12 @@ async function runAgainstStandIn(
           return reply({ runs: [{ ...RUN, position: position() }], deletions: [] });
         }
         if (request.method !== "report") return;
-        const { jobs } = z.parse(runnerMethods.report.params, request.params);
+        const jobs = z
+          .parse(runnerMethods.report.params, request.params)
+          .jobs.map((job) => z.parse(jobReportSchema, job));
         const desired = answer(jobs, connection);
         if (!desired) return socket.terminate();
-        reply(desired);
+        reply({ ...desired, refused: [] });
         if (done()) resolve();
       });
     });
@@ -135,7 +138,7 @@ test("a job whose end the hub lost after dropping it ends again with the same ev
         position = report.events.at(-1)?.id ?? position;
         if (!carriesSuccess(report)) continue;
         ends.push(report);
-        // The hub stores the first end and drops the placement. Its database then goes back to
+        // The hub stores the first end and drops the run. Its database then goes back to
         // before that end, as a failover loses the last transaction, so it lists the job again.
         if (ends.length === 1) position = report.position;
         return { runs: [], deletions: [] };

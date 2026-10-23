@@ -116,7 +116,7 @@ export async function appendUnderRequest(
 /**
  * Writes the run `runId`'s closing, the job's end or its pause, to `conversation` as
  * a `closing` entry with `data`, once: a run that has closed keeps its closing. A write of
- * only a kind and data is appended at once, also while a run is working.
+ * only a kind and data is appended at once, also while the agent is working.
  */
 export async function submitClosing<D extends JobSuccess | JobEnding | JobPause>(
   conversation: Conversation,
@@ -290,7 +290,11 @@ export async function readActivity(
   return { activity, seen: seenNow };
 }
 
-/** pi's wait before another attempt, with its end as an ISO date. */
+/**
+ * pi's wait before another attempt, with its end as an ISO date, as the hub stores it. Its error is
+ * a provider's text, so it is made Unicode text without NUL (`textSchema`), which the hub's `jsonb`
+ * stores.
+ */
 function isoRetry(retry: { at: number; error: string }) {
-  return { at: isoDate(retry.at), error: retry.error };
+  return { at: isoDate(retry.at), error: retry.error.toWellFormed().replaceAll("\0", "") };
 }

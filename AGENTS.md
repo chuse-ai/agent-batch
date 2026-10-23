@@ -15,7 +15,6 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 ## Conventions
 
 - Two Node floors. What users run on their own Node, the CLI and the Runner and contract it bundles, supports Node 22 from 22.19: it uses only what Node 22 has (`lib: es2024`), and CI tests it on Node 22. The hub runs only on runtimes we choose, Node 26 and workerd, and may use anything they implement.
-- `CONTEXT.md`'s terms apply in code, comments and docs too, not only in the domain model; its _Avoid_ words, such as account, secret and token, mean something else here.
 - After `vp add`, check `package.json`: with `catalogMode: prefer`, it turns `workspace:*` dependencies into `catalog:` entries; set them back to `workspace:*`.
 - After changing a migration, run `vp run hub#db:types`; after upgrading Better Auth, run `vp run hub#db:draft-auth-migration`. CI fails on either otherwise.
 - A comment that records a decision stays until the decision is re-opened; changing the behaviour means re-opening the decision, not deleting the comment.

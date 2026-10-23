@@ -1,6 +1,13 @@
 import * as z from "zod/mini";
 
-import { inputFilesSchema, jobIdSchema, resultContractSchema, promptSchema } from "./job.ts";
+import {
+  inputFilesSchema,
+  jobIdSchema,
+  jsonTextSchema,
+  promptSchema,
+  resultContractSchema,
+  textSchema,
+} from "./job.ts";
 
 // The protocol between a Runner and the hub over the Runner's WebSocket (ADR 0026): JSON-RPC 2.0,
 // one object per text message, with each method's params and result as schemas here. The Runner
@@ -43,15 +50,15 @@ export function selectProtocolVersion(offered: string | null): string | undefine
 }
 
 /**
- * What the hub wants done with a run, which only ever moves forward: run, then pause or
- * cancel. Resuming a job is a new run.
+ * What the hub wants done with a run, which only ever moves forward: `run`, then `pause` or
+ * `cancel`. Resuming a job is a new run.
  */
 export const intentSchema = z.enum(["run", "pause", "cancel"]);
 export type Intent = z.infer<typeof intentSchema>;
 
 /**
- * One run of a job on the Runner: the job's stay there, under the ID the hub gave it when it
- * placed the job there or resumed it. Its reports apply only while it is the job's current one.
+ * One run of a job on the Runner, under the ID the hub gave it when it placed the job there or
+ * resumed it. Its reports apply only while it is the job's current one.
  */
 const runRefSchema = z.object({ jobId: jobIdSchema, runId: z.uuid() });
 export type RunRef = z.infer<typeof runRefSchema>;
@@ -72,7 +79,7 @@ export type JobContent = z.infer<typeof jobContentSchema>;
 
 /**
  * What the Runner is to do with one job. The job's content comes only with a run the Runner
- * said it does not hold and is to run, so a sync repeats runs but not jobs.
+ * said it does not hold and is to run, so a sync repeats runs but not their jobs' content.
  */
 const runSchema = z.object({
   ...runRefSchema.shape,
@@ -117,32 +124,49 @@ export const JOB_FAILED = "agent-batch.job.failed";
 export const JOB_CANCELLED = "agent-batch.job.cancelled";
 
 /**
+ * A time the Runner records in Unix milliseconds, within what the hub's `timestamptz` holds and a
+ * date can show: from 1970 to the end of the year 9999.
+ */
+const timestampSchema = z.number().check(z.gte(0), z.lte(253_402_300_799_999));
+
+/**
  * What a start, a recovery or a resume records: when, by the Runner's clock in Unix milliseconds as
  * pi-ai's messages keep time, under which run, and by which Runner.
  */
 export const jobOpeningSchema = z.object({
-  timestamp: z.number(),
+  timestamp: timestampSchema,
   runId: z.uuid(),
   runnerVersion: z.string(),
 });
 export type JobOpening = z.infer<typeof jobOpeningSchema>;
 
 /** What a pause records: when. Only a caller's pause request pauses a job. */
-export const jobPauseSchema = z.object({ timestamp: z.number() });
+export const jobPauseSchema = z.object({ timestamp: timestampSchema });
 export type JobPause = z.infer<typeof jobPauseSchema>;
 
 /** What a success records: when, and the job's result. */
-export const jobSuccessSchema = z.object({ timestamp: z.number(), result: z.json() });
+export const jobSuccessSchema = z.object({ timestamp: timestampSchema, result: jsonTextSchema });
 export type JobSuccess = z.infer<typeof jobSuccessSchema>;
 
 /** What a failure or a cancel records: when. Why a job failed comes with structured failure and limit reasons. */
-export const jobEndingSchema = z.object({ timestamp: z.number() });
+export const jobEndingSchema = z.object({ timestamp: timestampSchema });
 export type JobEnding = z.infer<typeof jobEndingSchema>;
 
 /** A time the Runner keeps in Unix milliseconds, as pi does, as an ISO date like the job's others. */
 export function isoDate(at: number): string {
   return new Date(at).toISOString();
 }
+
+/** The data of each of the Runner's own entries, by kind. */
+const LIFECYCLE_DATA: ReadonlyMap<string, z.ZodMiniType> = new Map<string, z.ZodMiniType>([
+  [JOB_STARTED, jobOpeningSchema],
+  [JOB_RECOVERED, jobOpeningSchema],
+  [JOB_RESUMED, jobOpeningSchema],
+  [JOB_PAUSED, jobPauseSchema],
+  [JOB_SUCCEEDED, jobSuccessSchema],
+  [JOB_FAILED, jobEndingSchema],
+  [JOB_CANCELLED, jobEndingSchema],
+]);
 
 /**
  * One of a job's events: a record of the job's journal, one of pi-durable's entries or
@@ -178,8 +202,11 @@ export const jobUsageSchema = z.looseObject({
 });
 export type JobUsage = z.infer<typeof jobUsageSchema>;
 
-/** A wait before another attempt: when it ends, and the error of the attempt that failed. */
-const retrySchema = z.object({ at: z.iso.datetime(), error: z.string() });
+/**
+ * A wait before another attempt: when it ends, and the error of the attempt that failed, a
+ * provider's text, which the Runner makes text the hub's `jsonb` stores.
+ */
+const retrySchema = z.object({ at: z.iso.datetime(), error: textSchema });
 
 /**
  * What one of a job's conversations is doing, from pi's live state (`pi.live`) and under pi's
@@ -227,8 +254,34 @@ export const jobActivitySchema = z.array(conversationActivitySchema);
 export type JobActivity = z.infer<typeof jobActivitySchema>;
 
 /**
+ * One of a job's events as a report brings it: the Runner's own entries carry the data their kind
+ * says, which the hub reads the job's lifecycle from, so a report whose lifecycle cannot be read is
+ * refused rather than misread. Stored events are read back as `jobEventSchema`, so a check
+ * made here never makes a stored event unreadable.
+ */
+const reportedEventSchema = jobEventSchema.check(
+  z.superRefine((event, context) => {
+    const schema = event.type === "entry" ? LIFECYCLE_DATA.get(event.record.kind) : undefined;
+    if (schema === undefined) return;
+    const parsed = z.safeParse(schema, event.record["data"]);
+    for (const issue of parsed.success ? [] : parsed.error.issues) {
+      context.addIssue({ ...issue, path: ["record", "data", ...issue.path] });
+    }
+  }),
+);
+
+/**
+ * A value the hub stores as `jsonb`, which refuses NUL and lone surrogates in its text, checked
+ * with `jsonTextSchema`, whose issues say where.
+ */
+const storable = z.superRefine((value: unknown, context) => {
+  const parsed = z.safeParse(jsonTextSchema, value);
+  for (const issue of parsed.success ? [] : parsed.error.issues) context.addIssue({ ...issue });
+});
+
+/**
  * One job's report: the run, the intent the Runner applied, the journal's records after the
- * hub's position, and the job's usage and activity. A run the Runner never started has no
+ * hub's position, and the job's usage and activity. A job the Runner never started has no
  * journal, so its pause or cancel writes nothing: it reports `pause` or `cancel` with no events,
  * and the hub holds or ends the job itself. The report is read fresh from the journal after the
  * position the hub last gave, so a report repeated after a lost answer starts from the same position.
@@ -238,25 +291,34 @@ export type JobActivity = z.infer<typeof jobActivitySchema>;
  * is smaller than the one it stored. It applies the events, its position, the activity and a
  * failure only when `position` also matches its own, so a repeated report changes nothing.
  */
-const jobReportSchema = z
+export const jobReportSchema = z
   .object({
     ...runRefSchema.shape,
     intent: intentSchema,
     /** The hub's position the Runner read the journal after. */
     position: positionSchema,
     /** Every record of the journal after `position`, in ID order; none when nothing is new. */
-    events: z.array(jobEventSchema),
+    events: z.array(reportedEventSchema),
     /** The job's usage totals; absent when they could not be read. */
-    usage: z.optional(jobUsageSchema),
+    usage: z.optional(jobUsageSchema.check(storable)),
     /** What the job's conversations doing anything are doing; absent when it could not be read. */
-    activity: z.optional(jobActivitySchema),
+    activity: z.optional(jobActivitySchema.check(storable)),
     /**
      * When the job failed without its journal recording its end, as when the journal could not be
      * opened or the Runner faulted. Sent until the hub drops the run, but only with a report
      * that reaches the end of what the journal holds, or with no events when the job's journal never
      * held any, so the hub never ends a job without an entry its journal holds.
      */
-    failedAt: z.optional(z.iso.datetime()),
+    failedAt: z.optional(
+      z.iso
+        .datetime()
+        .check(
+          z.refine(
+            (time) => z.safeParse(timestampSchema, Date.parse(time)).success,
+            "Must be a time the hub stores",
+          ),
+        ),
+    ),
   })
   .check(
     z.refine(
@@ -266,6 +328,10 @@ const jobReportSchema = z
     ),
   );
 export type JobReport = z.infer<typeof jobReportSchema>;
+
+/** A job's report the hub could not apply, with why, in words for people and logs. */
+const refusedReportSchema = z.object({ ...runRefSchema.shape, reason: z.string() });
+export type RefusedReport = z.infer<typeof refusedReportSchema>;
 
 /** The requests a Runner makes of the hub. */
 export const runnerMethods = {
@@ -288,9 +354,12 @@ export const runnerMethods = {
   report: {
     params: z.object({
       ...loadSchema.shape,
-      /** Each job at most once. */
+      /**
+       * Each job at most once. The hub reads each report on its own and refuses one it cannot apply,
+       * so an item needs only to name its run here.
+       */
       jobs: z
-        .array(jobReportSchema)
+        .array(z.looseObject(runRefSchema.shape))
         .check(
           z.refine(
             (jobs) => new Set(jobs.map((job) => job.jobId)).size === jobs.length,
@@ -300,7 +369,14 @@ export const runnerMethods = {
       /** The deleted jobs whose files are gone from the host, until the hub stops listing them. */
       deleted: z.array(jobIdSchema),
     }),
-    result: desiredStateSchema,
+    result: z.object({
+      ...desiredStateSchema.shape,
+      /**
+       * The reports the hub could not apply, each with why, in words for people and logs:
+       * the rest applied. The Runner keeps such a job running and reports it again later.
+       */
+      refused: z.array(refusedReportSchema),
+    }),
   },
 };
 

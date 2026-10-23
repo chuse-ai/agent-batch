@@ -78,7 +78,7 @@ const PROGRESS_COLUMNS = ["totalTokens", "costUsd", "activity"] as const;
 /**
  * A job as the API reports it: its result only once it has succeeded, its cost as the decimal text
  * Postgres gives for `numeric`, its activity only while it runs, and a control only while it waits
- * for the job's Runner. The report that starts a run carries its first activity, so a job
+ * for the job's Runner. The report of a run's start carries its first activity, so a job
  * running again never shows the last run's.
  */
 function toApiJob(

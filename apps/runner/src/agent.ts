@@ -18,10 +18,11 @@ import {
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import type { Intent, JobContent } from "contract";
+import { type Intent, type JobContent, jsonTextSchema } from "contract";
 import { Effect, Exit, type FileSystem, type PlatformError, Scope } from "effect";
 import ensureError from "ensure-error";
 import { compileSchema } from "json-schema-library";
+import * as z from "zod/mini";
 
 import {
   appendUnderRequest,
@@ -65,7 +66,7 @@ export interface AgentSettings {
 }
 
 /**
- * What a resumed job whose run pi had settled is told, as the user's message, so that it carries on;
+ * What a resumed job whose work pi had settled is told, as the user's message, so that it carries on;
  * the transcript before it is unchanged.
  */
 const CONTINUATION_NOTE = "Carry on with the job from where you stopped.";
@@ -177,6 +178,13 @@ function submitResultTool(schema: Record<string, unknown>) {
           });
         }
       }
+      // Stored as Postgres's `jsonb`, which refuses NUL and lone surrogates.
+      const storable = z.safeParse(jsonTextSchema, value);
+      if (!storable.success) {
+        throw new Error(
+          `The result's strings and keys must be Unicode text without NUL:\n${z.prettifyError(storable.error)}`,
+        );
+      }
       const { valid, errors } = contract.validate(value);
       if (!valid) {
         const problems = errors.map((error) => `- ${error.message}`).join("\n");
@@ -200,14 +208,14 @@ function submitResultTool(schema: Record<string, unknown>) {
 /**
  * Opens `job`'s journal and sandbox in `<jobsDir>/<jobId>`, and gives the journal to
  * `journalOpened` before anything is written to it. The journal stays open until the caller's scope
- * closes, and the sandbox until the job's run ends. Records in the journal that the job started,
+ * closes, and the sandbox until its agent stops. Records in the journal that the job started,
  * the first time, or that it was recovered: a journal that already holds the job, unless
  * `openedBefore` says this process opened it, is one the Runner left before it restarted, since the
  * hub places a started job on no other Runner, and not here again while it runs. A job whose
  * run has ended is not recovered.
  *
- * Gives back the job's run, which runs its agent until it submits an accepted result or ends without
- * one, and records the job's end in the journal. Interrupting the run, as a Runner that stops, a
+ * Gives back an Effect that runs the job's agent until it submits an accepted result or ends
+ * without one, and records the job's end in the journal. Interrupting it, as a Runner that stops, a
  * run the hub drops, a pause and a cancel do, aborts none of the job's work: the caller's
  * scope then closes the journal and then the sandbox, which cuts the work off and leaves it pending
  * in the journal, so the job carries on from it when it is opened again, unless recording a pause or
@@ -241,7 +249,7 @@ export function openJob(
             afterTools: async (_assistant, _results, api) => {
               const accepted = await api.snapshot(AcceptedResult, api.conversationId, context);
               if (!accepted || !("result" in accepted)) return;
-              // Not awaited: the abort waits for this run, which is waiting for this hook. It
+              // Not awaited: the abort waits for this task, which is waiting for this hook. It
               // fails only when the journal closes first, as when the Runner stops, or when the
               // abort cannot be committed; the job's outcome is read from the journal either way.
               conversation?.abort(context).catch(() => {});
@@ -253,9 +261,9 @@ export function openJob(
     // The Workspace exists before its Input files: they are written only when the job's
     // conversation is created.
     yield* Effect.promise(() => mkdir(paths.workspace, { recursive: true }));
-    // The sandbox has a scope of its own, which the run closes once it has ended, while the journal
-    // stays open for reporting. A Runner that stops closes the journal first and the sandbox after
-    // it, so no tool call is left on a stopped daemon.
+    // The sandbox has a scope of its own, which `runAgent` closes once the agent has stopped, while
+    // the journal stays open for reporting. A Runner that stops closes the journal first and the
+    // sandbox after it, so no tool call is left on a stopped daemon.
     const sandbox = yield* Scope.fork(yield* Effect.scope);
     const { env } = yield* Effect.acquireRelease(
       Effect.sync(() => options.environments.open(paths)),
@@ -305,11 +313,11 @@ export function openJob(
       }),
     );
     conversation = root;
-    // A run that opens a journal already holding the job either carries on itself, left when
-    // the Runner restarted, or resumes the job as a new run. A run that has
-    // closed is not recovered, nor run again, also when its pause or cancel was recorded before it
-    // opened: the stop settled its work, and only a new run carries the job on. Whether it is
-    // a resume, and whether it has closed.
+    // A journal that already holds the job is opened by the same run, which the Runner's restart
+    // left, or by a new run that resumes the job. A run that has closed is not recovered,
+    // nor run again, also when its pause or cancel was recorded before it opened: the stop settled
+    // its work, and only a new run carries the job on. Whether it is a resume, and whether it has
+    // closed.
     const closed =
       !created &&
       (yield* Effect.promise(() =>
@@ -371,14 +379,14 @@ export function openJob(
         ? submit(job.prompt, promptRequest)
         : submit(CONTINUATION_NOTE, noteRequest);
     };
-    const run = Effect.gen(function* () {
+    const runAgent = Effect.gen(function* () {
       if (closed) return;
       const answered = Effect.promise(async () => {
         const submission = await submitInput();
         await submission.wait(context);
       });
-      // Once the job has finished, or pi has failed, all of its work stops. Interrupting the run
-      // leaves the work pending instead.
+      // Once the job has finished, or pi has failed, all of its work stops. An interrupt leaves
+      // the work pending instead.
       yield* answered.pipe(
         Effect.onExitIf(
           (exit) => !Exit.hasInterrupts(exit),
@@ -399,14 +407,15 @@ export function openJob(
           : submitClosing(root, options.runId, JobSucceeded, { timestamp, result }),
       );
     }).pipe(
-      // However the run ends, its sandbox goes, and with it every process the job left running. A
-      // Runner that stops interrupts the run instead, and closes the sandbox after the journal.
+      // Unless interrupted, the sandbox goes once the agent stops, and with it every process the
+      // job left running. An interrupt leaves it to the caller's scope, which closes it after the
+      // journal.
       Effect.onExitIf(
         (exit) => !Exit.hasInterrupts(exit),
         (exit) => Scope.close(sandbox, exit),
       ),
     );
-    return run;
+    return runAgent;
   });
 }
 
@@ -415,12 +424,12 @@ export type Stop = Extract<Intent, "pause" | "cancel">;
 
 /**
  * Records the pause or cancel `intent` of the job `jobId`'s run `runId`, once its
- * run has been interrupted. A pause or cancel is a decision about the job, so it settles the work
+ * agent has been interrupted. A pause or cancel is a decision about the job, so it settles the work
  * the interrupt left pending, as pi's Esc does (ADR 0028): opens the job's journal, where pi runs
  * nothing until asked to, aborts that work, which pi settles without running it, writing the
  * cut-off answer and tool calls into the conversation with their usage, and writes the run's
  * closing, the job's pause or its cancel, so that it is the journal's last entry. A job whose
- * accepted result the interrupted run had not yet recorded as its end succeeded, since completion
+ * accepted result the interrupted agent had not yet recorded as its end succeeded, since completion
  * ends a run (ADR 0009); a run that has already closed keeps its closing. Gives back the
  * journal, open until the caller's scope closes, or nothing when the job has no journal on this
  * Runner: a job its Runner never started has nothing to record.

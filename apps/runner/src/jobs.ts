@@ -9,8 +9,9 @@ import type {
   JobContent,
   JobReport,
   JobUsage,
+  RefusedReport,
 } from "contract";
-import { Array, Effect, Equal, Fiber, Latch, Option, Order, type Scope } from "effect";
+import { Array, Effect, Equal, Fiber, Latch, Option, Order, Result, type Scope } from "effect";
 import ensureError from "ensure-error";
 
 import {
@@ -33,7 +34,7 @@ import { readActivity, readEvents } from "./journal.ts";
 /**
  * One run the Runner holds: its job's journal and the hub's position in it, a failure its
  * journal could not record, the intent it has applied, and the latches the hub's pausing or
- * cancelling and its dropping it open. Either interrupts the job's run, which leaves its work
+ * cancelling and its dropping it open. Either interrupts the job's agent, which leaves its work
  * pending in the journal; a pause or cancel then settles that work and is recorded as the
  * run's closing.
  */
@@ -62,6 +63,10 @@ interface HeldJob {
   activityReported?: JobActivity;
   usageReported?: JobUsage;
   ended: boolean;
+  /** Why the hub refused the job's last report, until it applies one. */
+  refused?: string;
+  /** The number of the read that last read the job's report, so refused jobs take turns. */
+  lastRead: number;
   stopping: Latch.Latch;
   dropped: Latch.Latch;
 }
@@ -88,6 +93,8 @@ export class JobRunner {
   /** The deletions the hub lists, by job ID, until it stops listing them. */
   readonly #deletions = new Map<string, Deletion>();
   readonly #scope: Scope.Scope;
+  /** How many jobs' reports have been read, which numbers each read. */
+  #reads = 0;
 
   constructor(maxJobs: number, agent: AgentSettings, scope: Scope.Scope, onChange: () => void) {
     this.#maxJobs = maxJobs;
@@ -135,21 +142,35 @@ export class JobRunner {
     maxBytes: number,
     all: boolean,
   ): Effect.Effect<{ jobs: JobReport[]; deleted: string[]; more: boolean }> {
-    const held = [...this.#held.values()];
+    // A job whose report the hub refused is read only in the pass that reads every job, after the
+    // rest and with the budget they leave, so its backlog cannot hold up theirs. The refused
+    // ones go least recently read first, so one whose next event alone fills the budget cannot keep
+    // the others from ever being tried again.
+    const [ready, refused] = Array.partition(this.#held.values(), (job) =>
+      job.refused === undefined ? Result.succeed(job) : Result.fail(job),
+    );
+    const held = all
+      ? [...ready, ...Array.sortWith(refused, (job) => job.lastRead, Order.Number)]
+      : ready;
     // A deletion is reported done until the hub stops listing it, so the hub that missed one hears of
     // it again.
     const deleted = [...this.#deletions].flatMap(([jobId, deletion]) =>
       deletion.done ? [jobId] : [],
     );
-    return Effect.gen(function* () {
+    return Effect.gen({ self: this }, function* () {
       const jobs: JobReport[] = [];
       let budget = maxBytes;
       let more = false;
       for (const job of held) {
         if (budget <= 0) {
-          more = true;
+          // A refused job left unread asks for no further pass, which would send refused jobs'
+          // backlogs back to back. So a healthy job's event larger than the budget, read at the end
+          // of the pass over every job, leaves the refused ones to the next such pass.
+          more ||= job.refused === undefined;
           break;
         }
+        // Numbered only once read: a refused job the budget did not reach goes first next time.
+        job.lastRead = ++this.#reads;
         const report = { ...job.run, intent: job.intent, position: job.position };
         // Taken before the read: a failure is set after the job's last entry, so the read holds it.
         const { failedAt, journal } = job;
@@ -167,7 +188,7 @@ export class JobRunner {
         if (Option.isNone(read)) continue;
         const { events, bytes, conversations } = read.value;
         budget -= bytes;
-        more ||= read.value.more;
+        more ||= read.value.more && job.refused === undefined;
         const observed = Option.getOrUndefined(
           yield* readOrNone("activity", () => readActivity(journal, conversations, job.seen)),
         );
@@ -200,6 +221,32 @@ export class JobRunner {
       }
       return { jobs, deleted, more };
     });
+  }
+
+  /**
+   * Records which of the `reported` jobs' reports the hub `refused`. A refused job stays held
+   * and running, since the hub could not read its report, not that the job went wrong, and is read
+   * again only in the pass that reads every job; one reported again without a refusal is clear.
+   * Logs a refusal only when its reason is new, rather than in every pass that reads the job.
+   */
+  recordRefusals(
+    reported: readonly RunRef[],
+    refused: readonly RefusedReport[],
+  ): Effect.Effect<void> {
+    const refusals = new Map(refused.map((refusal) => [refusal.runId, refusal]));
+    return Effect.forEach(
+      reported,
+      (ref) => {
+        const job = this.#held.get(ref.runId);
+        if (!job) return Effect.void;
+        // The reported jobs are whole reports, so the log takes the hub's refusal instead.
+        const refusal = refusals.get(ref.runId);
+        const isNew = refusal !== undefined && refusal.reason !== job.refused;
+        job.refused = refusal?.reason;
+        return isNew ? Effect.logWarning("The hub refused a job's report", refusal) : Effect.void;
+      },
+      { discard: true },
+    );
   }
 
   /**
@@ -308,6 +355,7 @@ export class JobRunner {
       position: run.position,
       journalKnownAbsent: false,
       seen: new Map(),
+      lastRead: 0,
       // A run given without its job is only to have its pause or cancel recorded: it takes no
       // slot.
       ended: job === undefined,
@@ -318,7 +366,8 @@ export class JobRunner {
     // Held before the fiber starts: its first report may come before the fork returns.
     this.#held.set(key, held);
     const changed = () => {
-      // A run stopped meanwhile reports nothing: the hub no longer wants it.
+      // A run no longer held reports nothing: the hub has dropped it, or lists it again to be
+      // held anew.
       if (this.#held.get(key) === held) this.#onChange();
     };
     const forget = () => {
@@ -354,9 +403,9 @@ export class JobRunner {
         };
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const agentRun = yield* openJob(ref.jobId, content, agent);
+            const runAgent = yield* openJob(ref.jobId, content, agent);
             changed();
-            yield* agentRun;
+            yield* runAgent;
           }).pipe(
             // A fault in the Runner itself, such as its storage failing, fails the job rather than
             // leaving it running for as long as the Runner stays connected, though its journal
@@ -385,8 +434,8 @@ export class JobRunner {
       });
 
     /**
-     * Records the job's pause or cancel, `stop`, once its run has stopped, and keeps the journal open
-     * for its reports until the hub drops the run, which it does once it has stored it.
+     * Records the job's pause or cancel, `stop`, once its agent has stopped, and keeps the journal
+     * open for its reports until the hub drops the run, which it does once it has stored it.
      */
     const recording = (stop: Stop) =>
       Effect.scoped(
@@ -402,7 +451,7 @@ export class JobRunner {
       ).pipe(
         // A pause or cancel that cannot be recorded, as when the journal cannot be looked up or
         // opened, is tried again: the run is forgotten, so the hub's next answer, which lists
-        // it again, records it anew. Its run has stopped, so it takes no slot meanwhile.
+        // it again, records it anew. Its agent has stopped, so it takes no slot meanwhile.
         Effect.catchCause((cause) =>
           Effect.logError("A job's pause or cancel could not be recorded", cause).pipe(
             Effect.andThen(
@@ -418,15 +467,15 @@ export class JobRunner {
     const runUntilStopped = Effect.gen(function* () {
       // The hub may place a job here again while its earlier run is still closing the journal.
       if (previous) yield* Fiber.await(previous);
-      // A pause, a cancel or a drop interrupts the job's run at once, which leaves its work pending in
-      // the journal; recording a pause or cancel then settles it.
+      // A pause, a cancel or a drop interrupts the job's agent at once, which leaves its work pending
+      // in the journal; recording a pause or cancel then settles it.
       const stopped = yield* Effect.raceFirst(
         job ? working(job) : Effect.never,
         Effect.raceFirst(
           held.dropped.await.pipe(Effect.as("dropped" as const)),
           held.stopping.await.pipe(Effect.as("stopping" as const)),
         ).pipe(
-          // Let go of the journal before the run's scope closes it, so no report reads it closed.
+          // Let go of the journal before the agent's scope closes it, so no report reads it closed.
           Effect.tap(() =>
             Effect.sync(() => {
               held.journal = undefined;
@@ -434,7 +483,7 @@ export class JobRunner {
           ),
         ),
       );
-      // The latest stop the hub asked for, read once the run has stopped.
+      // The latest stop the hub asked for, read once the agent has stopped.
       if (stopped === "stopping" && held.stop) yield* recording(held.stop);
     }).pipe(
       Effect.ensuring(

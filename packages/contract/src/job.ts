@@ -23,6 +23,32 @@ export const textSchema = z
     ),
   );
 
+/**
+ * A JSON value whose strings and keys are text a job keeps (`textSchema`), as Postgres's `jsonb`
+ * stores it: `jsonb` refuses NUL and lone surrogates too.
+ */
+export const jsonTextSchema: z.ZodMiniType<z.infer<ReturnType<typeof z.json>>> = z.lazy(() =>
+  z.union([
+    textSchema,
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonTextSchema),
+    // Keys are checked as the record's own refinement: a key the record's key schema refused would
+    // fail every option of the union, whose error then names neither the key nor the rule.
+    z.record(z.string(), jsonTextSchema).check(
+      z.superRefine((record, context) => {
+        for (const key of Object.keys(record)) {
+          const parsed = z.safeParse(textSchema, key);
+          for (const issue of parsed.success ? [] : parsed.error.issues) {
+            context.addIssue({ ...issue, path: [key] });
+          }
+        }
+      }),
+    ),
+  ]),
+);
+
 /** File systems limit a file name to 255 bytes of UTF-8; `valid-filename` counts UTF-16 units. */
 const MAX_NAME_BYTES = 255;
 

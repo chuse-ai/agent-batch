@@ -8,7 +8,7 @@ Jobs stopped by a limit count as failures, because a limit that every job hits i
 
 - Labels alone, with no batch: nothing to pause when a shared flaw shows up.
 - Measuring the tolerance against the batch's total size, as AWS Step Functions does: ten percent of 500 jobs allows 50 failures before anything stops.
-- A sliding window over recent jobs, by default or as an option: reacts faster to breakage late in a run, but such breakage mostly makes jobs fail quickly and cheaply, so it is left out until evidence shows it is needed.
+- A sliding window over recent jobs, by default or as an option: reacts faster to breakage late in a batch, but such breakage mostly makes jobs fail quickly and cheaply, so it is left out until evidence shows it is needed.
 - A separate rule for failures in a row: a second mechanism for the same late-breakage case.
 - A tolerance given as a count as well as a percentage: a second form to explain, while a percentage works for batches of any size.
 - `canary` and the threshold as independent top-level fields: they only make sense together, and separate fields allowed combinations such as a canary with no threshold.

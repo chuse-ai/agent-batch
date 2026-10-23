@@ -54,6 +54,9 @@ const HUB_SETTINGS = {
   HUB_URL: HUB_ORIGIN,
   // Every test request comes from the same address, so Better Auth's limits would trip.
   AUTH_RATE_LIMIT: "false",
+  // A running job's events and activity reach the hub within this, so tests waiting for them do
+  // not wait out the default's 3 s.
+  REPORT_INTERVAL_MS: "100",
 };
 
 /** Deletes all rows from the hub's tables, keeping the schema and the record of applied migrations. */
@@ -120,9 +123,9 @@ async function startNodeHub(databaseUrl: string, settings: Record<string, string
 }
 
 /**
- * Starts the hub this test project runs against, against the run's Postgres and set up with `OWNER`,
- * and lets tests start a Runner beside it as a Node Runner on a host would run: registering with a
- * shared key, then dialling the hub's URL over a real WebSocket with its own key.
+ * Starts the hub this test project runs against, against the test run's Postgres and set up with
+ * `OWNER`, and lets tests start a Runner beside it as a Node Runner on a host would run: registering
+ * with a shared key, then dialling the hub's URL over a real WebSocket with its own key.
  */
 export function startSystem(
   options: { hubVars?: Record<string, string>; heartbeatIntervalMs?: number } = {},

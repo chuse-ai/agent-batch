@@ -11,7 +11,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await schema
     .alterTable("job")
     .addColumn("runnerId", "text")
-    // The job's current stay on a Runner, null until it is first placed; a resume mints the next.
+    // The job's current run, null until it is first placed; a resume mints the next.
     .addColumn("runId", "uuid")
     // The hub's clock when the run was sent to its Runner, null until then; the deadline for
     // the Runner to confirm it reads it.

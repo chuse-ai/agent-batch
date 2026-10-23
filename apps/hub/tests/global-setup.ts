@@ -9,7 +9,7 @@ declare module "vite-plus/test" {
   }
 }
 
-/** Starts one migrated Postgres for the run; the hub reaches it through Hyperdrive's local connection string. */
+/** Starts one migrated Postgres for the test run; the hub reaches it through Hyperdrive's local connection string. */
 export default async function setup(project: TestProject) {
   const container = await new PostgreSqlContainer("postgres:18-alpine").start();
   await migrateDatabase(container.getConnectionUri());

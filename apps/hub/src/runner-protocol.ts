@@ -12,6 +12,7 @@ import {
   isoDate,
   jobEndingSchema,
   jobOpeningSchema,
+  jobReportSchema,
   jobSuccessSchema,
   notification,
   runnerMethods,
@@ -23,7 +24,7 @@ import {
   type JsonValue,
   type Load,
 } from "contract";
-import { type Context, Effect } from "effect";
+import { Array, type Context, Effect, Result } from "effect";
 import { type Expression, type ExpressionBuilder, sql } from "kysely";
 import { jsonArrayFrom, jsonBuildObject } from "kysely/helpers/postgres";
 import * as z from "zod/mini";
@@ -726,10 +727,29 @@ export const handleRunnerMessage = createProtocolServer<typeof runnerMethods, Ru
     report: async ({ jobs, deleted, ...load }, context) => {
       if (context.recordSeen)
         await runWithServices(context, recordRunnerSeen(context.runnerId, new Date()));
-      if (jobs.length > 0) await runWithServices(context, applyReports(context.runnerId, jobs));
+      // Each job's report is read on its own, so one the hub cannot apply is refused alone, and the
+      // Runner's other jobs keep reporting.
+      const [reports, refused] = Array.partition(jobs, (item) => {
+        const parsed = z.safeParse(jobReportSchema, item);
+        return parsed.success
+          ? Result.succeed(parsed.data)
+          : Result.fail({
+              jobId: item.jobId,
+              runId: item.runId,
+              reason: z.prettifyError(parsed.error),
+            });
+      });
+      if (refused.length > 0) {
+        await runWithServices(
+          context,
+          Effect.logWarning("A Runner's job reports were refused", refused),
+        );
+      }
+      if (reports.length > 0)
+        await runWithServices(context, applyReports(context.runnerId, reports));
       if (deleted.length > 0)
         await runWithServices(context, confirmDeletions(context.runnerId, deleted));
-      return await runWithServices(context, placeAndRead(context.runnerId, load));
+      return { ...(await runWithServices(context, placeAndRead(context.runnerId, load))), refused };
     },
   },
 );

@@ -422,7 +422,9 @@ function connectAndSync(
         );
         const load = context.jobs.load();
         if (jobs.length > 0 || deleted.length > 0) {
-          context.jobs.reconcile(yield* request("report", { ...load, jobs, deleted }));
+          const answer = yield* request("report", { ...load, jobs, deleted });
+          yield* context.jobs.recordRefusals(jobs, answer.refused);
+          context.jobs.reconcile(answer);
         } else if (prompted || all) {
           context.jobs.reconcile(yield* request("sync", load));
         }

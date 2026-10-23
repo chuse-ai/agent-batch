@@ -15,7 +15,7 @@ import { jobActivitySchema, jobEventSchema } from "./runner-protocol.ts";
 
 export * from "./problem-details.ts";
 export * from "./json-rpc.ts";
-export { type ResultContract } from "./job.ts";
+export { jsonTextSchema, type ResultContract } from "./job.ts";
 export * from "./runner-protocol.ts";
 
 // `zod/mini` leaves messages out unless asked; without them every problem reads "Invalid input".
@@ -181,7 +181,7 @@ export const jobEventsPageSchema = z
     hasMore: z.boolean(),
     /**
      * The job's status as of this page, read with its events: once it is final, the job's events are
-     * stored up to its end. A job whose Host is lost may end without some of its events, so a final
+     * stored up to its end. A job whose host is lost may end without some of its events, so a final
      * status says nothing follows, not that every event is here.
      */
     status: jobStatusSchema,
@@ -425,9 +425,9 @@ export const contract = {
       .input(z.object({ id: jobIdSchema }))
       .output(jobSchema),
     /**
-     * Reads a job's events in pages, during and after its run. A page holds at most `limit` events
-     * and stops early after about 1 MiB of them, though it always holds at least one if there are
-     * any.
+     * Reads a job's events in pages, while the job runs and after it ends. A page holds at most
+     * `limit` events and stops early after about 1 MiB of them, though it always holds at least one
+     * if there are any.
      */
     events: api
       .errors({ [NotFound.code]: NotFound })
