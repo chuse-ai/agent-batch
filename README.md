@@ -1,6 +1,8 @@
 # agent-batch
 
-Run hundreds of one-off agent jobs unattended, each with a result contract. On your own machines first, spilling over to Cloudflare® Workers.
+Run one-off agent jobs unattended on your own machines, each with a validated result contract.
+
+The hub runs on Cloudflare Workers or Node/Docker; Runners execute jobs on the machines you provision. Automatic cloud overflow is planned. See [release scope and limitations](docs/release-scope.md).
 
 ## Quickstart
 

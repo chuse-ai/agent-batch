@@ -151,8 +151,8 @@ async function writeInputFiles(workspace: string, files: JobContent["inputFiles"
 }
 
 /**
- * What the agent is told about the job, beside its Prompt. The
- * sandbox's `/tmp` is the job's own but held in memory, which counts against the job's memory limit.
+ * What the agent is told about the job, beside its Prompt. The sandbox's `/tmp` is the job's own
+ * but held in memory, which counts against the job's memory limit.
  */
 function instructions(paths: { workspace: string }) {
   return `You are running a job unattended; nobody will answer questions. Your Workspace, where your files are and your commands run, is ${paths.workspace}; the job's Input files, if any, are in ${path.join(paths.workspace, "inputs")}. For temporary files, use the directory in $TMPDIR, not /tmp.
@@ -448,7 +448,7 @@ export function openJob(
         harness.snapshot(AcceptedResult, root.id, context),
       );
       // An agent that stopped without an accepted result fails the job at once; reminding it
-      // first is planned with failure reporting and result reminders.
+      // first is planned.
       // JSON holds no `undefined`, so a result that is absent was never accepted.
       const result = accepted?.result;
       const timestamp = Date.now();

@@ -1,5 +1,7 @@
 # The hub runs on Workers and in Docker alike, with Postgres and S3-compatible storage
 
+> Implementation status: Both hub runtimes and Postgres are implemented. S3-compatible file/event storage, upload flows, compaction and retention described below are planned; events currently remain in Postgres.
+
 The hub runs both on Cloudflare Workers and as a Docker image for Railway, a VPS, Kubernetes, or a company's own machine, and every feature lands on both. It is written to Web standards, with Durable Objects used only to hold runner connections on Workers. Its only database is Postgres, reached through Hyperdrive on Workers and directly elsewhere. Its tables live in their own schema, `agent_batch`, named in every statement, so the hub can share a database with other software; Hyperdrive resets `search_path` after each transaction, so the schema cannot be set once per connection. Files and jobs' events go to S3-compatible object storage, R2 by default; input files are uploaded straight to it through presigned URLs, while the small ones sent inline with a job stay in Postgres. Events land in Postgres as runners send them. The hub writes a job's events to object storage as JSON Lines when the job ends or is paused, or once its unwritten events pass a size limit, and then deletes those rows, so the database holds only the events not yet written, and object storage the rest.
 
 ## Considered options

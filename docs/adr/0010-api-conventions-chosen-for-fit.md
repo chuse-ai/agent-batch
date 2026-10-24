@@ -1,5 +1,7 @@
 # API conventions are chosen for fit, in camelCase
 
+> Implementation status: The HTTP contract and CLI implement these naming conventions. A public TypeScript client and Workers service binding are planned.
+
 Every surface of the API (the HTTP API, the TypeScript client, and a Workers service binding) uses camelCase for field names and for string values (`idempotencyKey`, `resultContract`, `runTimedOut`), with lowercase, plural, hyphenated URL paths (`/jobs/:id`, `/api-keys`). Cloudflare Workflows, the platform service closest to ours, does the same in its JavaScript API, including state values such as `waitingForPause`. Several of our surfaces are camelCase whatever we choose (JavaScript bindings, the JSON Schema keywords inside result contracts, data from Pi), so camelCase is the only casing that can be the same everywhere. Agent tool names are the exception: they follow the snake_case convention models are trained on (`submit_result`).
 
 Patterns are chosen for how well they fit what we need, not by the project they come from: a less common design that works better wins over the most familiar one. Names inside our code and our domain terms are our own, chosen for clarity.

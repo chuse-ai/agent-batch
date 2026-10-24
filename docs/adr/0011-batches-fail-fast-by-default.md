@@ -1,5 +1,7 @@
 # Batches fail fast by default
 
+> Implementation status: Planned design. Batch submission, canaries and fail-fast policies are not implemented.
+
 Jobs submitted together form a batch, which carries a `failFast` policy so that a flaw shared by every job (a cap set too low, a broken prompt or contract, bad input files) is caught after a few jobs instead of after all of them. By default the first jobs of the batch (the canary) run before the rest are released, and the batch pauses when the share of failed jobs among its finished jobs exceeds the tolerance; paused batches hold their jobs that have not started, let running ones finish, and are resumed or cancelled by a person or a program. `failFast` is `true` by default, `false` to turn it off, or `{ canary, tolerance }` to tune it, where `tolerance` is a percentage of finished jobs.
 
 Jobs stopped by a limit count as failures, because a limit that every job hits is exactly the kind of flaw this catches; jobs a person cancels do not count.

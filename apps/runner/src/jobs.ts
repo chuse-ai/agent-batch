@@ -411,7 +411,7 @@ export class JobRunner {
           }).pipe(
             // A fault in the Runner itself, such as its storage failing, fails the job rather than
             // leaving it running for as long as the Runner stays connected, though its journal
-            // records no end. Telling such a failure apart is planned with structured failure reasons. A stopping Runner interrupts
+            // records no end. A distinct failure reason is planned. A stopping Runner interrupts
             // the job instead, which reports nothing.
             Effect.catchDefect((defect) =>
               Effect.logError("A job's agent failed", ensureError(defect)).pipe(

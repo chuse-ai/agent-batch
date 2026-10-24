@@ -2,7 +2,7 @@ import { type Kysely, sql } from "kysely";
 
 // A job's current run and what came of it: the Runner, the run's ID (ADR 0026),
 // when its agent's loop started and ended, and its result. The Runner is copied, not referenced, so
-// a removed Runner stays on the jobs it ran: it identifies where they ran. The loop's times
+// a removed Runner stays on the jobs it ran: their execution history identifies the host. The loop's times
 // are the Runner's clock, as its reports give them, since a report may arrive a sync interval late;
 // an end the hub makes itself, as when it cancels a job no Runner was sent, is the hub's clock.
 

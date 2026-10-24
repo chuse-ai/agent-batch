@@ -46,7 +46,7 @@ export class Auth extends Context.Service<
 /**
  * The hub's database and Better Auth on it, for the Layer's lifetime. On Workers the Layer is built
  * per request: instances reused across requests can wait forever after a cancelled request leaves a
- * promise they share unsettled (better-auth/better-auth#10315, better-auth/better-auth#11651).
+ * promise they share unsettled (better-auth/better-auth#10315, #11651).
  */
 export function databaseAndAuthLayer(connectionString: string, settings: Omit<AuthSettings, "db">) {
   return Layer.effectContext(

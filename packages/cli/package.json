@@ -1,7 +1,7 @@
 {
   "name": "agent-batch",
   "version": "0.0.0",
-  "description": "Run hundreds of one-off agent jobs unattended, each with a result contract. On your own machines first, spilling over to Cloudflare Workers.",
+  "description": "Run one-off agent jobs unattended on your own machines, each with a validated result contract.",
   "homepage": "https://github.com/chuse-ai/agent-batch#readme",
   "bugs": {
     "url": "https://github.com/chuse-ai/agent-batch/issues"

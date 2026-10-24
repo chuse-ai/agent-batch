@@ -1,6 +1,6 @@
 # agent-batch
 
-Run hundreds of one-off agent jobs unattended, each with a result contract. On your own machines first, spilling over to Cloudflare® Workers.
+Run one-off agent jobs unattended on your own machines, each with a validated result contract.
 
 ## The command
 

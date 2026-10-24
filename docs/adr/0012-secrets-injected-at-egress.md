@@ -1,5 +1,7 @@
 # Secrets are injected at egress; agents never see their values
 
+> Implementation status: Planned design. Job commands currently have no network access or secret injection. Model provider credentials remain outside the job sandbox. ADR 0027 replaces the earlier shell architecture.
+
 An agent can leak anything it can read: into its messages, which the hub stores, into output files, or to a host a malicious page or document tricks it into contacting. So secrets for the services a job uses (OCR, scraping, databases) are stored by the organization with the hosts each may be sent to, a job names the secrets it may use, and the workspace holds only placeholders. Every outbound request from the workspace passes through a point the runner controls, which adds the real value for allowed hosts: the runner itself for just-bash shells, which have no network of their own and fetch through it (ADR 0019); an egress proxy for local containers; and on Cloudflare, Computer's `http-gateway` egress mode and Containers' outbound interception. Model provider keys never enter the workspace at all, because the agent loop runs in the runner and makes model calls itself.
 
 ## Considered options

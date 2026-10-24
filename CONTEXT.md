@@ -1,6 +1,8 @@
 # agent-batch
 
-Runs many one-off AI agent jobs unattended, each returning a result that meets a declared contract, on the organization's own machines first and on Cloudflare when they are full.
+Runs many one-off AI agent jobs unattended, each returning a result that meets a declared contract, on the organization's provisioned Runners. Automatic cloud overflow is planned.
+
+This glossary includes both implemented concepts and planned vocabulary. Entries marked planned are not available in the current implementation; see [release scope](docs/release-scope.md).
 
 ## Language
 
@@ -9,19 +11,19 @@ The company a deployment serves; it owns every job, member, key and Runner in th
 _Avoid_: tenant
 
 **Member**:
-A person in the organization, signed in with a password or through the organization's identity provider, with a role there. Better Auth calls the person a user and their place in the organization a member; with one organization per deployment the two coincide, and the API speaks of members.
+A person in the organization, signed in with a password, with a role there. Organization identity-provider sign-in is planned. Better Auth calls the person a user and their place in the organization a member; with one organization per deployment the two coincide, and the API speaks of members.
 _Avoid_: seat
 
 **API key**:
 A named, revocable credential owned by the organization that a service uses to call the hub, limited to the actions it is granted. Each key is an identity of its own, as a service account is elsewhere; the member who created it is recorded but does not act through it. Not a Secret, which a job uses to call other services.
 
-**Secret**:
+**Secret** (planned):
 A named credential the organization stores with the hosts it may be sent to; a job may use it without its agent ever seeing the value. Not an API key, which calls the hub.
 
 **Job**:
 One self-contained piece of agent work: a prompt, its input files, and a result contract. It succeeds at most once, unattended, possibly over several runs; a caller may pause, resume or cancel it. Its agent works in conversations, pi's records within the job.
 
-**Label**:
+**Label** (planned):
 A key and value attached to a job when it is submitted, such as `customer = acme`, used to find jobs, group them, and attribute their cost.
 _Avoid_: tag
 
@@ -52,22 +54,22 @@ A file written into a job's workspace before its agent starts, such as a documen
 _Avoid_: attachment, input data
 
 **Result contract**:
-The JSON Schema, and optional validation script, that a job's result must satisfy before the job counts as succeeded. It governs the result only, not the Output files.
+The JSON Schema a job's result must satisfy before the job counts as succeeded. Additional validation scripts are planned. It governs the result only, not the Output files.
 _Avoid_: output contract, output format, response schema
 
-**Output file**:
+**Output file** (planned):
 A file a job's agent puts in its output folder, delivered to the caller with the result and kept even if the machine that ran the job goes away; what CI systems call an artifact.
 _Avoid_: attachment, export
 
-**Result item**:
+**Result item** (planned):
 One element of a job's result when the result is a list, validated and kept the moment it is accepted.
 _Avoid_: partial result, chunk
 
-**Batch**:
+**Batch** (planned):
 The jobs submitted together, released and paused as one.
 _Avoid_: group, campaign
 
-**Canary**:
+**Canary** (planned):
 The first jobs of a batch, run before the rest are released.
 _Avoid_: preflight, pilot, trial run
 
@@ -80,7 +82,7 @@ What a running job is doing at this moment, such as waiting on a model or runnin
 _Avoid_: live view
 
 **Hub**:
-The single central service, the control plane, that every caller and runner connects to; it accepts jobs, keeps the record of every job and runner, decides where each job runs (the organization's self-hosted Runners first, Cloudflare when they are full), and relays each job's events.
+The single central service, the control plane, that every caller and runner connects to; it accepts jobs, keeps the record of every job and runner, decides where each job runs (among connected Runners with available capacity), and relays each job's events.
 _Avoid_: coordinator
 
 **Runner**:
@@ -95,14 +97,14 @@ _Avoid_: job directory
 Where a job's commands run and its files live, such as a sandboxed shell beside the runner, a container, or Cloudflare Computer; each declares what it can run and how it isolates and keeps files.
 _Avoid_: backend
 
-**Container image**:
-The Linux image a container starts when a job's commands need real programs; ours is published as `agent-batch-container`.
+**Container image** (planned):
+The Linux image a container starts when a job's commands need real programs; a separate image for heavy job commands is planned.
 _Avoid_: job image, sandbox image
 
 **Run**:
 One stretch of a job running on a runner. It begins with one input, the job's prompt or a resume's note, when the hub places the job there or resumes it, and ends at a decided stop, when the job pauses or ends, or when the hub drops it; a restart of its runner does not end it. Its ID fences what the runner reports, so nothing a past run does touches the next.
 _Avoid_: execution, invocation
 
-**Extension**:
+**Extension** (planned):
 A Pi extension listed in configuration and bundled into runners at deploy time, changing how the agent loop behaves.
 _Avoid_: plugin, add-on

@@ -328,7 +328,7 @@ const unchanged: Decision = { kind: "unchanged" };
 const refused = (why: string): Decision => ({ kind: "refused", why });
 
 /**
- * What `control` does to `job` at `now`, under the control transition rules: a control is a no-op when what it asks
+ * What `control` does to `job` at `now`: a control is a no-op when what it asks
  * for already holds, and refused when it cannot hold; otherwise the hub applies it where no Runner
  * can be running the job, and it waits for the job's Runner where one may be. A resume that changes
  * the job gives it the limits in `given`, and is refused when its model budget would not be

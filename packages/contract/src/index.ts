@@ -350,7 +350,7 @@ export const contract = {
         z.object({ name: z.string().check(z.describe("The Runner's name, as the hub lists it.")) }),
       )
       .output(registeredRunnerSchema),
-    // Removing a Runner ends its unfinished jobs and records files its host may still hold.
+    // Removing a Runner ends the jobs it held that have not ended.
     delete: api
       .errors({ [Forbidden.code]: Forbidden, [NotFound.code]: NotFound })
       .meta(
@@ -489,7 +489,7 @@ export const contract = {
       )
       .input(jobRefSchema)
       .output(jobSchema),
-    // Deleting a finished job removes its hub content and records any file deletion owed by its Runner.
+    // Deletion removes content and records the host file purge still owed.
     delete: api
       .errors({ [NotFound.code]: NotFound, [ControlRefused.code]: ControlRefused })
       .meta(

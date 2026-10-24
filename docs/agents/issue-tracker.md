@@ -1,7 +1,9 @@
-# Issue tracker
+# Issue tracker: GitHub
 
-Use GitHub Issues for `chuse-ai/agent-batch` through the `gh` CLI. Read the relevant issue, linked pull requests and discussion before changing behavior. Check the repository's contribution policy before proposing changes.
+Issues and pull requests live in the repository's GitHub tracker. Use the `gh` CLI, with the repository inferred from its remote or explicitly supplied with `--repo`.
 
-Record concrete behavior, reproduction steps, tradeoffs and verification. Keep useful reasoning with the change so later maintainers can understand it without reconstructing a conversation. Resolve issue and pull-request references against their actual repository; they share a number space.
+Read the issue body, labels and comments before working on it. GitHub shares a number space between issues and pull requests; verify which kind a reference names. Preserve the technical reasoning in a change description, including important corrections and validation, so a squash commit remains understandable without its discussion.
 
-Create or edit remote issues, pull requests or comments only when authorized. When using `gh` for multiline text, write the exact text to a file and pass `--body-file` so newlines and literal examples survive shell parsing.
+Create or modify remote records only when the task authorizes it. For multiline issue bodies, PR descriptions or comments, write the text to a file and pass `--body-file`. Keep private operational details and internal research out of public records.
+
+Outside code contributions are closed for now; issues and bug reports are welcome. See [CONTRIBUTING.md](../../CONTRIBUTING.md). Apply the project's [triage labels](triage-labels.md) according to the work required, and use GitHub's native issue dependencies when recording an actual blocking relationship.

@@ -1,5 +1,7 @@
 # Runners are Node processes holding many agents, with pluggable execution environments
 
+> Historical design: the current OS sandbox is described in ADR 0027. Overflow, capability-based placement and remote heavy-command containers discussed here remain planned. Measurements below are development probes of the stated workloads, not general capacity guarantees.
+
 _The default environment, the paragraphs on containment and on `python3`, `js-exec` and `sqlite3`, and the measurements of just-bash are replaced by ADR 0027; Runners as Node processes holding many agents, with pluggable environments, stand._
 
 A runner is a Node process that runs many jobs' agent loops at once, each on pi-durable with its journal in SQLite on local disk. The same runner image runs on hosts, on VPSes, and in cloud containers when work spills over. Where a job's tools read and write files and run commands is an execution environment behind pi-durable's `ExecutionEnv` interface. Each environment declares what it can run, how durable its files are, how it isolates commands, and how files reach it, and placement matches a job's declared needs against them.

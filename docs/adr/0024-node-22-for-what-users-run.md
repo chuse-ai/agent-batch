@@ -1,6 +1,6 @@
 # What users run supports Node 22; the hub runs on runtimes we choose
 
-The `agent-batch` CLI, with the Runner and the contract it bundles (ADR 0004), runs on whatever Node its user installed, so it supports every Node release line still maintained: Node 22 onwards, maintained until 2027-04-30. The tools it builds on accept Node 22 too: wrangler needs 22.0, Vite+ 22.18 and Pi 22.19, so a higher floor would turn away users whom every dependency accepts. `engines.node` names the lowest Node 22 release these dependencies accept: `>=22.18.0` today, `>=22.19.0` once the Runner depends on Pi.
+The `agent-batch` CLI and the separately run Runner, each bundling the shared contract, runs on whatever Node its user installed, so it supports every Node release line still maintained: Node 22 onwards, maintained until 2027-04-30. The tools it builds on accept Node 22 too: wrangler needs 22.0, Vite+ 22.18 and Pi 22.19, so a higher floor would turn away users whom every dependency accepts. `engines.node` names the lowest Node 22 release these dependencies accept: `>=22.19.0`.
 
 The hub runs only on runtimes we choose: its Docker image's Node (`engines.node` `>=26` in the hub's package) and current workerd. So the hub may use any JavaScript they implement, and the code users run may use only what Node 22 has.
 

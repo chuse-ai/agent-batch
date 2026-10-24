@@ -46,7 +46,7 @@ jobs:
             exit 1
           fi
 
-  # What users run on their own Node (the CLI, and the Runner and contract it bundles) supports Node 22
+  # What users run on their own Node (the CLI, the Runner and their shared contract) supports Node 22
   # from the lowest release `engines.node` allows (ADR 0024); the hub runs only on Node 26 and workerd.
   node-22:
     runs-on: *ubuntu
