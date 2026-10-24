@@ -70,6 +70,7 @@ jobs:
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
         with:
           cache: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # What the Runner's image needs of an Ubuntu 24.04 host, as BuildKit's rootless image
       # does: AppArmor otherwise denies its jobs' sandboxes the user namespaces they need.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

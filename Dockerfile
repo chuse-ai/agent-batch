@@ -42,6 +42,7 @@ COPY --from=hub-build /app/apps/hub/dist/node_modules ./node_modules
 # Applied as the hub starts (ADR 0015); the manifest makes Node load them as modules.
 COPY --from=hub-build /app/apps/hub/migrations ./migrations
 COPY --from=hub-build /app/apps/hub/package.json ./
+COPY --from=hub-build /app/LICENSE ./LICENSE
 
 EXPOSE 8787
 # Healthy once the hub answers its health route, after migrating and setting up. For its first
@@ -79,6 +80,7 @@ RUN apt-get update \
 COPY --from=runner-build /tmp/node /usr/local/bin/node
 COPY --from=runner-build /tmp/node-LICENSE /usr/local/share/doc/node/LICENSE
 COPY --from=runner-build /tmp/runner /app
+COPY --from=runner-build /app/LICENSE /app/LICENSE
 ENV NODE_ENV=production RUNNER_DATA_DIR=/data
 USER runner
 WORKDIR /app
