@@ -33,7 +33,7 @@ RUN vp run --no-cache hub#build && vp run --no-cache hub#notices
 # --- the hub's runtime: distroless's Node image, which brings the libraries Node needs, libatomic1
 # among them, which the guide's `distroless/cc` tip lacks (voidzero-dev/vite-plus#3219). The hub runs
 # distroless's Node, which Dependabot keeps current, rather than the workspace's exact one ---
-FROM gcr.io/distroless/nodejs26-debian13:nonroot@sha256:3a6f4e6fd37efe00042667d06fd52240f2589ed09b0694fbb3b1bf860030a839 AS hub
+FROM gcr.io/distroless/nodejs26-debian13:nonroot@sha256:96455baef11b178fc135b32206e3922c515dbed2400676c94f907f8f84e6abf6 AS hub
 WORKDIR /app
 ENV NODE_ENV=production
 
