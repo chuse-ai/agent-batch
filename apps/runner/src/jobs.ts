@@ -395,6 +395,8 @@ export class JobRunner {
         const agent = {
           ...settings,
           runId: ref.runId,
+          runTimeoutSeconds: run.runTimeoutSeconds,
+          modelBudgetUsd: run.modelBudgetUsd,
           openedBefore,
           // Held as soon as it opens, so whatever fails after that is read from the journal.
           journalOpened: (journal: Harness) => {

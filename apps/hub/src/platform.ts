@@ -3,6 +3,7 @@ import { type Cause, Context, type Effect } from "effect";
 import type { Auth } from "./auth/auth.ts";
 import type { Db } from "./db/database.ts";
 import type { RunnerId } from "./db/types.ts";
+import type { JobLimitSettings } from "./settings.ts";
 
 // The hub runs on Workers and in Docker alike (ADR 0014). What differs between the two is a service
 // with one Layer per platform (ADR 0022); everything else is shared.
@@ -26,6 +27,6 @@ export class RunnerConnections extends Context.Service<
 
 /**
  * The services every platform provides to the hub: its database and Better Auth on it, built once in
- * Docker and per request on Workers, and its Runners' connections.
+ * Docker and per request on Workers, its Runners' connections, and the limits it gives jobs.
  */
-export type HubServices = Db | Auth | RunnerConnections;
+export type HubServices = Db | Auth | RunnerConnections | JobLimitSettings;

@@ -60,7 +60,11 @@ export default interface JobTable {
 
   recordedTotalTokens: ColumnType<number, number | undefined, number>;
 
-  recordedCostUsd: ColumnType<string, string | undefined, string>;
+  recordedCostUsd: ColumnType<number, number | undefined, number>;
+
+  runTimeoutSeconds: ColumnType<number, number, number>;
+
+  modelBudgetUsd: ColumnType<number, number, number>;
 }
 
 export type Job = Selectable<JobTable>;

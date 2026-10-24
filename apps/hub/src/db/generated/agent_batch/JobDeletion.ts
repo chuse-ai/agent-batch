@@ -38,7 +38,7 @@ export default interface JobDeletionTable {
 
   totalTokens: ColumnType<number, number, number>;
 
-  costUsd: ColumnType<string, string, string>;
+  costUsd: ColumnType<number, number, number>;
 }
 
 export type JobDeletion = Selectable<JobDeletionTable>;

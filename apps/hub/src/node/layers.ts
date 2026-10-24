@@ -3,7 +3,7 @@ import { Context, Effect, Layer } from "effect";
 import { databaseAndAuthLayer } from "../auth/auth.ts";
 import type { Db } from "../db/database.ts";
 import { RunnerConnections } from "../platform.ts";
-import { authSettings, type HubSettings } from "../settings.ts";
+import { authSettings, type HubSettings, jobLimitSettingsLayer } from "../settings.ts";
 import { RunnerSockets } from "./runner-sockets.ts";
 
 // The hub in Docker: one process, with one database pool for every request and every Runner's
@@ -38,5 +38,10 @@ export function nodeServices(settings: HubSettings, connectionString: string) {
       }),
     ),
   ).pipe(Layer.provide(socketsLayer));
-  return Layer.mergeAll(databaseAndAuth, socketsLayer, connections);
+  return Layer.mergeAll(
+    databaseAndAuth,
+    socketsLayer,
+    connections,
+    jobLimitSettingsLayer(settings),
+  );
 }

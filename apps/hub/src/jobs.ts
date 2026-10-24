@@ -15,7 +15,13 @@ import {
 } from "contract";
 import { Array, Effect, Order, Record, String, Struct } from "effect";
 import { compileSchema, isJsonError } from "json-schema-library";
-import { type Kysely, type QueryCreator, sql, type Transaction } from "kysely";
+import {
+  type ExpressionBuilder,
+  type Kysely,
+  type QueryCreator,
+  sql,
+  type Transaction,
+} from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { v7 as uuidv7 } from "uuid";
 import * as z from "zod/mini";
@@ -37,6 +43,7 @@ import {
   MemberId,
   type RunnerId,
 } from "./db/types.ts";
+import type { HubSettings } from "./settings.ts";
 
 /** The statuses a job ends in (`FINAL_JOB_STATUSES`), as the hub's database types them. */
 export const FINAL_STATUSES: JobStatus[] = [...FINAL_JOB_STATUSES];
@@ -68,6 +75,8 @@ const JOB_COLUMNS = [
   "createdAt",
   "startedAt",
   "endedAt",
+  "runTimeoutSeconds",
+  "modelBudgetUsd",
   "result",
   "reason",
   "pendingControl",
@@ -76,10 +85,9 @@ const JOB_COLUMNS = [
 const PROGRESS_COLUMNS = ["totalTokens", "costUsd", "activity"] as const;
 
 /**
- * A job as the API reports it: its result only once it has succeeded, its cost as the decimal text
- * Postgres gives for `numeric`, its activity only while it runs, and a control only while it waits
- * for the job's Runner. The report of a run's start carries its first activity, so a job
- * running again never shows the last run's.
+ * A job as the API reports it: its result only once it has succeeded, its activity only while it
+ * runs, and a control only while it waits for the job's Runner. The report of a run's start carries
+ * its first activity, so a job running again never shows the last run's.
  */
 function toApiJob(
   job: Pick<JobRow, (typeof JOB_COLUMNS)[number]> &
@@ -139,6 +147,33 @@ export function resultContractProblems(schema: Record.ReadonlyRecord<string, unk
   return problems;
 }
 
+/** The limits a submission or a resume gives a job, each one optional. */
+export type GivenLimits = Pick<JobUpdate, "runTimeoutSeconds" | "modelBudgetUsd">;
+
+/**
+ * What `given` asks above the hub's maximums, as problems with the input fields they name,
+ * which the API refuses as it refuses any invalid input.
+ */
+export function limitProblems(given: GivenLimits, settings: HubSettings["jobLimits"]) {
+  const problems: { message: string; path: string[] }[] = [];
+  if (
+    given.runTimeoutSeconds !== undefined &&
+    given.runTimeoutSeconds > settings.runTimeoutSecondsMax
+  ) {
+    problems.push({
+      message: `Must be at most ${settings.runTimeoutSecondsMax}, the hub's maximum`,
+      path: ["runTimeoutSeconds"],
+    });
+  }
+  if (given.modelBudgetUsd !== undefined && given.modelBudgetUsd > settings.modelBudgetUsdMax) {
+    problems.push({
+      message: `Must be at most ${settings.modelBudgetUsdMax}, the hub's maximum`,
+      path: ["modelBudgetUsd"],
+    });
+  }
+  return problems;
+}
+
 /** Who submitted a job: the API key and the member who created it, copied as they were. */
 interface Submitter {
   keyId: ApikeyId;
@@ -169,10 +204,15 @@ function contentHashOf(submission: JobSubmission) {
 }
 
 /**
- * Accepts the job `submission` as `queued`. A submission with the idempotency key of an earlier job
- * returns that job if their content is the same, and fails otherwise.
+ * Accepts the job `submission` as `queued`, with the hub's default for each limit it leaves out.
+ * A submission with the idempotency key of an earlier job returns that job if their content is
+ * the same, and fails otherwise.
  */
-export function submitJob(submission: JobSubmission, submitter: Submitter) {
+export function submitJob(
+  submission: JobSubmission,
+  submitter: Submitter,
+  settings: HubSettings["jobLimits"],
+) {
   return Effect.gen(function* () {
     const database = yield* Db;
     const organization = yield* getOrganization;
@@ -189,6 +229,8 @@ export function submitJob(submission: JobSubmission, submitter: Submitter) {
             status: "queued",
             prompt: submission.prompt,
             resultContract: submission.resultContract,
+            runTimeoutSeconds: submission.runTimeoutSeconds ?? settings.runTimeoutSecondsDefault,
+            modelBudgetUsd: submission.modelBudgetUsd ?? settings.modelBudgetUsdDefault,
             idempotencyKey: submission.idempotencyKey ?? null,
             contentHash,
             submitterKeyId: submitter.keyId,
@@ -266,7 +308,12 @@ export type Control = "pause" | "resume" | "cancel";
 type ControlledJob = Pick<
   JobRow,
   "status" | "runnerId" | "placedAt" | "startedAt" | "pendingControl"
-> & { runnerExists: boolean };
+> &
+  Pick<JobProgressRow, "costUsd"> & {
+    runnerExists: boolean;
+    budgetLeft: boolean;
+    givenLimitsHold: boolean;
+  };
 
 /**
  * What a control does to a job as it is: nothing, a refusal saying why, or a change, with the
@@ -283,21 +330,31 @@ const refused = (why: string): Decision => ({ kind: "refused", why });
 /**
  * What `control` does to `job` at `now`, under the control transition rules: a control is a no-op when what it asks
  * for already holds, and refused when it cannot hold; otherwise the hub applies it where no Runner
- * can be running the job, and it waits for the job's Runner where one may be.
+ * can be running the job, and it waits for the job's Runner where one may be. A resume that changes
+ * the job gives it the limits in `given`, and is refused when its model budget would not be
+ * above what its model calls have cost, as for a job a spent budget stopped; one that gives other
+ * limits than its own to a job it does not change is refused, as that job's run keeps its own.
  */
-function decide(control: Control, job: ControlledJob, now: Date): Decision {
+function decide(control: Control, job: ControlledJob, now: Date, given: GivenLimits): Decision {
   const waiting = job.pendingControl;
   const ended = { reason: null, pendingControl: null, pendingControlRequestedAt: null };
   // The job's Runner, told to sync now when a control waits for it or the job resumes there.
   const toItsRunner = job.runnerId === null ? {} : { hint: job.runnerId };
+  // A resume that changes the job gives it the limits it names, and is refused where its model
+  // budget, the one it names or its own, would leave nothing to spend.
+  const resumeIfBudgetLeft = (set: JobUpdate, hint?: RunnerId | "live"): Decision =>
+    job.budgetLeft
+      ? { kind: "changed", set: { ...set, ...given }, ...(hint === undefined ? {} : { hint }) }
+      : refused(
+          `The job's model calls have cost $${job.costUsd}, so it resumes only with a modelBudgetUsd above that`,
+        );
   // A resumed job that started carries on from its journal, which only its Runner holds, as a new
   // run there (ADR 0026), sent when that Runner next syncs; one that never started has
   // no work to carry on.
   const resumeOnItsRunner: Decision = !job.runnerExists
     ? refused("The job's Runner was removed, so the work its host holds cannot be carried on")
-    : {
-        kind: "changed",
-        set: {
+    : resumeIfBudgetLeft(
+        {
           status: "queued",
           // A resume starts a new run. A pause is often the last thing that happens to a job, so it
           // aborts the step in flight and records what it cut off, rather than leaving it pending,
@@ -310,8 +367,8 @@ function decide(control: Control, job: ControlledJob, now: Date): Decision {
           result: null,
           reason: null,
         },
-        ...toItsRunner,
-      };
+        job.runnerId ?? undefined,
+      );
   switch (job.status) {
     case "queued":
     case "running": {
@@ -322,6 +379,11 @@ function decide(control: Control, job: ControlledJob, now: Date): Decision {
           return refused("The job's pause has not yet been confirmed by its Runner");
         }
         if (waiting === "cancel") return refused("The job's cancel is waiting for its Runner");
+        // Its run has its limits; they change only when a resume starts a new one. A resume
+        // naming the ones it has changes nothing, as when it repeats one that queued the job.
+        if (!job.givenLimitsHold) {
+          return refused("The job is queued or running, so a resume cannot change its limits");
+        }
         return unchanged;
       }
       if (control === "pause") {
@@ -351,7 +413,7 @@ function decide(control: Control, job: ControlledJob, now: Date): Decision {
       }
       // A job held before it started has no journal, so any Runner may start it.
       if (job.startedAt === null) {
-        return { kind: "changed", set: { status: "queued", reason: null }, hint: "live" };
+        return resumeIfBudgetLeft({ status: "queued", reason: null }, "live");
       }
       return resumeOnItsRunner;
     case "failed":
@@ -370,12 +432,15 @@ function decide(control: Control, job: ControlledJob, now: Date): Decision {
 }
 
 /**
- * Applies `control` to the job `jobId` and returns the job, or fails with a 404 error or, for
- * a control that cannot take effect, a 409 saying why; with the Runners to tell to sync now. The
- * job's row is locked while the control is decided, so placement, the Runner's reports and other
- * controls take it before or after, not between.
+ * Applies `control` to the job `jobId`, with the limits `given` for a resume, and returns
+ * the job, or fails with a 404 error or, for a control that cannot take effect, a 409 saying why;
+ * with the Runners to tell to sync now. The job's row is locked while the control is decided, so
+ * placement, the Runner's reports and other controls take it before or after, not between.
  */
-export function controlJob(jobId: JobId, control: Control) {
+export function controlJob(jobId: JobId, control: Control, given: GivenLimits = {}) {
+  /** The budget the resume names, as `numeric`, or null. */
+  const givenBudget = (eb: ExpressionBuilder<Database, "job">) =>
+    eb.cast<number>(eb.val(given.modelBudgetUsd ?? null), "numeric");
   return Effect.gen(function* () {
     const database = yield* Db;
     const now = new Date();
@@ -402,12 +467,40 @@ export function controlJob(jobId: JobId, control: Control) {
               // pg reads a boolean as one.
               .$castTo<boolean>()
               .as("runnerExists"),
+            // Money exactly, as `numeric`: whether the budget the resume names, or else the job's,
+            // is above what its model calls have cost, and whether the limits it names are the
+            // job's own.
+            eb(
+              eb.fn.coalesce(givenBudget(eb), "job.modelBudgetUsd"),
+              ">",
+              eb.ref("jobProgress.costUsd"),
+            )
+              .$castTo<boolean>()
+              .as("budgetLeft"),
+            eb
+              .and([
+                eb(
+                  eb.fn.coalesce(
+                    eb.cast<number>(eb.val(given.runTimeoutSeconds ?? null), "integer"),
+                    "job.runTimeoutSeconds",
+                  ),
+                  "=",
+                  eb.ref("job.runTimeoutSeconds"),
+                ),
+                eb(
+                  eb.fn.coalesce(givenBudget(eb), "job.modelBudgetUsd"),
+                  "=",
+                  eb.ref("job.modelBudgetUsd"),
+                ),
+              ])
+              .$castTo<boolean>()
+              .as("givenLimitsHold"),
           ])
           .where("job.id", "=", jobId)
           .forUpdate("job")
           .executeTakeFirst();
         if (!job) return undefined;
-        const decision = decide(control, job, now);
+        const decision = decide(control, job, now, given);
         if (decision.kind !== "changed") return { decision, job };
         const changed = await trx
           .updateTable("job")
@@ -453,7 +546,7 @@ export type UsageOfEnd = Pick<
 > & {
   jobId: JobId;
   jobTotalTokens: number;
-  jobCostUsd: string;
+  jobCostUsd: number;
 };
 
 /**

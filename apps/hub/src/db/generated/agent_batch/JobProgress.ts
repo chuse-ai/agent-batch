@@ -16,7 +16,7 @@ export default interface JobProgressTable {
 
   totalTokens: ColumnType<number, number | undefined, number>;
 
-  costUsd: ColumnType<string, string | undefined, string>;
+  costUsd: ColumnType<number, number | undefined, number>;
 
   activity: ColumnType<JobActivity | null, JobActivity | null, JobActivity | null>;
 }

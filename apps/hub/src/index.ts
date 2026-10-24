@@ -5,7 +5,13 @@ import { HTTPException } from "hono/http-exception";
 import { createApp } from "./app.ts";
 import { databaseAndAuthLayer } from "./auth/auth.ts";
 import { RunnerConnections } from "./platform.ts";
-import { authSettings, hubSettings, readConfig, type HubSettings } from "./settings.ts";
+import {
+  authSettings,
+  hubSettings,
+  jobLimitSettingsLayer,
+  readConfig,
+  type HubSettings,
+} from "./settings.ts";
 
 export { RunnerConnection } from "./runner-connection.ts";
 
@@ -16,17 +22,19 @@ export { RunnerConnection } from "./runner-connection.ts";
 function workersLayer(env: Env) {
   let settings: HubSettings;
   try {
-    settings = readConfig(hubSettings, env);
+    settings = readConfig(hubSettings);
   } catch (error) {
     // Without them Better Auth would guess the URL from each request, which its docs warn against,
     // and sign sessions with a development secret; a hub missing either answers no request. Wrangler
-    // refuses to deploy without them, so this catches a secret removed from a live hub: its callers
-    // learn only that it is unavailable, and the operator finds which setting in the logs.
+    // refuses to deploy without them, so this catches a secret removed from a live hub, or a setting
+    // Wrangler cannot check, such as a limit's default above its maximum: its callers learn only
+    // that it is unavailable, and the operator finds which setting in the logs.
     console.error(ensureError(error).message);
     throw new HTTPException(503);
   }
   return Layer.mergeAll(
     databaseAndAuthLayer(env.HYPERDRIVE.connectionString, authSettings(settings)),
+    jobLimitSettingsLayer(settings),
     Layer.succeed(RunnerConnections, {
       drop: (runnerId) =>
         Effect.tryPromise(() => env.RUNNER_CONNECTION.getByName(runnerId).dropConnections()),

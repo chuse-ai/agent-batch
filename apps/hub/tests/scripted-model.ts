@@ -1,9 +1,18 @@
 import { once } from "node:events";
 
-import { createModels, type JsonObject, type Message } from "@earendil-works/pi-ai";
 import {
+  calculateCost,
+  createAssistantMessageEventStream,
+  createModels,
+  createProvider,
+  type JsonObject,
+  type Message,
+  type SimpleStreamOptions,
+  type StreamFunction,
+} from "@earendil-works/pi-ai";
+import {
+  createFauxCore,
   fauxAssistantMessage,
-  fauxProvider,
   type FauxResponseFactory,
   fauxText,
   fauxToolCall,
@@ -13,15 +22,54 @@ import {
 // a process of its own can use it too.
 
 /**
+ * What the scripted model charges, in US dollars per million tokens: a real model's prices, so a
+ * test's model calls stay far below a job's default budget of $1.
+ */
+const PRICES = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+
+/**
  * A scripted model for a Runner's jobs, through pi-ai's faux provider: a test gives `faux` the
  * responses the model makes, in order, across all jobs; with none left, a job's model call fails.
+ * pi-ai's faux provider prices every call at nothing, so each call is priced as a real provider
+ * prices it, from its tokens at `PRICES`, and a job's cost grows as it runs.
  */
 export function scriptedModel() {
-  const faux = fauxProvider();
+  const faux = createFauxCore({ models: [{ id: "scripted", cost: PRICES }] });
   const models = createModels();
-  models.setProvider(faux.provider);
+  models.setProvider(
+    createProvider({
+      id: faux.provider,
+      auth: { apiKey: { name: "Scripted", resolve: async () => ({ auth: {} }) } },
+      models: faux.models,
+      api: {
+        stream: priced(faux.stream),
+        streamSimple: priced(faux.streamSimple),
+        fetchDeferred: faux.fetchDeferred,
+        cancelDeferred: faux.cancelDeferred,
+      },
+    }),
+  );
   const { provider, id } = faux.getModel();
   return { faux, models, model: { provider, modelId: id, thinkingLevel: "off" as const } };
+}
+
+/** `stream` with each finished call priced at its model's prices, with pi-ai's `calculateCost`. */
+function priced(
+  stream: StreamFunction<string, SimpleStreamOptions>,
+): StreamFunction<string, SimpleStreamOptions> {
+  return (model, context, options) => {
+    const source = stream(model, context, options);
+    const pricedStream = createAssistantMessageEventStream();
+    void (async () => {
+      for await (const event of source) {
+        if (event.type === "done") {
+          event.message.usage.cost = calculateCost(model, event.message.usage);
+        }
+        pricedStream.push(event);
+      }
+    })();
+    return pricedStream;
+  };
 }
 
 /** The model's call of `tool` with `args`. */

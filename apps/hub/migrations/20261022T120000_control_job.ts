@@ -10,14 +10,17 @@ import { type Kysely, sql } from "kysely";
 export async function up(db: Kysely<unknown>): Promise<void> {
   const schema = db.schema.withSchema("agent_batch");
   await schema.createType("jobControl").asEnum(["pause", "cancel"]).execute();
-  await schema.createType("jobReason").asEnum(["runnerRemoved"]).execute();
+  await schema
+    .createType("jobReason")
+    .asEnum(["runnerRemoved", "runTimedOut", "modelBudgetExceeded"])
+    .execute();
   await schema
     .alterTable("job")
     .addColumn("pendingControl", sql`agent_batch."jobControl"`)
     // The hub's clock.
     .addColumn("pendingControlRequestedAt", "timestamptz")
-    // Null unless the job failed because its Runner was removed; a failure's other reasons come
-    // with structured failure and limit reasons.
+    // Null unless the job failed because its Runner was removed or a limit stopped it; a failure
+    // of the job's own agent has no reason.
     .addColumn("reason", sql`agent_batch."jobReason"`)
     .execute();
   await schema

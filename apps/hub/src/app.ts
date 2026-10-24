@@ -18,7 +18,7 @@ import {
   RUNNER_PROTOCOL_VERSIONS,
   selectProtocolVersion,
 } from "contract";
-import { type Context, Effect } from "effect";
+import { type Context, Effect, Struct } from "effect";
 import { Hono } from "hono";
 import {
   PROBLEM_JSON_CONTENT_TYPE,
@@ -45,6 +45,8 @@ import {
   controlJob,
   deleteJob,
   getJob,
+  type GivenLimits,
+  limitProblems,
   resultContractProblems,
   readJobEvents,
   submitJob,
@@ -55,6 +57,7 @@ import { RunnerConnections, type HubServices } from "./platform.ts";
 import { toProblemDetails } from "./problem-details.ts";
 import { findRunnerByKey, registerRunner, removeRunner } from "./runner-registration.ts";
 import { hintLiveRunners, listRunners } from "./runners.ts";
+import { JobLimitSettings } from "./settings.ts";
 
 interface ApiContext extends WithEffectContext<HubServices> {
   headers: Headers;
@@ -97,13 +100,34 @@ function hintRunners(hint: RunnerId | "live" | undefined) {
   );
 }
 
-/** Applies `control` to the job `jobId` and tells the Runners it concerns to sync now. */
-function controlJobAndHint(jobId: JobId, control: Control) {
+/**
+ * Applies `control` to the job `jobId`, with the limits `given` for a resume, and tells the Runners
+ * it concerns to sync now.
+ */
+function controlJobAndHint(jobId: JobId, control: Control, given?: GivenLimits) {
   return Effect.gen(function* () {
-    const { job, hint } = yield* controlJob(jobId, control);
+    const { job, hint } = yield* controlJob(jobId, control, given);
     yield* hintRunners(hint);
     return job;
   });
+}
+
+/**
+ * `problems` with an input, raised as oRPC raises invalid input, so the answer lists them as it lists
+ * the contract's own: for what the contract's schemas cannot check, such as a Result contract's
+ * schema or the hub's maximums for limits.
+ */
+function invalidInput<E>(
+  errors: { BAD_REQUEST: (options: { cause: ValidationError }) => E },
+  input: unknown,
+  problems: { message: string; path: string[] }[],
+) {
+  const cause = new ValidationError({
+    message: "Input validation failed",
+    issues: problems,
+    invalidData: input,
+  });
+  return errors.BAD_REQUEST({ cause });
 }
 
 // The access check is the router's alone, as oRPC's docs extend a router: applied to the handlers
@@ -178,18 +202,16 @@ const router = implement<typeof contract, ApiContext>(contract)
     jobs: {
       submit: os.jobs.submit.effect(function* ({ input, context, errors }) {
         const key = yield* callerKey(context.caller);
-        const problems = resultContractProblems(input.resultContract.schema);
-        if (problems.length > 0) {
-          // Raised as oRPC raises invalid input, so the answer lists the problems the same way.
-          const path = ["resultContract", "schema"];
-          const cause = new ValidationError({
-            message: "Input validation failed",
-            issues: problems.map((message) => ({ message, path })),
-            invalidData: input,
-          });
-          return yield* Effect.fail(errors.BAD_REQUEST({ cause }));
-        }
-        const job = yield* submitJob(input, submitterOf(key));
+        const settings = yield* JobLimitSettings;
+        const problems = [
+          ...resultContractProblems(input.resultContract.schema).map((message) => ({
+            message,
+            path: ["resultContract", "schema"],
+          })),
+          ...limitProblems(input, settings),
+        ];
+        if (problems.length > 0) return yield* Effect.fail(invalidInput(errors, input, problems));
+        const job = yield* submitJob(input, submitterOf(key), settings);
         yield* hintRunners("live");
         return job;
       }),
@@ -201,9 +223,12 @@ const router = implement<typeof contract, ApiContext>(contract)
         // The ID enters the hub here.
         return yield* controlJobAndHint(JobId(input.id), "pause");
       }),
-      resume: os.jobs.resume.effect(function* ({ input }) {
+      resume: os.jobs.resume.effect(function* ({ input, errors }) {
+        const given = Struct.pick(input, ["runTimeoutSeconds", "modelBudgetUsd"]);
+        const problems = limitProblems(given, yield* JobLimitSettings);
+        if (problems.length > 0) return yield* Effect.fail(invalidInput(errors, input, problems));
         // The ID enters the hub here.
-        return yield* controlJobAndHint(JobId(input.id), "resume");
+        return yield* controlJobAndHint(JobId(input.id), "resume", given);
       }),
       cancel: os.jobs.cancel.effect(function* ({ input }) {
         // The ID enters the hub here.

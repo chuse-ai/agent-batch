@@ -6,12 +6,14 @@ import * as z from "zod/mini";
 import {
   inputFilesSchema,
   jobIdSchema,
+  modelBudgetUsdSchema,
   resultContractSchema,
   promptSchema,
   textSchema,
+  runTimeoutSecondsSchema,
 } from "./job.ts";
 import { PROBLEM_DETAILS_CONTENT_TYPE } from "./problem-details.ts";
-import { jobActivitySchema, jobEventSchema } from "./runner-protocol.ts";
+import { jobActivitySchema, jobEventSchema, limitReasonSchema } from "./runner-protocol.ts";
 
 export * from "./problem-details.ts";
 export * from "./json-rpc.ts";
@@ -84,6 +86,7 @@ export const jobStatusSchema = z.enum([
   "paused",
   "succeeded",
   "failed",
+  // Two l's, as Google's APIs (`google.rpc.Code.CANCELLED`), gRPC and GitHub spell it.
   "cancelled",
 ]);
 export type JobStatus = z.infer<typeof jobStatusSchema>;
@@ -112,13 +115,24 @@ export const jobSchema = z
       /** Tokens of every kind, summed; cached input counts each time a model call reads it. */
       totalTokens: z.int(),
       cost: z.object({
-        /**
-         * pi's estimate at the models' prices, in US dollars, as decimal text without a fixed scale,
-         * such as `"0.012345"`.
-         */
-        totalUsd: z.string(),
+        /** pi's estimate at the models' prices, in US dollars. */
+        totalUsd: z.number(),
       }),
     }),
+    /**
+     * How long the job may work each time it runs on a Runner, in seconds: counted from when its
+     * agent starts there, so time queued, paused or waiting for a Runner counts nothing, and started
+     * afresh by a resume and by its Runner's restart. Past it, the job fails with `runTimedOut`.
+     * Absent once the job is deleted, as its content is.
+     */
+    runTimeoutSeconds: z.optional(z.int()),
+    /**
+     * The most the job's model calls may cost over its whole life, in US dollars, compared with
+     * `usage.cost.totalUsd` before each model call. Once the cost reaches it, the job fails with
+     * `modelBudgetExceeded`; the call in progress completes, so the cost usually ends a little past
+     * it. Absent once the job is deleted, as its content is.
+     */
+    modelBudgetUsd: z.optional(modelBudgetUsdSchema),
     /**
      * What the job is doing, for each of its conversations doing anything, as its Runner last
      * reported: present only while the job runs, and empty between steps.
@@ -128,10 +142,12 @@ export const jobSchema = z
     result: z.optional(z.unknown()),
     /**
      * Why the job is in its status, given only where the status has more than one cause: once it
-     * has failed, `runnerRemoved` when its Runner was removed before it ended; else null. Only a
+     * has failed, `runnerRemoved` when its Runner was removed before it ended, `runTimedOut` when a
+     * run went past its `runTimeoutSeconds`, `modelBudgetExceeded` when its model calls' cost
+     * reached `modelBudgetUsd`; else null, as for an agent that stopped without a result. Only a
      * caller pauses or cancels a job, so `paused` and `cancelled` carry none.
      */
-    reason: z.nullable(z.enum(["runnerRemoved"])),
+    reason: z.nullable(z.enum(["runnerRemoved", ...limitReasonSchema.options])),
     /**
      * A control the job's Runner has not yet acted on, beside the last `status` it confirmed: present
      * only while it waits. A pause or cancel waits for a job its Runner may be running, until
@@ -176,6 +192,20 @@ export const jobSubmissionSchema = z
         z.maxLength(255),
         z.describe(
           "Makes submitting safe to retry: submitting again with the same key and the same job returns the job already accepted, and with a different job is refused.",
+        ),
+      ),
+    ),
+    runTimeoutSeconds: z.optional(
+      runTimeoutSecondsSchema.check(
+        z.describe(
+          "How long each run of the job on a Runner may work, in seconds; the hub's default when left out, and refused above its maximum.",
+        ),
+      ),
+    ),
+    modelBudgetUsd: z.optional(
+      modelBudgetUsdSchema.check(
+        z.describe(
+          "The most the job's model calls may cost over its whole life, in US dollars; the hub's default when left out, and refused above its maximum.",
         ),
       ),
     ),
@@ -225,7 +255,8 @@ export const IdempotencyKeyReused = error("UNPROCESSABLE_CONTENT", {
 
 // Calls a member's role does not allow fail with `FORBIDDEN`, and invalid ones with `BAD_REQUEST`.
 // Where Better Auth decides, the hub passes its `FORBIDDEN` through, declared without a factory;
-// removing a Runner raises `Forbidden` itself. The hub raises `BAD_REQUEST` in only two procedures.
+// removing a Runner raises `Forbidden` itself. The hub raises `BAD_REQUEST` itself only for what the
+// contract's schemas cannot check, such as a Result contract's schema.
 
 /**
  * Every call of the API, whose bodies are all JSON. oRPC's client reads only `application/json` as
@@ -411,17 +442,39 @@ export const contract = {
       .input(jobRefSchema)
       .output(jobSchema),
     resume: api
-      .errors({ [NotFound.code]: NotFound, [ControlRefused.code]: ControlRefused })
+      .errors({
+        BAD_REQUEST: {},
+        [NotFound.code]: NotFound,
+        [ControlRefused.code]: ControlRefused,
+      })
       .meta(
         openapi({
           method: "POST",
           path: "/jobs/{id}/resume",
           description:
-            "Resumes a stopped job and answers with the job. A paused, failed or cancelled job goes back to `queued` and carries on from where it stopped, on the Runner that holds its work; one paused before it started simply starts. Resuming a job that is queued or running changes nothing. A job whose pause its Runner has not yet confirmed, whose cancel waits, that succeeded, or that never started before it ended, is refused.",
+            "Resumes a stopped job and answers with the job. A paused, failed or cancelled job goes back to `queued` and carries on from where it stopped, on the Runner that holds its work; one paused before it started simply starts. Resuming a job that is queued or running changes nothing, and one that gives it other limits than its own is refused: its run keeps them. A job whose pause its Runner has not yet confirmed, whose cancel waits, that succeeded, or that never started before it ended, is refused. A resume that changes the job may give it a new `runTimeoutSeconds` and `modelBudgetUsd`, and is refused when the job's model calls have cost its `modelBudgetUsd` or more, as for a job that failed with `modelBudgetExceeded`.",
         }),
         ...byKeyOrMember({ job: ["resume"] }),
       )
-      .input(jobRefSchema)
+      .input(
+        z.object({
+          ...jobRefSchema.shape,
+          runTimeoutSeconds: z.optional(
+            runTimeoutSecondsSchema.check(
+              z.describe(
+                "A new `runTimeoutSeconds` for the job's next run, refused above the hub's maximum, and for a job that is queued or running unless it is the job's own.",
+              ),
+            ),
+          ),
+          modelBudgetUsd: z.optional(
+            modelBudgetUsdSchema.check(
+              z.describe(
+                "A new `modelBudgetUsd` for the job, refused above the hub's maximum, at or below what its model calls have cost, and for a job that is queued or running unless it is the job's own.",
+              ),
+            ),
+          ),
+        }),
+      )
       .output(jobSchema),
     cancel: api
       .errors({ [NotFound.code]: NotFound })

@@ -42,7 +42,8 @@ export function openDatabase(connectionString: string): Kysely<Database> {
 /**
  * How the hub reads Postgres values: as pg does, except that an `int8`, such as a count or a sum of
  * integers, becomes a number, as pg-types' README suggests, and one beyond `Number.MAX_SAFE_INTEGER`
- * fails its query instead of being rounded. A `numeric` stays a string.
+ * fails its query instead of being rounded; and a `numeric`, such as a cost, becomes the nearest
+ * number, as pg-types reads an array of them, since the API carries money as a number.
  */
 const typeParsers = new TypeOverrides();
 typeParsers.setTypeParser(types.builtins.INT8, (text) => {
@@ -52,6 +53,7 @@ typeParsers.setTypeParser(types.builtins.INT8, (text) => {
   }
   return value;
 });
+typeParsers.setTypeParser(types.builtins.NUMERIC, parseFloat);
 
 /**
  * A connection pool to the hub's database. An idle connection that fails, as when Postgres restarts,

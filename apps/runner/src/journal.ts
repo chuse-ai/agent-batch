@@ -25,6 +25,7 @@ import {
   type JobActivity,
   type JobEnding,
   type JobEvent,
+  type JobFailure,
   type JobOpening,
   type JobPause,
   type JobSuccess,
@@ -70,8 +71,11 @@ export const JobPaused = defineEntry<JobPause>(JOB_PAUSED);
 /** Written once per run, as its closing, when the job's agent submitted an accepted result. */
 export const JobSucceeded = defineEntry<JobSuccess>(JOB_SUCCEEDED);
 
-/** Written once per run, as its closing, when the job's agent stopped without a result. */
-export const JobFailed = defineEntry<JobEnding>(JOB_FAILED);
+/**
+ * Written once per run, as its closing, when the job's agent stopped without a result, or a limit
+ * stopped it, which it names.
+ */
+export const JobFailed = defineEntry<JobFailure>(JOB_FAILED);
 
 /**
  * Written once per run, as its closing, when the hub cancelled the job and the Runner
@@ -118,7 +122,7 @@ export async function appendUnderRequest(
  * a `closing` entry with `data`, once: a run that has closed keeps its closing. A write of
  * only a kind and data is appended at once, also while the agent is working.
  */
-export async function submitClosing<D extends JobSuccess | JobEnding | JobPause>(
+export async function submitClosing<D extends JobSuccess | JobFailure | JobEnding | JobPause>(
   conversation: Conversation,
   runId: string,
   closing: Entry<D>,

@@ -49,6 +49,15 @@ export const jsonTextSchema: z.ZodMiniType<z.infer<ReturnType<typeof z.json>>> =
   ]),
 );
 
+/**
+ * How long each run of a job on a Runner may work, in whole seconds: above zero, and no more than a
+ * Postgres `integer` holds, where the hub keeps it.
+ */
+export const runTimeoutSecondsSchema = z.int32().check(z.positive());
+
+/** The most a job's model calls may cost over its whole life, in US dollars: above zero. */
+export const modelBudgetUsdSchema = z.number().check(z.positive());
+
 /** File systems limit a file name to 255 bytes of UTF-8; `valid-filename` counts UTF-16 units. */
 const MAX_NAME_BYTES = 255;
 

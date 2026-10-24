@@ -44,11 +44,11 @@ export default interface UsageRecordTable {
 
   totalTokens: ColumnType<number, number, number>;
 
-  costUsd: ColumnType<string, string, string>;
+  costUsd: ColumnType<number, number, number>;
 
   jobTotalTokens: ColumnType<number, number, number>;
 
-  jobCostUsd: ColumnType<string, string, string>;
+  jobCostUsd: ColumnType<number, number, number>;
 
   deletedAt: ColumnType<Date | null, Date | string | null, Date | string | null>;
 

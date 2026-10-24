@@ -4,8 +4,10 @@ import {
   inputFilesSchema,
   jobIdSchema,
   jsonTextSchema,
+  modelBudgetUsdSchema,
   promptSchema,
   resultContractSchema,
+  runTimeoutSecondsSchema,
   textSchema,
 } from "./job.ts";
 
@@ -87,6 +89,13 @@ const runSchema = z.object({
   job: z.optional(jobContentSchema),
   /** The hub's position in the job's journal, which the Runner reads after. */
   position: positionSchema,
+  /**
+   * How long the run may work, in seconds, from when its agent starts on the Runner: the job's
+   * `runTimeoutSeconds`.
+   */
+  runTimeoutSeconds: runTimeoutSecondsSchema,
+  /** The job's `modelBudgetUsd`, which its usage is checked against before each model call. */
+  modelBudgetUsd: modelBudgetUsdSchema,
 });
 export type Run = z.infer<typeof runSchema>;
 
@@ -148,7 +157,18 @@ export type JobPause = z.infer<typeof jobPauseSchema>;
 export const jobSuccessSchema = z.object({ timestamp: timestampSchema, result: jsonTextSchema });
 export type JobSuccess = z.infer<typeof jobSuccessSchema>;
 
-/** What a failure or a cancel records: when. Why a job failed comes with structured failure and limit reasons. */
+/** Why a limit stopped a job: a run timed out, or its model calls' cost reached its budget. */
+export const limitReasonSchema = z.enum(["runTimedOut", "modelBudgetExceeded"]);
+export type LimitReason = z.infer<typeof limitReasonSchema>;
+
+/** What a failure records: when, and the limit that stopped the job, if one did. */
+export const jobFailureSchema = z.object({
+  timestamp: timestampSchema,
+  reason: z.optional(limitReasonSchema),
+});
+export type JobFailure = z.infer<typeof jobFailureSchema>;
+
+/** What a cancel records: when. */
 export const jobEndingSchema = z.object({ timestamp: timestampSchema });
 export type JobEnding = z.infer<typeof jobEndingSchema>;
 
@@ -164,7 +184,7 @@ const LIFECYCLE_DATA: ReadonlyMap<string, z.ZodMiniType> = new Map<string, z.Zod
   [JOB_RESUMED, jobOpeningSchema],
   [JOB_PAUSED, jobPauseSchema],
   [JOB_SUCCEEDED, jobSuccessSchema],
-  [JOB_FAILED, jobEndingSchema],
+  [JOB_FAILED, jobFailureSchema],
   [JOB_CANCELLED, jobEndingSchema],
 ]);
 

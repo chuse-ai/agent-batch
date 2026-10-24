@@ -36,6 +36,8 @@ const RUN = {
   runId: randomUUID(),
   intent: "run" as const,
   job: { prompt: "hello", inputFiles: {}, resultContract: { schema: {} } },
+  runTimeoutSeconds: 1800,
+  modelBudgetUsd: 1,
 };
 
 /**

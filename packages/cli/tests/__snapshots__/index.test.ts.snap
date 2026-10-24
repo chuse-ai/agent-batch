@@ -93,6 +93,26 @@ exports[`the commands and their flags 1`] = `
               "variadic": false,
             },
             {
+              "attributeName": "runTimeoutSeconds",
+              "description": "How long each run of the job on a Runner may work, in seconds; the hub's default when left out, and refused above its maximum.; Exclusive minimum: 0; Maximum: 2147483647",
+              "flags": "--run-timeout-seconds [integer]",
+              "name": "run-timeout-seconds",
+              "negate": false,
+              "optional": true,
+              "required": false,
+              "variadic": false,
+            },
+            {
+              "attributeName": "modelBudgetUsd",
+              "description": "The most the job's model calls may cost over its whole life, in US dollars; the hub's default when left out, and refused above its maximum.; positive",
+              "flags": "--model-budget-usd [number]",
+              "name": "model-budget-usd",
+              "negate": false,
+              "optional": true,
+              "required": false,
+              "variadic": false,
+            },
+            {
               "attributeName": "json",
               "description": "Provide the complete procedure input as JSON - other flags and positional arguments are unavailable when using this option",
               "flags": "--json <json>",
@@ -166,7 +186,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Resumes a stopped job and answers with the job. A paused, failed or cancelled job goes back to \`queued\` and carries on from where it stopped, on the Runner that holds its work; one paused before it started simply starts. Resuming a job that is queued or running changes nothing. A job whose pause its Runner has not yet confirmed, whose cancel waits, that succeeded, or that never started before it ended, is refused.",
+          "description": "Resumes a stopped job and answers with the job. A paused, failed or cancelled job goes back to \`queued\` and carries on from where it stopped, on the Runner that holds its work; one paused before it started simply starts. Resuming a job that is queued or running changes nothing, and one that gives it other limits than its own is refused: its run keeps them. A job whose pause its Runner has not yet confirmed, whose cancel waits, that succeeded, or that never started before it ended, is refused. A resume that changes the job may give it a new \`runTimeoutSeconds\` and \`modelBudgetUsd\`, and is refused when the job's model calls have cost its \`modelBudgetUsd\` or more, as for a job that failed with \`modelBudgetExceeded\`.",
           "name": "resume",
           "options": [
             {
@@ -177,6 +197,26 @@ exports[`the commands and their flags 1`] = `
               "negate": false,
               "optional": false,
               "required": true,
+              "variadic": false,
+            },
+            {
+              "attributeName": "runTimeoutSeconds",
+              "description": "A new \`runTimeoutSeconds\` for the job's next run, refused above the hub's maximum, and for a job that is queued or running unless it is the job's own.; Exclusive minimum: 0; Maximum: 2147483647",
+              "flags": "--run-timeout-seconds [integer]",
+              "name": "run-timeout-seconds",
+              "negate": false,
+              "optional": true,
+              "required": false,
+              "variadic": false,
+            },
+            {
+              "attributeName": "modelBudgetUsd",
+              "description": "A new \`modelBudgetUsd\` for the job, refused above the hub's maximum, at or below what its model calls have cost, and for a job that is queued or running unless it is the job's own.; positive",
+              "flags": "--model-budget-usd [number]",
+              "name": "model-budget-usd",
+              "negate": false,
+              "optional": true,
+              "required": false,
               "variadic": false,
             },
             {

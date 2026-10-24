@@ -43,7 +43,9 @@ test("a submitted job answers 201 and reads back as queued, with a key or a memb
     z.looseObject({ id: z.string(), createdAt: z.string() }),
     await response.json(),
   );
-  const unused = { totalTokens: 0, cost: { totalUsd: "0" } };
+  const unused = { totalTokens: 0, cost: { totalUsd: 0 } };
+  // The hub's default limits.
+  const limits = { runTimeoutSeconds: 30 * 60, modelBudgetUsd: 1 };
   expect(job).toEqual({
     id: expect.any(String),
     status: "queued",
@@ -52,6 +54,7 @@ test("a submitted job answers 201 and reads back as queued, with a key or a memb
     endedAt: null,
     reason: null,
     usage: unused,
+    ...limits,
   });
 
   const read = {
@@ -62,6 +65,7 @@ test("a submitted job answers 201 and reads back as queued, with a key or a memb
     endedAt: null,
     reason: null,
     usage: unused,
+    ...limits,
   };
   expect(await client.jobs.get({ id: job.id })).toEqual(read);
   expect(await system.owner().jobs.get({ id: job.id })).toEqual(read);

@@ -11,6 +11,7 @@ import {
   intentSchema,
   isoDate,
   jobEndingSchema,
+  jobFailureSchema,
   jobOpeningSchema,
   jobReportSchema,
   jobSuccessSchema,
@@ -90,7 +91,7 @@ interface ReportRow {
   status: JobStatus | null;
   startedAt: string | null;
   endedAt: string | null;
-  /** Why the job stopped, for a pause; null otherwise. */
+  /** Why the job failed, when a limit stopped it; null otherwise. */
   reason: JobReason | null;
   /** The result, absent unless the report carries a success; `null` is itself a result. */
   result?: JsonValue;
@@ -149,6 +150,10 @@ function lifecycleOf(
     if (status === "succeeded") {
       const { timestamp, result } = z.parse(jobSuccessSchema, end.data);
       return { ...ended, endedAt: isoDate(timestamp), result };
+    }
+    if (status === "failed") {
+      const { timestamp, reason } = z.parse(jobFailureSchema, end.data);
+      return { ...ended, endedAt: isoDate(timestamp), reason: reason ?? null };
     }
     return { ...ended, endedAt: isoDate(z.parse(jobEndingSchema, end.data).timestamp) };
   }
@@ -283,7 +288,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
                       .as("tokens"),
                     sum.fn
                       .coalesce(
-                        sum.fn.sum<string>(
+                        sum.fn.sum<number>(
                           sum.cast(
                             sum.ref("amount.value", "->>").key("cost").key("total"),
                             "numeric",
@@ -522,6 +527,17 @@ function confirmDeletions(runnerId: RunnerId, deleted: string[]) {
   );
 }
 
+/** What a run of a job is sent from: the job, its run, its content, its control and its limits. */
+const RUN_COLUMNS = [
+  "id",
+  "runId",
+  "prompt",
+  "resultContract",
+  "pendingControl",
+  "runTimeoutSeconds",
+  "modelBudgetUsd",
+] as const;
+
 /**
  * Places queued jobs on the Runner's free slots and reads its desired state: every queued or running
  * job placed on it, under the intent its pending control gives, with the content of those the
@@ -620,20 +636,16 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                 .forUpdate()
                 .skipLocked(),
             )
-            .returning(["id", "runId", "prompt", "resultContract", "pendingControl"]),
+            .returning(RUN_COLUMNS),
         )
         .with("wanted", (qb) =>
           qb
             .selectFrom("job")
-            .select(["id", "runId", "prompt", "resultContract", "pendingControl"])
+            .select(RUN_COLUMNS)
             .where("runnerId", "=", runnerId)
             .where("placedAt", "is not", null)
             .where("status", "in", QUEUED_OR_RUNNING)
-            .unionAll(
-              qb
-                .selectFrom("placed")
-                .select(["id", "runId", "prompt", "resultContract", "pendingControl"]),
-            ),
+            .unionAll(qb.selectFrom("placed").select(RUN_COLUMNS)),
         )
         .selectNoFrom((answer) => [
           jsonArrayFrom(
@@ -647,6 +659,8 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                   .coalesce(eb.cast<string>("pendingControl", "text"), eb.val("run"))
                   .as("intent"),
                 "jobProgress.position",
+                "runTimeoutSeconds",
+                "modelBudgetUsd",
                 eb
                   .case()
                   .when(
@@ -704,6 +718,8 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
           intent: z.parse(intentSchema, row.intent),
           ...(row.job === null ? {} : { job: row.job }),
           position: row.position,
+          runTimeoutSeconds: row.runTimeoutSeconds,
+          modelBudgetUsd: row.modelBudgetUsd,
         })),
         deletions: rows.deletions.map(({ jobId }) => jobId),
       };

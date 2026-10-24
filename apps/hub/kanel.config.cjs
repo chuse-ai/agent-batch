@@ -95,8 +95,8 @@ module.exports = {
   typescriptConfig: { enumStyle: "literal-union", tsModuleFormat: "esm" },
   generators: [
     makePgTsGenerator({
-      // The hub's pool reads an int8 as a number (`src/db/database.ts`).
-      customTypeMap: { "pg_catalog.int8": "number" },
+      // The hub's pool reads an int8 and a numeric as a number (`src/db/database.ts`).
+      customTypeMap: { "pg_catalog.int8": "number", "pg_catalog.numeric": "number" },
       getPropertyMetadata,
       generateIdentifierType,
       preRenderHooks: [makeKyselyHook()],

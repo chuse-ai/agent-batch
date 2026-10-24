@@ -59,6 +59,11 @@ const HUB_SETTINGS = {
   REPORT_INTERVAL_MS: "100",
 };
 
+/** Waits until the job `id` has `status`. */
+export async function untilStatus(client: HubClient, id: string, status: string, timeout = 10_000) {
+  await expect.poll(async () => (await client.jobs.get({ id })).status, { timeout }).toBe(status);
+}
+
 /** Deletes all rows from the hub's tables, keeping the schema and the record of applied migrations. */
 export async function clearDatabase(connectionString: string) {
   await using db = openDatabase(connectionString);

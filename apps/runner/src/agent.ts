@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { isJsonValue, type JsonValue } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { awaitWithContext, BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type ModelThinkingLevel, type Models, Type } from "@earendil-works/pi-ai";
 import {
   type ConversationHandle,
@@ -10,16 +10,28 @@ import {
   defineDoc,
   defineExtension,
   defineTool,
+  CompactionTask,
   GenerationTask,
   Harness,
   hook,
   ROOT_CONVERSATION_ID,
   type Submission,
+  type UsageState,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { type Intent, type JobContent, jsonTextSchema } from "contract";
-import { Effect, Exit, type FileSystem, type PlatformError, Scope } from "effect";
+import { type Intent, type JobContent, jsonTextSchema, type Run } from "contract";
+import {
+  Duration,
+  Effect,
+  Exit,
+  type FileSystem,
+  Latch,
+  Number,
+  type PlatformError,
+  Record,
+  Scope,
+} from "effect";
 import ensureError from "ensure-error";
 import { compileSchema } from "json-schema-library";
 import * as z from "zod/mini";
@@ -224,17 +236,28 @@ function submitResultTool(schema: Record<string, unknown>) {
 export function openJob(
   jobId: string,
   job: JobContent,
-  options: AgentSettings & {
-    runId: string;
-    openedBefore: boolean;
-    journalOpened: (journal: Harness) => void;
-  },
+  options: AgentSettings &
+    Pick<Run, "runTimeoutSeconds" | "modelBudgetUsd"> & {
+      runId: string;
+      openedBefore: boolean;
+      journalOpened: (journal: Harness) => void;
+    },
 ): Effect.Effect<Effect.Effect<void>, never, Scope.Scope> {
   const context = BACKGROUND_CONTEXT;
   const paths = jobPaths(options.jobsDir, jobId);
   return Effect.gen(function* () {
-    // The conversation is known only once the Harness is open; the hook below needs it.
+    // The conversation and the journal are known only once the Harness is open; the hooks below
+    // need them.
     let conversation: ConversationHandle | undefined;
+    let journal: Harness | undefined;
+    // Opened once the job's model cost has reached its budget, which `runAgent` stops it for.
+    // The cost is pi's floating-point sum, so a cost exactly at the budget can fall either way.
+    const overBudget = Latch.makeUnsafe(false);
+    // Each of the job's model calls is admitted only while its cost is below the budget, once the
+    // last call's usage is recorded: a call admitted below it runs to its end and can take the cost
+    // past it, as providers' budget limits allow, and none follows.
+    const budgetSpent = async () =>
+      journal !== undefined && spent(await journal.usage(context)) >= options.modelBudgetUsd;
     const registry = createRegistry();
     registry.install(CodingTools);
     registry.install(
@@ -253,6 +276,24 @@ export function openJob(
               // fails only when the journal closes first, as when the Runner stops, or when the
               // abort cannot be committed; the job's outcome is read from the journal either way.
               conversation?.abort(context).catch(() => {});
+            },
+            // A request past the budget waits, so it is never made, until the job's work is aborted.
+            beforeRequest: async (_request, _api, requestContext) => {
+              if (!(await budgetSpent())) return;
+              overBudget.openUnsafe();
+              await awaitWithContext(new Promise<never>(() => {}), requestContext);
+            },
+          }),
+          // Compaction summarizes with model calls of its own, outside generation's requests, so one
+          // past the budget is declined. A blocking summary already admitted runs to its end, as a
+          // request does; a background one is cut off when the job stops, and its usage is lost, as
+          // pi records a summary's usage only once it completes, where a cut-off request keeps its
+          // last saved partial's.
+          hook(CompactionTask, {
+            beforeCompact: async () => {
+              if (!(await budgetSpent())) return undefined;
+              overBudget.openUnsafe();
+              return { decline: true };
             },
           }),
         ],
@@ -287,6 +328,7 @@ export function openJob(
       ),
       (opened) => Effect.promise(() => opened.close(context)),
     );
+    journal = harness;
     options.journalOpened(harness);
     const opening = () => ({
       timestamp: Date.now(),
@@ -385,9 +427,18 @@ export function openJob(
         const submission = await submitInput();
         await submission.wait(context);
       });
-      // Once the job has finished, or pi has failed, all of its work stops. An interrupt leaves
-      // the work pending instead.
-      yield* answered.pipe(
+      // Once the job has finished, pi has failed or a limit is reached, all of its work stops. An
+      // interrupt leaves the work pending instead. A limit stops the job as its own end does,
+      // not as a pause does: the work it cut off is aborted and settled, and the job fails naming
+      // the limit, unless the agent's result was accepted meanwhile. The timeout counts from here,
+      // so time spent waiting for a slot or while the Runner was down counts nothing.
+      const exceeded = yield* Effect.raceAllFirst([
+        answered.pipe(Effect.as(undefined)),
+        Effect.sleep(Duration.seconds(options.runTimeoutSeconds)).pipe(
+          Effect.as("runTimedOut" as const),
+        ),
+        overBudget.await.pipe(Effect.as("modelBudgetExceeded" as const)),
+      ]).pipe(
         Effect.onExitIf(
           (exit) => !Exit.hasInterrupts(exit),
           () => stopWork,
@@ -403,7 +454,10 @@ export function openJob(
       const timestamp = Date.now();
       yield* Effect.promise(() =>
         result === undefined
-          ? submitClosing(root, options.runId, JobFailed, { timestamp })
+          ? submitClosing(root, options.runId, JobFailed, {
+              timestamp,
+              ...(exceeded === undefined ? {} : { reason: exceeded }),
+            })
           : submitClosing(root, options.runId, JobSucceeded, { timestamp, result }),
       );
     }).pipe(
@@ -417,6 +471,13 @@ export function openJob(
     );
     return runAgent;
   });
+}
+
+/** A job's cost so far, in US dollars: every model's and every tool's, as the hub adds them up. */
+function spent(usage: UsageState): number {
+  return Number.sumAll(
+    [...Record.values(usage.models), ...Record.values(usage.tools)].map((each) => each.cost.total),
+  );
 }
 
 /** A stop the hub asks a Runner to record: a pause or a cancel. */

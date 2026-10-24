@@ -81,7 +81,7 @@ export class RunnerConnection extends DurableObject<Env> {
             runnerId,
             services,
             recordSeen,
-            reportIntervalMs: readConfig(hubSettings, this.env).reportIntervalMs,
+            reportIntervalMs: readConfig(hubSettings).reportIntervalMs,
           }),
         ),
       ),
