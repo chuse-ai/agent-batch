@@ -264,8 +264,8 @@ catalogs:
       specifier: ^1.8.1
       version: 1.8.1
     json-schema-library:
-      specifier: ^11.6.12
-      version: 11.6.12
+      specifier: ^11.6.14
+      version: 11.6.14
     kanel:
       specifier: ^4.0.4
       version: 4.0.4
@@ -390,7 +390,7 @@ importers:
         version: 0.12.0(@standard-schema/spec@1.1.0)(hono@5.0.0-rc.1)(zod@4.6.7)
       json-schema-library:
         specifier: 'catalog:'
-        version: 11.6.12
+        version: 11.6.14
       kysely:
         specifier: 'catalog:'
         version: 0.29.7
@@ -505,7 +505,7 @@ importers:
         version: 5.0.0
       json-schema-library:
         specifier: 'catalog:'
-        version: 11.6.12
+        version: 11.6.14
       ws:
         specifier: 'catalog:'
         version: 8.22.0
@@ -3513,8 +3513,8 @@ packages:
   json-rpc-2.0@1.8.1:
     resolution: {integrity: sha512-BmN42JKn6FI36pcMMzHCXQhpKNEfbeqgSIcUYHKnifq0/4Ey6PDinovwUOgajT7NsgUtpWdDXaCWlpI4LHXN3g==}
 
-  json-schema-library@11.6.12:
-    resolution: {integrity: sha512-In5ob2mOF6EWgGfKn+rvi2rqzv1ZGonh9namsVLYAEMnwmSjVIHBxSUGb4IQ6VBZKKP6Rmb4MwP0IHcQTKrCIQ==}
+  json-schema-library@11.6.14:
+    resolution: {integrity: sha512-fN8X+ZBUOPDF7B9ZBjVq4ZKay0K/U9KQeJrQp4GqvjiPCMw/En8EJM0OHcFKBHynz6MDPJ0lIm/CZFbk0WhbZA==}
 
   json-schema-to-ts@3.1.1:
     resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
@@ -7813,7 +7813,7 @@ snapshots:
 
   json-rpc-2.0@1.8.1: {}
 
-  json-schema-library@11.6.12:
+  json-schema-library@11.6.14:
     dependencies:
       '@hyperjump/json-schema-formats': 1.0.8
       '@sagold/json-pointer': 7.2.1
