@@ -9,6 +9,17 @@ updates:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
     groups:
+      better-auth:
+        patterns:
+          - "auth"
+          - "better-auth"
+          - "@better-auth/*"
+      better-auth-security:
+        applies-to: security-updates
+        patterns:
+          - "auth"
+          - "better-auth"
+          - "@better-auth/*"
       # oRPC's packages are released together, and mixed versions do not type-check.
       orpc:
         patterns:
