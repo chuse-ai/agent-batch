@@ -121,3 +121,7 @@ vp run -r build
 ```bash
 vp run dev
 ```
+
+## Contributing
+
+Issues are welcome; outside pull requests are not accepted for now. See [CONTRIBUTING.md](CONTRIBUTING.md).
