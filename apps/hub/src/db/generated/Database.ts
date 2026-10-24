@@ -5,4 +5,4 @@ import type { default as AgentBatchSchema } from "./agent_batch/AgentBatchSchema
 
 type Database = AgentBatchSchema;
 
-export default Database;
+export type { Database as default };

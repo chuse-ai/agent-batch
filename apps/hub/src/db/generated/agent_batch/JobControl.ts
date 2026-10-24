@@ -4,4 +4,4 @@
 /** Represents the enum agent_batch.jobControl */
 type JobControl = "pause" | "cancel";
 
-export default JobControl;
+export type { JobControl as default };

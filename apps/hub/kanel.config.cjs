@@ -72,6 +72,17 @@ function generateIdentifierType(column, details, builtinType) {
   };
 }
 
+/**
+ * Exports a type alias as a type, `export type { X as default }`, since under the hub's
+ * `verbatimModuleSyntax`, which Node's type stripping needs, `export default X` must name a value
+ * (kristiandupont/kanel#436). Kanel writes it so only for its type aliases, the enums and `Database`.
+ */
+function exportTypeAliasesAsTypes(path, lines) {
+  return lines.map((line) =>
+    line.replace(/^export default (\w+);$/, "export type { $1 as default };"),
+  );
+}
+
 /** Generates the hub's Kysely types from the database at `DATABASE_URL`, migrated to the latest version. */
 /** @type {import("kanel").ConfigV4} */
 module.exports = {
@@ -91,5 +102,5 @@ module.exports = {
       preRenderHooks: [makeKyselyHook()],
     }),
   ],
-  postRenderHooks: [markAsGenerated],
+  postRenderHooks: [exportTypeAliasesAsTypes, markAsGenerated],
 };

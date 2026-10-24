@@ -9,6 +9,8 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
     "skipLibCheck": true,
     "types": ["./worker-configuration.d.ts", "node"]
   }

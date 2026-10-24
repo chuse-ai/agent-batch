@@ -4,4 +4,4 @@
 /** Represents the enum agent_batch.jobReason */
 type JobReason = "runnerRemoved";
 
-export default JobReason;
+export type { JobReason as default };

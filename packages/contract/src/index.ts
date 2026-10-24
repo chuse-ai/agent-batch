@@ -151,19 +151,34 @@ export const jobSchema = z
   .register(z.globalRegistry, { id: "Job" });
 export type Job = z.infer<typeof jobSchema>;
 
+/** A job as a call names it. */
+export const jobRefSchema = z.object({ id: jobIdSchema.check(z.describe("The job's ID.")) });
+
 /** A job as a caller submits it. */
 export const jobSubmissionSchema = z
   .object({
-    /** What the agent is asked to do. */
-    prompt: promptSchema,
-    /** Defaults to none, so a submission without them is the same job as one with an empty list. */
-    inputFiles: z._default(inputFilesSchema, {}),
-    resultContract: resultContractSchema,
-    /**
-     * Makes submitting safe to retry: submitting again with the same key and the same job returns the
-     * job already accepted, and with a different job is refused.
-     */
-    idempotencyKey: z.optional(textSchema.check(z.minLength(1), z.maxLength(255))),
+    prompt: promptSchema.check(z.describe("What the agent is asked to do.")),
+    // Defaults to none, so a submission without them is the same job as one with an empty list.
+    inputFiles: z._default(
+      inputFilesSchema.check(
+        z.describe(
+          "Files the agent finds in its Workspace's `inputs/` folder, by name; none by default.",
+        ),
+      ),
+      {},
+    ),
+    resultContract: resultContractSchema.check(
+      z.describe("What the job's result must be: `schema`, a JSON Schema the result must match."),
+    ),
+    idempotencyKey: z.optional(
+      textSchema.check(
+        z.minLength(1),
+        z.maxLength(255),
+        z.describe(
+          "Makes submitting safe to retry: submitting again with the same key and the same job returns the job already accepted, and with a different job is refused.",
+        ),
+      ),
+    ),
   })
   .register(z.globalRegistry, { id: "JobSubmission" });
 export type JobSubmission = z.infer<typeof jobSubmissionSchema>;
@@ -290,37 +305,43 @@ export const contract = {
     list: api
       .meta(openapi({ method: "GET", path: "/runners" }), ...byMember)
       .output(z.array(runnerSchema)),
-    /**
-     * Registers a new Runner, called with the shared key Runners start with. Returns the Runner's ID
-     * and its own key, which the Runner keeps and connects with.
-     */
     register: forOrganization
       .meta(
-        openapi({ method: "POST", path: "/runners/register" }),
+        openapi({
+          method: "POST",
+          path: "/runners/register",
+          description:
+            "Registers a new Runner, called with the shared key Runners start with. Returns the Runner's ID and its own key, which the Runner keeps and connects with.",
+        }),
         ...byKey({ runner: ["register"] }),
       )
-      .input(z.object({ name: z.string() }))
+      .input(
+        z.object({ name: z.string().check(z.describe("The Runner's name, as the hub lists it.")) }),
+      )
       .output(registeredRunnerSchema),
-    /**
-     * Removes a Runner, for a host that is retired or compromised: its own key stops working and its
-     * connection is dropped at once. A compromised host also holds the shared key Runners register
-     * with, so revoke that too and create a new one for future hosts; Runners already registered
-     * keep working with their own keys. Nothing the host holds can be run, resumed or removed
-     * through the hub again, so the jobs the Runner held that had not ended end: `cancelled`
-     * where a cancel was waiting, otherwise `failed` with reason `runnerRemoved`. They may still
-     * run on the host unseen. The answer lists the jobs it ended, and every job whose files the
-     * host may still hold, which whoever looks after the host can remove.
-     */
+    // Removing a Runner ends its unfinished jobs and records files its host may still hold.
     delete: api
       .errors({ [Forbidden.code]: Forbidden, [NotFound.code]: NotFound })
-      .meta(openapi({ method: "DELETE", path: "/runners/{id}" }), ...byMember)
+      .meta(
+        openapi({
+          method: "DELETE",
+          path: "/runners/{id}",
+          description:
+            "Removes a Runner, for a host that is retired or compromised: its own key stops working and its connection is dropped at once. A compromised host also holds the shared key Runners register with, so revoke that too and create a new one for future hosts; Runners already registered keep working with their own keys. Nothing the host holds can be run, resumed or removed through the hub again, so the jobs the Runner held that had not ended end: `cancelled` where a cancel was waiting, otherwise `failed` with reason `runnerRemoved`. They may still run on the host unseen. The answer lists the jobs it ended, and every job whose files the host may still hold, which whoever looks after the host can remove.",
+        }),
+        ...byMember,
+      )
       .input(z.object({ id: z.string() }))
       .output(
         z.object({
-          /** The jobs the removal ended. */
-          endedJobs: z.array(jobIdSchema),
-          /** The jobs whose files the Runner's host may still hold, those ended included. */
-          jobsWithFilesLeft: z.array(jobIdSchema),
+          endedJobs: z.array(jobIdSchema).check(z.describe("The jobs the removal ended.")),
+          jobsWithFilesLeft: z
+            .array(jobIdSchema)
+            .check(
+              z.describe(
+                "The jobs whose files the Runner's host may still hold, those ended included.",
+              ),
+            ),
         }),
       ),
   },
@@ -332,8 +353,15 @@ export const contract = {
         z.object({
           name: z.string(),
           permissions: permissionsSchema,
-          /** Seconds until the key stops working, from one day to a year; without it, it never does. */
-          expiresIn: z.optional(z.number()),
+          expiresIn: z.optional(
+            z
+              .number()
+              .check(
+                z.describe(
+                  "Seconds until the key stops working, from one day to a year; without it, it never does.",
+                ),
+              ),
+          ),
         }),
       )
       .output(createdKeySchema),
@@ -347,100 +375,116 @@ export const contract = {
       .input(z.object({ id: z.string() })),
   },
   jobs: {
-    /**
-     * Submits a job. The hub checks the Result contract's schema, refusing one that is invalid,
-     * describes a list or refers outside itself.
-     */
     submit: forOrganization
       .errors({ BAD_REQUEST: {}, [IdempotencyKeyReused.code]: IdempotencyKeyReused })
       .meta(
-        openapi({ method: "POST", path: "/jobs", successStatus: 201 }),
+        openapi({
+          method: "POST",
+          path: "/jobs",
+          successStatus: 201,
+          description:
+            "Submits a job. The hub checks the Result contract's schema, refusing one that is invalid, describes a list or refers outside itself.",
+        }),
         ...byKey({ job: ["create"] }),
       )
       .input(jobSubmissionSchema)
       .output(jobSchema),
-    /** Reads a job. */
     get: api
       .errors({ [NotFound.code]: NotFound })
-      .meta(openapi({ method: "GET", path: "/jobs/{id}" }), ...byKeyOrMember({ job: ["read"] }))
-      .input(z.object({ id: jobIdSchema }))
+      .meta(
+        openapi({ method: "GET", path: "/jobs/{id}", description: "Reads a job." }),
+        ...byKeyOrMember({ job: ["read"] }),
+      )
+      .input(jobRefSchema)
       .output(jobSchema),
-    /**
-     * Pauses a job and answers with the job. A job not yet sent to a Runner is held at once as
-     * `paused`. Otherwise the pause waits for its Runner, shown as `pendingControl`, and the job is
-     * `paused` once the Runner has stopped it, its work kept for a resume, holding no capacity.
-     * Pausing a paused job, or one whose pause waits, changes nothing; a job that has ended, or whose
-     * cancel waits, is refused.
-     */
     pause: api
       .errors({ [NotFound.code]: NotFound, [ControlRefused.code]: ControlRefused })
       .meta(
-        openapi({ method: "POST", path: "/jobs/{id}/pause" }),
+        openapi({
+          method: "POST",
+          path: "/jobs/{id}/pause",
+          description:
+            "Pauses a job and answers with the job. A job not yet sent to a Runner is held at once as `paused`. Otherwise the pause waits for its Runner, shown as `pendingControl`, and the job is `paused` once the Runner has stopped it, its work kept for a resume, holding no capacity. Pausing a paused job, or one whose pause waits, changes nothing; a job that has ended, or whose cancel waits, is refused.",
+        }),
         ...byKeyOrMember({ job: ["pause"] }),
       )
-      .input(z.object({ id: jobIdSchema }))
+      .input(jobRefSchema)
       .output(jobSchema),
-    /**
-     * Resumes a stopped job and answers with the job. A paused, failed or cancelled job goes back to
-     * `queued` and carries on from where it stopped, on the Runner that holds its work; one paused
-     * before it started simply starts. Resuming a job that is queued or running changes nothing. A
-     * job whose pause its Runner has not yet confirmed, whose cancel waits, that succeeded, or that
-     * never started before it ended, is refused.
-     */
     resume: api
       .errors({ [NotFound.code]: NotFound, [ControlRefused.code]: ControlRefused })
       .meta(
-        openapi({ method: "POST", path: "/jobs/{id}/resume" }),
+        openapi({
+          method: "POST",
+          path: "/jobs/{id}/resume",
+          description:
+            "Resumes a stopped job and answers with the job. A paused, failed or cancelled job goes back to `queued` and carries on from where it stopped, on the Runner that holds its work; one paused before it started simply starts. Resuming a job that is queued or running changes nothing. A job whose pause its Runner has not yet confirmed, whose cancel waits, that succeeded, or that never started before it ended, is refused.",
+        }),
         ...byKeyOrMember({ job: ["resume"] }),
       )
-      .input(z.object({ id: jobIdSchema }))
+      .input(jobRefSchema)
       .output(jobSchema),
-    /**
-     * Cancels a job and answers with the job. A job not yet sent to a Runner, or paused, ends
-     * `cancelled` at once. Otherwise the cancel waits for its Runner, shown as `pendingControl`,
-     * replacing a waiting pause, and the job ends `cancelled` once the Runner has stopped it, keeping
-     * its events and costs. A job that has ended, or ends before its Runner stops it, keeps the
-     * status and result it ended with.
-     */
     cancel: api
       .errors({ [NotFound.code]: NotFound })
       .meta(
-        openapi({ method: "POST", path: "/jobs/{id}/cancel" }),
+        openapi({
+          method: "POST",
+          path: "/jobs/{id}/cancel",
+          description:
+            "Cancels a job and answers with the job. A job not yet sent to a Runner, or paused, ends `cancelled` at once. Otherwise the cancel waits for its Runner, shown as `pendingControl`, replacing a waiting pause, and the job ends `cancelled` once the Runner has stopped it, keeping its events and costs. A job that has ended, or ends before its Runner stops it, keeps the status and result it ended with.",
+        }),
         ...byKeyOrMember({ job: ["cancel"] }),
       )
-      .input(z.object({ id: jobIdSchema }))
+      .input(jobRefSchema)
       .output(jobSchema),
-    /**
-     * Deletes a finished job and answers with the job as it now reads. Its content goes from
-     * the hub at once, and from its host once its Runner has deleted its journal and Workspace;
-     * until then the job reads without its content, with `deletedAt` and a waiting `delete`, and
-     * then as not found. Its Usage record stays. An unfinished job is refused: cancel it first.
-     */
+    // Deleting a finished job removes its hub content and records any file deletion owed by its Runner.
     delete: api
       .errors({ [NotFound.code]: NotFound, [ControlRefused.code]: ControlRefused })
       .meta(
-        openapi({ method: "DELETE", path: "/jobs/{id}" }),
+        openapi({
+          method: "DELETE",
+          path: "/jobs/{id}",
+          description:
+            "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with `deletedAt` and a waiting `delete`, and then as not found. Its Usage record stays. An unfinished job is refused: cancel it first.",
+        }),
         ...byKeyOrMember({ job: ["delete"] }),
       )
-      .input(z.object({ id: jobIdSchema }))
+      .input(jobRefSchema)
       .output(jobSchema),
-    /**
-     * Reads a job's events in pages, while the job runs and after it ends. A page holds at most
-     * `limit` events and stops early after about 1 MiB of them, though it always holds at least one
-     * if there are any.
-     */
     events: api
       .errors({ [NotFound.code]: NotFound })
       .meta(
-        openapi({ method: "GET", path: "/jobs/{id}/events" }),
+        openapi({
+          method: "GET",
+          path: "/jobs/{id}/events",
+          description:
+            "Reads a job's events in pages, while the job runs and after it ends. A page holds at most `limit` events and stops early after about 1 MiB of them, though it always holds at least one if there are any.",
+        }),
         ...byKeyOrMember({ job: ["read"] }),
       )
       .input(
         z.object({
-          id: jobIdSchema,
-          /** A position: the ID of the last event the caller has, 0 to read from the start. */
-          after: z._default(z.int().check(z.nonnegative()), 0),
-          limit: z._default(z.int().check(z.minimum(1), z.maximum(100)), 100),
+          ...jobRefSchema.shape,
+          after: z._default(
+            z
+              .int()
+              .check(
+                z.nonnegative(),
+                z.describe(
+                  "A position: the ID of the last event the caller has, 0 to read from the start.",
+                ),
+              ),
+            0,
+          ),
+          limit: z._default(
+            z
+              .int()
+              .check(
+                z.minimum(1),
+                z.maximum(100),
+                z.describe("At most this many events in the page, 100 by default."),
+              ),
+            100,
+          ),
         }),
       )
       .output(jobEventsPageSchema),

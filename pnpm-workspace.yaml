@@ -40,13 +40,15 @@ catalog:
   "@orpc/openapi": 2.0.0-beta.44
   "@orpc/server": 2.0.0-beta.44
   "@orpc/zod": 2.0.0-beta.44
+  "@standard-schema/utils": ^0.3.0
   "@testcontainers/postgresql": ^12.2.1
-  "@types/node": ^24
+  "@types/node": ^22.20.5
   "@types/pg": ^8.23.1
   "@types/ws": ^8.18.2
   auth: 1.7.11
   better-auth: 1.7.11
   canonicalize: ^5.1.0
+  content-type: ^3.1.1
   crossws: ^0.4.15
   effect: ^4.0.5
   ensure-error: ^5.0.0
@@ -54,6 +56,7 @@ catalog:
   get-port: ^7.2.0
   hono: 5.0.0-rc.1
   hono-problem-details: ^0.12.0
+  is-network-error: ^1.3.2
   json-rpc-2.0: ^1.8.1
   json-schema-library: ^11.6.12
   kanel: ^4.0.4
@@ -61,7 +64,9 @@ catalog:
   kysely: ^0.29.7
   nf3: ^0.4.2
   pg: ^8.23.1
+  rollup-plugin-license: ^3.7.1
   testcontainers: ^12.2.1
+  trpc-cli: ^0.17.1
   type-fest: ^5.10.0
   typescript: ^7.0.2
   uuid: ^14.0.3

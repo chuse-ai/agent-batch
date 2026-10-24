@@ -9,7 +9,7 @@ import { migrateDatabase } from "./db/migrate.ts";
 import { NodeRunnerSockets, nodeServices } from "./node/layers.ts";
 import { startServer, stopServer } from "./node/server.ts";
 import type { HubServices } from "./platform.ts";
-import { hubSettings } from "./settings.ts";
+import { hubSettings, settingsProblems } from "./settings.ts";
 import { setUpOrganization } from "./setup.ts";
 
 // The hub as a Node process, which its Docker image runs (ADR 0014). It runs as a single process:
@@ -86,9 +86,8 @@ Effect.gen(function* () {
     hubServer(settings.port).pipe(Layer.provide(nodeServices(settings.hub, databaseUrl))),
   );
 }).pipe(
-  // A missing or malformed setting names itself, on one line as the Runner reports its own.
   Effect.catchTag("ConfigError", (error) =>
-    refuse(`The hub is not configured: ${error.cause.message.replace(/\s+/g, " ")}`),
+    refuse(`The hub is not configured: ${settingsProblems(error)}`),
   ),
   Effect.catch((error) => refuse(error.message)),
   NodeRuntime.runMain,

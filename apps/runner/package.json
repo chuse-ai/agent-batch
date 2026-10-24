@@ -28,6 +28,7 @@
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
     "@orpc/openapi": "catalog:",
+    "@standard-schema/utils": "catalog:",
     "contract": "workspace:*",
     "effect": "catalog:",
     "ensure-error": "catalog:",

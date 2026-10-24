@@ -1,3 +1,4 @@
+import { getDotPath } from "@standard-schema/utils";
 import {
   Cause,
   Config,
@@ -9,6 +10,7 @@ import {
   Record,
   Redacted,
   Schema,
+  SchemaIssue,
 } from "effect";
 
 import type { AuthSettings } from "./auth/options.ts";
@@ -63,9 +65,25 @@ export function readConfig<A>(config: Config.Config<A>, env: object): A {
   const variables = Record.filter({ ...env }, Predicate.isString);
   const exit = Effect.runSyncExit(config.parse(ConfigProvider.fromEnvRecord(variables)));
   if (Exit.isSuccess(exit)) return exit.value;
-  // A missing or malformed setting fails with a ConfigError whose cause says which one.
-  const failure: unknown = Cause.squash(exit.cause);
-  const cause = failure instanceof Error ? failure.cause : undefined;
-  const detail = cause instanceof Error ? cause.message : Cause.pretty(exit.cause);
-  throw new Error(`The hub is not configured: ${detail.replace(/\s+/g, " ")}`);
+  const detail = Option.match(Cause.findErrorOption(exit.cause), {
+    onSome: settingsProblems,
+    onNone: () => Cause.pretty(exit.cause),
+  });
+  throw new Error(`The hub is not configured: ${detail}`);
+}
+
+/**
+ * What `error`, a missing or malformed setting, finds wrong with the settings, on one line, as the
+ * Runner and the CLI report their own: each setting it names, then the problem. Each of the three
+ * keeps a copy, as the contract they share has no Effect (ADR 0022).
+ */
+export function settingsProblems(error: Config.ConfigError): string {
+  if (!Schema.isSchemaError(error.cause)) return error.message;
+  const { issues } = SchemaIssue.makeFormatterStandardSchemaV1()(error.cause.issue);
+  return issues
+    .map((issue) => {
+      const setting = getDotPath(issue);
+      return setting === null ? issue.message : `${setting}: ${issue.message}`;
+    })
+    .join("; ");
 }

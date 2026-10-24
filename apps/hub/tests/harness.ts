@@ -143,6 +143,15 @@ export function startSystem(
     return fetch(new URL(pathname, url), init);
   }
 
+  /** A new API key with every job permission, as a caller of the job API holds one. */
+  async function newJobsKey() {
+    const { key } = await owner.apiKeys.create({
+      name: "jobs",
+      permissions: { job: ["create", "read", "pause", "resume", "cancel", "delete"] },
+    });
+    return key;
+  }
+
   /** A client of the hub's API sending `headers`, such as a member's session or an API key. */
   function client(headers: Record<string, string> = {}): HubClient {
     return createORPCClient(createProblemDetailsLink(contract, { origin: url.origin, headers }));
@@ -227,13 +236,10 @@ export function startSystem(
     signIn,
     /** A client signed in as `OWNER`. */
     owner: () => owner,
+    newJobsKey,
     /** Creates an API key allowed to submit, read and control jobs, and returns a client sending it. */
     async clientWithNewJobsKey() {
-      const { key } = await owner.apiKeys.create({
-        name: "jobs",
-        permissions: { job: ["create", "read", "pause", "resume", "cancel", "delete"] },
-      });
-      return client({ "x-api-key": key });
+      return client({ "x-api-key": await newJobsKey() });
     },
     /** The session cookie of `OWNER`. */
     ownerCookie: () => ownerCookie,

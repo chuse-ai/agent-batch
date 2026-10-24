@@ -4,4 +4,4 @@
 /** Represents the enum agent_batch.jobStatus */
 type JobStatus = "queued" | "running" | "paused" | "succeeded" | "failed" | "cancelled";
 
-export default JobStatus;
+export type { JobStatus as default };

@@ -7,7 +7,8 @@ import { MODEL_THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-sch
 // The shared package rather than `@effect/platform-node`, whose required `redis` peer the Runner
 // would install without using.
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
-import { Config, Data, Effect, Option, Redacted, Runtime } from "effect";
+import { getDotPath } from "@standard-schema/utils";
+import { Config, Data, Effect, Option, Redacted, Runtime, Schema, SchemaIssue } from "effect";
 
 import { DEFAULT_SANDBOX_SETTINGS, runRunner } from "./index.ts";
 
@@ -15,6 +16,22 @@ import { DEFAULT_SANDBOX_SETTINGS, runRunner } from "./index.ts";
 // signal interrupts it: it closes its connection, so the hub drops it at once, and stops its jobs.
 // Effect's Node runtime logs a failure's cause and sets the exit code. The model is named as Pi names
 // it, and Pi reads the provider's key from the environment.
+
+/**
+ * What `error`, a missing or malformed setting, finds wrong with the settings, on one line, as the
+ * hub and the CLI report their own: each setting it names, then the problem. Each of the three
+ * keeps a copy, as the contract they share has no Effect (ADR 0022).
+ */
+function settingsProblems(error: Config.ConfigError): string {
+  if (!Schema.isSchemaError(error.cause)) return error.message;
+  const { issues } = SchemaIssue.makeFormatterStandardSchemaV1()(error.cause.issue);
+  return issues
+    .map((issue) => {
+      const setting = getDotPath(issue);
+      return setting === null ? issue.message : `${setting}: ${issue.message}`;
+    })
+    .join("; ");
+}
 
 /** How hard the model thinks unless `RUNNER_THINKING_LEVEL` says otherwise: Pi's coding agent's default. */
 const DEFAULT_THINKING_LEVEL = "medium";
@@ -113,9 +130,8 @@ Effect.gen(function* () {
     ),
   );
 }).pipe(
-  // A missing or malformed setting names itself, on one line as the hub reports its own.
   Effect.catchTag("ConfigError", (error) =>
-    refuse(`The Runner is not configured: ${error.cause.message.replace(/\s+/g, " ")}`),
+    refuse(`The Runner is not configured: ${settingsProblems(error)}`),
   ),
   NodeRuntime.runMain,
 );

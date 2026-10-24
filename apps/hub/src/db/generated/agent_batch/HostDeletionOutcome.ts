@@ -4,4 +4,4 @@
 /** Represents the enum agent_batch.hostDeletionOutcome */
 type HostDeletionOutcome = "confirmed" | "notRequired" | "abandoned";
 
-export default HostDeletionOutcome;
+export type { HostDeletionOutcome as default };
