@@ -41,7 +41,7 @@ class UnmaskedProcContainer extends GenericContainer {
 
 // The image is the same for both projects, so one of them runs it.
 describe.skipIf(inject("hub") !== "node")("the Docker images", () => {
-  test("sets up a fresh database as it starts, serves the API, and stops gracefully", async () => {
+  test("sets up a fresh database as it starts, reports healthy, serves the API, and stops gracefully", async () => {
     await using network = await new Network().start();
     await using database = await new PostgreSqlContainer("postgres:18-alpine")
       .withNetwork(network)
@@ -61,7 +61,7 @@ describe.skipIf(inject("hub") !== "node")("the Docker images", () => {
         ADMIN_PASSWORD: OWNER.password,
       })
       .withExposedPorts(8787)
-      .withWaitStrategy(Wait.forHttp("/runners", 8787).forStatusCode(401))
+      .withWaitStrategy(Wait.forHealthCheck())
       .start();
     const url = `http://${hub.getHost()}:${hub.getMappedPort(8787)}`;
 
@@ -119,7 +119,7 @@ describe.skipIf(inject("hub") !== "node")("the Docker images", () => {
         ADMIN_PASSWORD: OWNER.password,
       })
       .withExposedPorts(8787)
-      .withWaitStrategy(Wait.forHttp("/runners", 8787).forStatusCode(401))
+      .withWaitStrategy(Wait.forHealthCheck())
       .start();
     const url = `http://${hub.getHost()}:${hub.getMappedPort(8787)}`;
     const signIn = await fetch(`${url}/api/auth/sign-in/email`, {

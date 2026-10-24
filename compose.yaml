@@ -1,0 +1,92 @@
+# A hub and a Runner on one machine from the published images, as the README's quickstart starts
+# them, and the smallest deployment: a deployment's own changes go in a
+# `compose.override.yaml` beside this file, which Compose merges into it. Settings come from `.env`
+# beside this file; the Runner's registration key exists only once the hub runs, so the Runner
+# starts after the hub, and nothing here requires its settings.
+name: agent-batch
+
+services:
+  database:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: agent_batch
+      # Set only when the database is created, on its first start: a change in `.env` later must be
+      # made in the database too, or the hub can no longer connect.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it in .env, as from openssl rand -hex 24}
+      POSTGRES_DB: agent_batch
+    volumes:
+      - database:/var/lib/postgresql
+    # Docker gives a container 64 MB of shared memory, which Postgres can run out of; the image's
+    # own Compose example sets this.
+    shm_size: 128mb
+    # Over TCP, as the hub connects: on its first start the image's initialization server listens
+    # only on its Unix socket, as the image's maintainers note (docker-library/postgres#146). For
+    # the first 30 seconds, as Docker's startup-order example gives it, until the database first
+    # answers, Docker checks every 2 seconds and counts no failure; after that, every 30 seconds.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      start_period: 30s
+      start_interval: 2s
+    restart: unless-stopped
+
+  hub:
+    image: ghcr.io/chuse-ai/agent-batch-hub:${AGENT_BATCH_VERSION:-latest}
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://agent_batch:${POSTGRES_PASSWORD}@database:5432/agent_batch
+      # The address the hub's callers use; one that other machines reach is set in `.env`.
+      HUB_URL: ${HUB_URL:-http://localhost:8787}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set it in .env, as from openssl rand -base64 32}
+      # The owner the hub creates on its first start (ADR 0015).
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?set it in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set it in .env}
+    # Where this machine opens the hub to callers outside Compose, as `address:port`, which `.env`
+    # can set as `HUB_PUBLISH`; only Compose reads it. The Runner here reaches the hub over
+    # Compose's network whatever it says.
+    # - `127.0.0.1:8787`, the default: this machine only, as the quickstart calls the hub.
+    # - `127.0.0.1:9000`: this machine only, on another port, when 8787 is taken here.
+    # - One of this machine's addresses, such as its Tailscale address: the machines on that
+    #   network. The address must exist when the hub starts.
+    # - `0.0.0.0:8787`, or a port alone such as `9000`: every network this machine is on. The hub
+    #   speaks plain HTTP, and Docker's published ports bypass firewalls such as ufw.
+    # Set `HUB_URL` to the address callers then use.
+    ports:
+      - "${HUB_PUBLISH:-127.0.0.1:8787}:8787"
+    restart: unless-stopped
+
+  runner:
+    image: ghcr.io/chuse-ai/agent-batch-runner:${AGENT_BATCH_VERSION:-latest}
+    # The hub's image checks its health: healthy once it serves requests.
+    depends_on:
+      hub:
+        condition: service_healthy
+    # What each job's sandbox needs in a container, as BuildKit's rootless image documents.
+    security_opt:
+      # Docker's seccomp profile refuses bubblewrap the namespaces it creates.
+      - seccomp=unconfined
+      # Docker masks paths under /proc, so bubblewrap cannot give a job a /proc of its own.
+      - systempaths=unconfined
+      # On hosts with AppArmor: Docker's profile denies mounts.
+      - apparmor=unconfined
+    # A container has no user systemd, so its jobs have no memory cap of their own: this caps the
+    # Runner and its jobs together, at its default 8 jobs of 1G, and one job can take all of it. A
+    # Runner the kernel kills for memory recovers its jobs when it starts again; capping each job
+    # needs the Runner on the host.
+    mem_limit: 8g
+    # Names without values take theirs from `.env` or the shell, and stay unset without one.
+    environment:
+      HUB_URL: http://hub:8787
+      RUNNER_REGISTRATION_KEY:
+      RUNNER_MODEL_PROVIDER:
+      RUNNER_MODEL_ID:
+      # The model provider's key, as Pi reads it; another provider's is added the same way.
+      OPENROUTER_API_KEY:
+    volumes:
+      - runner-data:/data
+    restart: unless-stopped
+
+volumes:
+  database:
+  runner-data:

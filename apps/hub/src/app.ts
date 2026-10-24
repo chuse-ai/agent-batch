@@ -342,6 +342,11 @@ export function createApp<Bindings extends object>(platform: HubPlatform<Binding
     }
   });
 
+  // For health checks, at the path Kubernetes' probe examples use. The hub answers once it serves
+  // requests, which in Docker is after migrating and setting up (ADR 0015), and checks nothing else,
+  // so an unreachable database does not count against the hub itself.
+  app.get("/healthz", (c) => c.text("OK"));
+
   // Better Auth's own routes, such as signing in and out, at its default path.
   app.on(["GET", "POST"], "/api/auth/*", (c) =>
     platform.run(

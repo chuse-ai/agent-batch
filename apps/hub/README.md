@@ -7,7 +7,7 @@ The central service every caller and Runner connects to (ADR 0008). It runs on C
 On Workers, set them in `wrangler.jsonc` and as Wrangler secrets; for `wrangler dev`, copy `.dev.vars.example` to `.dev.vars`. In Docker, set them as environment variables.
 
 - `BETTER_AUTH_SECRET` (required): signs members' sessions. Generate one with `openssl rand -base64 32`.
-- `HUB_URL` (required): the hub's public URL, the same setting a Runner dials. Better Auth uses it as its base URL, for its links, its trusted origin and whether session cookies are `Secure`. Without either, the hub answers every request with 503 and says what to set.
+- `HUB_URL` (required): the hub's public URL, the same setting a Runner dials. Better Auth uses it as its base URL, for its links, its trusted origin and whether session cookies are `Secure`. Without either, the hub logs what to set: in Docker it exits, and on Workers it answers every request but `/healthz` with 503.
 - `CLIENT_IP_HEADER`: the request header carrying the client's IP address, for Better Auth's rate limits: `cf-connecting-ip` on Workers, `x-real-ip` on Railway. Unset, Better Auth reads `x-forwarded-for`, and a request whose address it cannot resolve shares one rate-limit bucket per path.
 - `REPORT_INTERVAL_MS`: how often each Runner reports its jobs' new events, usage and activity, in milliseconds; 3000 by default. A job's activity is up to one interval old.
 - `TRUSTED_PROXIES`: the proxies in front of the hub, as IPs or CIDRs separated by commas. A forwarded chain is read from the right past these, so a client cannot name its own address; unset, only a chain of one address counts.
@@ -20,7 +20,7 @@ In Docker, also:
 
 ## Docker
 
-Each release publishes the hub's image as `ghcr.io/chuse-ai/agent-batch-hub`. Run one container per hub: it runs as a single process (ADR 0014). To build it from the repository's root:
+Each release publishes the hub's image as `ghcr.io/chuse-ai/agent-batch-hub`. Run one container per hub: it runs as a single process (ADR 0014). Its health check fetches `/healthz`, which answers once the hub serves requests; platforms that ignore the image's check, such as Kubernetes, can probe the same path. To build it from the repository's root:
 
 ```sh
 docker build . --target hub --tag agent-batch-hub

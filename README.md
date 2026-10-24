@@ -2,9 +2,99 @@
 
 Run hundreds of one-off agent jobs unattended, each with a result contract. On your own machines first, spilling over to Cloudflare® Workers.
 
+## Quickstart
+
+From nothing to a finished job on one machine with Docker, Node 22.19 or later, `curl`, `jq` and `openssl`: the hub and a Runner run from their published images, and jobs go through the `agent-batch` command. To make the same calls with `curl`, see [API](#api). On Ubuntu 24.04, first let the Runner's job sandboxes create user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, and a file in `/etc/sysctl.d` to keep it; on Ubuntu 25.04 and later they cannot run yet (see [the Runner's README](apps/runner/README.md)).
+
+1. **Start the hub.** It creates its owner from these on its first start and serves the API at `http://localhost:8787`.
+
+   ```sh
+   curl -fsSLO https://raw.githubusercontent.com/chuse-ai/agent-batch/main/compose.yaml
+   cat > .env <<EOF
+   BETTER_AUTH_SECRET=$(openssl rand -base64 32)
+   POSTGRES_PASSWORD=$(openssl rand -hex 24)
+   ADMIN_EMAIL=you@example.com
+   ADMIN_PASSWORD=choose-a-password
+   EOF
+   # Returns once the hub has migrated its database and created its owner; if the hub itself fails, `docker compose logs hub` says why
+   docker compose up --wait hub
+   HUB=http://localhost:8787
+   ```
+
+2. **Create keys.** Creating API keys takes a signed-in member, and the command cannot sign in yet, so this step uses `curl`. Each key comes back once, as `key`: the one Runners register with goes into `.env`, and the one for jobs into `AGENT_BATCH_API_KEY`.
+
+   ```sh
+   curl -sS --fail-with-body -c cookies -H 'content-type: application/json' \
+     -d '{"email":"you@example.com","password":"choose-a-password"}' "$HUB/api/auth/sign-in/email"
+   # The key Runners register with, kept in .env for the Runner
+   key=$(curl -sS --fail-with-body -b cookies -H 'content-type: application/json' \
+     -d '{"name":"runners","permissions":{"runner":["register"]}}' "$HUB/api-keys" | jq -er .key) &&
+     echo "RUNNER_REGISTRATION_KEY=$key" >> .env
+   # A key for submitting and controlling jobs, for the command
+   AGENT_BATCH_API_KEY=$(curl -sS --fail-with-body -b cookies -H 'content-type: application/json' \
+     -d '{"name":"jobs","permissions":{"job":["create","read","pause","resume","cancel","delete"]}}' "$HUB/api-keys" | jq -er .key) &&
+     export AGENT_BATCH_API_KEY
+   ```
+
+3. **Start a Runner** with the model every job runs on and its provider's key; it registers with the key step 2 put in `.env`:
+
+   ```sh
+   cat >> .env <<EOF
+   RUNNER_MODEL_PROVIDER=openrouter
+   RUNNER_MODEL_ID=openrouter/free
+   OPENROUTER_API_KEY=<your key>
+   EOF
+   docker compose up -d runner
+   ```
+
+   Another model goes in `RUNNER_MODEL_ID` the same way, such as `anthropic/claude-haiku-5.5` or `openai/gpt-6-luna` for real work.
+
+4. **Submit a job**: a prompt, Input files the agent finds in its Workspace's `inputs/` folder, a Result contract its result must match, and an idempotency key. The job's `id` goes into `ID` for the steps that follow.
+
+   ```sh
+   cat > job.json <<'EOF'
+   {
+     "prompt": "Count the lines of inputs/notes.txt and submit the count.",
+     "inputFiles": { "notes.txt": { "content": "one\ntwo\nthree\n" } },
+     "resultContract": { "schema": { "type": "integer" } },
+     "idempotencyKey": "quickstart-1"
+   }
+   EOF
+   export AGENT_BATCH_URL=http://localhost:8787
+   ID=$(npx --yes agent-batch jobs submit --input job.json | jq -er .id)
+   ```
+
+   Submitting again with the same idempotency key returns the same job, so the command retries a submission whose answer did not arrive.
+
+5. **Wait for it.** The command prints the job once it ends, and exits with 1 unless it succeeded.
+
+   ```sh
+   npx agent-batch jobs wait --id "$ID"
+   ```
+
+   A job stays `queued` until a Runner has room for it; if it stays there, `docker compose logs runner` shows any error that keeps the Runner from connecting.
+
+   What it did is in its events, a page at a time: read again `after` the last event's `id` while `hasMore` is true, and stop once a page without more has a final `status`.
+
+   ```sh
+   npx agent-batch jobs events --id "$ID" --after 0
+   ```
+
+6. **Read its result, and control jobs.** A job that succeeded has its `result`, which matches its Result contract: here, `3`.
+
+   ```sh
+   npx agent-batch jobs get --id "$ID"
+   ```
+
+   Jobs can also be paused, resumed, carrying on where they stopped, and cancelled, and deleted once they have ended; a refused control says why, and the reference at `/` says when each applies. `npx agent-batch --help` lists every command.
+
+   ```sh
+   npx agent-batch jobs cancel --id "$ID"   # likewise pause, resume and delete
+   ```
+
 ## API
 
-The hub serves its OpenAPI document at `/spec.json`, generated from the contract, and a browsable reference of it at `/`. Each call takes an API key in the `x-api-key` header holding the permissions the document lists for it, a member's session cookie, or either; errors are RFC 9457 Problem Details.
+The hub serves its OpenAPI document at `/spec.json`, generated from the contract, and a browsable reference of it at `/`, which shows each call with a `curl` example. Each call takes an API key in the `x-api-key` header holding the permissions the document lists for it, a member's session cookie, or either; errors are RFC 9457 Problem Details. To wait for a job, read it until its status is final, waiting longer between reads, as the command does.
 
 ## Development
 
