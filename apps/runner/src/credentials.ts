@@ -63,7 +63,7 @@ export function fileCredentialStore(file: string): CredentialStore {
         catch: (error) => error,
       }),
       // Releasing a lock that was lost fails, and changes nothing.
-      (release) => Effect.promise(() => release()).pipe(Effect.ignore),
+      (release) => Effect.tryPromise(() => release()).pipe(Effect.ignore),
     );
 
   /**

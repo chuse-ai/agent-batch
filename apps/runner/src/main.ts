@@ -156,20 +156,23 @@ function runnerModels(dataDir: string) {
  * The ID a provider knows this installation by, such as OpenAI's agent host ID: made on the first
  * sign-in and kept, so signing in again, or registering again, stays the same installation.
  */
-const installationId = (dataDir: string) =>
+const loadOrCreateInstallationId = (dataDir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const file = path.join(dataDir, INSTALLATION_FILE);
-    return yield* fs.readFileString(file).pipe(
+    const load = fs.readFileString(file).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(installationSchema)),
       Effect.map(({ id }) => id),
-      Effect.catchReason("PlatformError", "NotFound", () =>
-        Effect.gen(function* () {
-          const id = randomUUID();
-          yield* fs.writeFileString(file, JSON.stringify({ id }));
-          return id;
-        }),
-      ),
+    );
+    return yield* load.pipe(
+      Effect.catchReason("PlatformError", "NotFound", () => {
+        const id = randomUUID();
+        return fs.writeFileString(file, JSON.stringify({ id }), { flag: "wx" }).pipe(
+          Effect.as(id),
+          // Another sign-in made it first: this one uses its ID.
+          Effect.catchReason("PlatformError", "AlreadyExists", () => load),
+        );
+      }),
     );
   });
 
@@ -226,7 +229,7 @@ const login = Effect.gen(function* () {
   });
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(dataDir, { recursive: true }).pipe(Effect.orDie);
-  const id = yield* installationId(dataDir).pipe(Effect.orDie);
+  const id = yield* loadOrCreateInstallationId(dataDir).pipe(Effect.orDie);
   yield* Effect.tryPromise((signal) =>
     runnerModels(dataDir).login(
       provider,
