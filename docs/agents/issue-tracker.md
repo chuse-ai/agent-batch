@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and pull requests live in the repository's GitHub tracker. Use the `gh` CLI, with the repository inferred from its remote or explicitly supplied with `--repo`.
+Bug reports and requests from users, and pull requests, live in the repository's GitHub tracker. Use the `gh` CLI, with the repository inferred from its remote or explicitly supplied with `--repo`.
 
 Read the issue body, labels and comments before working on it. GitHub shares a number space between issues and pull requests; verify which kind a reference names. Preserve the technical reasoning in a change description, including important corrections and validation, so a squash commit remains understandable without its discussion.
 
