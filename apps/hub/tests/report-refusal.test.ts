@@ -30,9 +30,12 @@ function entry(kind: string, data: unknown) {
   return { id: 1, type: "entry", record: { kind, data } };
 }
 
+// Node 22's JSON.stringify overflows on the 5,000-level fixture before it reaches the hub.
+// Let the protocol client serialize this marker, then replace its quoted JSON string with
+// the nested JSON text before sending, so the test exercises the hub's depth check.
 const NESTED_RESULT = "__nested_result__";
 
-/** A Runner's side of the protocol, including results too deep for Node 22's JSON.stringify. */
+/** A Runner's side of the protocol over `socket`. */
 function protocolClient(socket: WebSocket, depth: number | undefined) {
   const client = createProtocolClient(runnerMethods, hubNotifications, { syncNow() {} }, (text) =>
     socket.send(
