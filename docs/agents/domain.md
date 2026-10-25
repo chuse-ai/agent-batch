@@ -51,3 +51,7 @@ The glossary records the names chosen so far, not the reasons for them: where a 
 If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
 
 > _Contradicts ADR-0007 (event-sourced orders), but worth reopening because…_
+
+## Write ADRs for what the code cannot show
+
+An ADR records the decision's reasons, the rejected options with what ruled each out, and when to reconsider; it does not describe the code. Write it in the pull request that builds the decision; a planned design stays in its issue. The pull request that changes a decision rewrites or deletes its ADR, and git keeps the old text. A choice confined to one place in the code is explained by a comment there instead.
