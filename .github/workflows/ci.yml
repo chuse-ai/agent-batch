@@ -1,17 +1,24 @@
 name: CI
 
 on:
-  push:
+  # GitHub requires these check names before queue entry. PR events record skipped jobs;
+  # the jobs allocate runners and perform checks only when the PR enters the merge queue.
+  pull_request:
     branches: [main]
+  merge_group:
+    branches: [main]
+    types: [checks_requested]
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ready:
+    if: github.event_name == 'merge_group'
     # Ubuntu 24.04 rather than ubuntu-latest: from 25.04, Ubuntu denies sandbox-runtime's seccomp
     # helper the capability it needs, so no job could run (anthropics/sandbox-runtime#429).
     runs-on: &ubuntu ubuntu-24.04
@@ -20,6 +27,8 @@ jobs:
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
         with:
           cache: true
+      # The queue uses squash merges and processes one PR at a time.
+      - run: vp exec commitlint --last --verbose
       # What the Runner's job sandbox needs on Ubuntu (ADR 0027), so tests that run jobs run them as the
       # Runner does. GitHub's image already keeps the runner user's systemd manager running (linger),
       # which the per-job memory limit uses.
@@ -47,6 +56,7 @@ jobs:
   # What users run on their own Node (the CLI, the Runner and their shared contract) supports Node 22
   # from the lowest release `engines.node` allows (ADR 0024); the hub runs only on Node 26 and workerd.
   node-22:
+    if: github.event_name == 'merge_group'
     runs-on: *ubuntu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,6 +72,7 @@ jobs:
         working-directory: apps/hub
 
   hub-image:
+    if: github.event_name == 'merge_group'
     runs-on: *ubuntu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -8,6 +8,8 @@
     "prepare": "vp config"
   },
   "devDependencies": {
+    "@commitlint/cli": "catalog:",
+    "@commitlint/config-conventional": "catalog:",
     "generate-license-file": "catalog:",
     "vite-plus": "catalog:"
   },
