@@ -228,6 +228,10 @@ const login = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(dataDir, { recursive: true }).pipe(Effect.orDie);
   const id = yield* loadOrCreateInstallationId(dataDir).pipe(Effect.orDie);
+  // OpenAI's Sign in with ChatGPT Terms ask for express consent before background use.
+  console.log(
+    `The Runner will make its jobs' model calls on this sign-in in the background, without asking each time. Run only your own jobs on it.`,
+  );
   yield* Effect.tryPromise((signal) =>
     runnerModels(dataDir).login(
       provider,
