@@ -177,15 +177,16 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     // here, and every answer to a sync or a report carries it.
     .addColumn("position", "bigint", (col) => col.notNull().defaultTo(0))
     // pi's totals per model and per tool, as `Harness.usage()` reports them; read by the report
-    // statement, which keeps the larger, and by the Usage record. Only names and numbers, so
-    // `jsonb` holds them, unlike events.
+    // statement, which keeps the larger. Only names and numbers, so `jsonb` holds them, unlike
+    // events.
     .addColumn("usage", "jsonb", (col) =>
       col.notNull().defaultTo(sql`'{"models": {}, "tools": {}}'::jsonb`),
     )
-    // The sums of `usage`, read by the job's summary. pi computes cost as a float from
-    // per-million-token prices, below a microdollar per token, so cost is a `numeric` without a
-    // fixed scale: the statement that applies a report adds up its costs per model and per tool as
-    // `numeric`, so the total equals the sum of the stored ones, and sums over jobs add no error.
+    // The sums of `usage`, read by the job's summary and by each end's Usage record. pi computes
+    // cost as a float from per-million-token prices, below a microdollar per token, so cost is a
+    // `numeric` without a fixed scale: the statement that applies a report adds up its costs per
+    // model and per tool as `numeric`, so the total equals the sum of the stored ones, and sums
+    // over jobs add no error.
     .addColumn("totalTokens", "bigint", (col) => col.notNull().defaultTo(0))
     .addColumn("costUsd", "numeric", (col) => col.notNull().defaultTo(0))
     // What the job's conversations are doing, as the last report that said gave it; null before
@@ -202,13 +203,12 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   // applied, holding that report's events for the job as JSON Lines, one `{id, type, record}` per
   // line, each line ending in `\n`, so a page is the rows' text joined. `JSON.stringify` writes no
   // raw newline inside a string, so splitting on `\n` is safe, and writes NUL as `\u0000`, which
-  // `text` holds and `jsonb` would refuse. Rows never overlap, so `lastId` orders them as `firstId`
-  // would, and `lastId > after` also finds the row the position `after` falls inside. IDs have gaps,
-  // so a row's events are counted by its lines, not from its IDs; its size is `octet_length(events)`.
+  // `text` holds and `jsonb` would refuse. Rows never overlap, so `lastId` orders them, and
+  // `lastId > after` also finds the row the position `after` falls inside. IDs have gaps, so a row's
+  // events are counted by its lines, not from its IDs; its size is `octet_length(events)`.
   await schema
     .createTable("jobEventChunk")
     .addColumn("jobId", "uuid", (col) => col.notNull())
-    .addColumn("firstId", "bigint", (col) => col.notNull())
     .addColumn("lastId", "bigint", (col) => col.notNull())
     // Times inside the events are the Runner's clock.
     .addColumn("events", "text", (col) => col.notNull())

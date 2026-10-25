@@ -15,8 +15,6 @@ export default interface JobEventChunkTable {
 
   lastId: ColumnType<JobEventChunkLastId, JobEventChunkLastId, JobEventChunkLastId>;
 
-  firstId: ColumnType<number, number, number>;
-
   events: ColumnType<string, string, string>;
 
   storedAt: ColumnType<Date, Date | string, Date | string>;

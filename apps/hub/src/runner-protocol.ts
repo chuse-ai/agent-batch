@@ -81,7 +81,6 @@ interface ReportRow {
   position: number;
   /** The events as JSON Lines, each line ending in `\n`, or null when there are none. */
   events: string | null;
-  firstId: number | null;
   lastId: number | null;
   /** The usage, absent when the report carries none. */
   usage?: JobUsage;
@@ -110,7 +109,6 @@ function reportRow(report: JobReport, now: Date): ReportRow {
     position,
     // `JSON.stringify` writes no raw newline inside a string, so each event is one line.
     events: events.length > 0 ? events.map((event) => `${JSON.stringify(event)}\n`).join("") : null,
-    firstId: events.at(0)?.id ?? null,
     lastId: events.at(-1)?.id ?? null,
     usage,
     activity,
@@ -228,7 +226,6 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
                   eb.cast<string>(field("runId"), "uuid").as("runId"),
                   eb.cast<number>(field("position"), "bigint").as("position"),
                   eb.cast<string | null>(field("events"), "text").as("events"),
-                  eb.cast<number | null>(field("firstId"), "bigint").as("firstId"),
                   eb.cast<number | null>(field("lastId"), "bigint").as("lastId"),
                   json("usage").as("usage"),
                   json("activity").as("activity"),
@@ -367,20 +364,19 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
           .with("stored", (qb) =>
             qb
               .insertInto("jobEventChunk")
-              .columns(["jobId", "firstId", "lastId", "events", "storedAt"])
+              .columns(["jobId", "lastId", "events", "storedAt"])
               .expression((eb) =>
                 eb
                   .selectFrom("current")
                   .select((selectEb) => [
                     "jobId",
-                    "firstId",
                     "lastId",
                     "events",
                     selectEb.val(now).as("storedAt"),
                   ])
                   .where("fresh", "=", true)
                   .where("lastId", "is not", null)
-                  .$narrowType<{ firstId: number; lastId: number; events: string }>(),
+                  .$narrowType<{ lastId: number; events: string }>(),
               ),
           )
           .with("reported", (qb) =>
