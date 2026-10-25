@@ -43,9 +43,9 @@ export function fileCredentialStore(file: string): CredentialStore {
   });
 
   /**
-   * Holds the file's lock until the scope closes. A lock taken as stale from a holder that stopped
-   * renewing it, after `stale`, sets `lost`. The lock is a directory beside the file, so it holds
-   * while the file is replaced.
+   * Holds the file's lock until the scope closes. When renewing the lock fails, as when this process
+   * stalled past `stale` and another may have taken it, it calls `onLost`. The lock is a directory
+   * beside the file, so it holds while the file is replaced.
    */
   const lock = (onLost: (error: Error) => void) =>
     Effect.acquireRelease(
@@ -68,9 +68,9 @@ export function fileCredentialStore(file: string): CredentialStore {
 
   /**
    * Runs `change` on the stored credentials while holding the file's lock, and saves what it
-   * returns, if anything. `signal` cancels only the wait for the lock: once a refresh has started,
-   * its new tokens must be saved, as the old ones no longer work. Pi's errors pass through as
-   * they are.
+   * returns, if anything. `signal` ends the wait for the lock; once the lock is held, the change
+   * finishes and saves even if `signal` aborts, as a refresh's new tokens must be saved when the
+   * old ones no longer work, though the call then rejects. Pi's errors pass through as they are.
    */
   const changeLocked = <A>(
     change: (all: Credentials) => Promise<{ result: A; next?: Credentials }>,
