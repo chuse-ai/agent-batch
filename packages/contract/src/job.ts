@@ -23,20 +23,16 @@ export const textSchema = z
     ),
   );
 
-/**
- * A JSON value whose strings and keys are text a job keeps (`textSchema`), as Postgres's `jsonb`
- * stores it: `jsonb` refuses NUL and lone surrogates too.
- */
-export const jsonTextSchema: z.ZodMiniType<z.infer<ReturnType<typeof z.json>>> = z.lazy(() =>
+const recursiveJsonTextSchema: z.ZodMiniType<z.infer<ReturnType<typeof z.json>>> = z.lazy(() =>
   z.union([
     textSchema,
     z.number(),
     z.boolean(),
     z.null(),
-    z.array(jsonTextSchema),
+    z.array(recursiveJsonTextSchema),
     // Keys are checked as the record's own refinement: a key the record's key schema refused would
     // fail every option of the union, whose error then names neither the key nor the rule.
-    z.record(z.string(), jsonTextSchema).check(
+    z.record(z.string(), recursiveJsonTextSchema).check(
       z.superRefine((record, context) => {
         for (const key of Object.keys(record)) {
           const parsed = z.safeParse(textSchema, key);
@@ -47,6 +43,27 @@ export const jsonTextSchema: z.ZodMiniType<z.infer<ReturnType<typeof z.json>>> =
       }),
     ),
   ]),
+);
+
+// Zod recurses and can throw past roughly 1,000 levels on Node 26 and workerd, even in safeParse.
+// None of our dependencies caps depth on a parsed value, so probe before entering the schema.
+// Allow 64 nested containers, counting the root as one: .NET's default, below serde_json's 128.
+// The probe stops at the first container beyond the limit, so its own recursion stays bounded.
+function withinJsonDepth(value: unknown, remaining = 64): boolean {
+  return (
+    value === null ||
+    typeof value !== "object" ||
+    (remaining > 0 && Object.values(value).every((child) => withinJsonDepth(child, remaining - 1)))
+  );
+}
+
+/**
+ * A JSON value nested at most 64 containers deep, whose strings and keys are text a job keeps
+ * (`textSchema`), as Postgres's `jsonb` stores it: `jsonb` refuses NUL and lone surrogates too.
+ */
+export const jsonTextSchema = z.pipe(
+  z.unknown().check(z.refine(withinJsonDepth, "JSON must not nest more than 64 containers")),
+  recursiveJsonTextSchema,
 );
 
 /**

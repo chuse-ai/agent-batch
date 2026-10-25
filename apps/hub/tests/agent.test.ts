@@ -81,6 +81,27 @@ test("the agent can submit the result as a JSON file it wrote in its Workspace",
   });
 });
 
+test("a result nested too deeply goes back to the agent, which submits one at the limit", async () => {
+  const result = JSON.parse("[".repeat(64) + "0" + "]".repeat(64));
+  let rejection: ReturnType<typeof lastToolResult> | undefined;
+  system.model.setResponses([
+    callTool("submit_result", { value: [result] }),
+    (context) => {
+      rejection = lastToolResult(context.messages);
+      return callTool("submit_result", { value: result });
+    },
+  ]);
+
+  expect(await runJob({ ...SUBMISSION, resultContract: { schema: {} } })).toMatchObject({
+    status: "succeeded",
+    result,
+  });
+  expect(rejection).toMatchObject({
+    isError: true,
+    text: expect.stringContaining("JSON must not nest more than 64 containers"),
+  });
+});
+
 test("an agent that stops without an accepted result fails the job", async () => {
   system.model.setResponses([reply("The quarter went well.")]);
 
