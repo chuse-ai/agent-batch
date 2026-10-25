@@ -30,10 +30,19 @@ function entry(kind: string, data: unknown) {
   return { id: 1, type: "entry", record: { kind, data } };
 }
 
-/** A Runner's side of the protocol over `socket`, as the Runner speaks it. */
-function protocolClient(socket: WebSocket) {
+const NESTED_RESULT = "__nested_result__";
+
+/** A Runner's side of the protocol, including results too deep for Node 22's JSON.stringify. */
+function protocolClient(socket: WebSocket, depth: number | undefined) {
   const client = createProtocolClient(runnerMethods, hubNotifications, { syncNow() {} }, (text) =>
-    socket.send(text),
+    socket.send(
+      depth === undefined
+        ? text
+        : text.replace(
+            JSON.stringify(NESTED_RESULT),
+            '{"child":'.repeat(depth) + "0" + "}".repeat(depth),
+          ),
+    ),
   );
   socket.addEventListener("message", (event) => {
     // `ws` types a message as text or binary; the protocol is text (ADR 0026).
@@ -52,7 +61,7 @@ test.each([
   const good = await client.jobs.submit({ ...SUBMISSION, resultContract: { schema: {} } });
   const bad = await client.jobs.submit(SUBMISSION);
   const { socket } = await system.connectRunner();
-  const runner = protocolClient(socket);
+  const runner = protocolClient(socket, depth);
 
   const { runs } = await runner.request("sync", { held: [], free: 2 }, 10_000);
   const held = runs.map(({ jobId, runId }) => ({ jobId, runId }));
@@ -87,9 +96,7 @@ test.each([
           events: [
             entry(JOB_SUCCEEDED, {
               timestamp: Date.now(),
-              ...(depth === undefined
-                ? {}
-                : { result: JSON.parse('{"child":'.repeat(depth) + "0" + "}".repeat(depth)) }),
+              ...(depth === undefined ? {} : { result: NESTED_RESULT }),
             }),
           ],
         },
@@ -98,7 +105,15 @@ test.each([
     10_000,
   );
 
-  expect(answer.refused).toEqual([{ ...runOf(bad.id), reason: expect.any(String) }]);
+  expect(answer.refused).toEqual([
+    {
+      ...runOf(bad.id),
+      reason:
+        depth === undefined
+          ? expect.any(String)
+          : expect.stringContaining("JSON must not nest more than 64 containers"),
+    },
+  ]);
   expect(await client.jobs.get({ id: good.id })).toMatchObject({ status: "succeeded", result });
   expect((await client.jobs.get({ id: bad.id })).status).toBe("queued");
   socket.close(1000);
