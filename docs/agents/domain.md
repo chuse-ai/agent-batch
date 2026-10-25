@@ -52,6 +52,8 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 
 > _Contradicts ADR-0007 (event-sourced orders), but worth reopening because…_
 
-## Write ADRs for what the code cannot show
+## Where decisions are recorded
 
-An ADR records the decision's reasons, the rejected options with what ruled each out, and when to reconsider; it does not describe the code. Write it in the pull request that builds the decision; a planned design stays in its issue. The pull request that changes a decision rewrites or deletes its ADR, and git keeps the old text. A choice confined to one place in the code is explained by a comment there instead.
+- What the code makes clear needs no comment or ADR.
+- A choice made in one place: a comment there gives its reason.
+- A decision that spans the code and is hard to reverse, surprising and a real trade-off: an ADR gives its reasons, what ruled out each rejected option, and when to reconsider. It's written with the pull request that builds the decision, and rewritten or deleted with the one that changes it.
