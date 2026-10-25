@@ -551,11 +551,11 @@ export type UsageOfEnd = Pick<
 
 /**
  * Inserts the Usage record of each job end in the `ended` table, a `WITH` query of the statement
- * `db` builds: the job as it ended, what it used since its previous end, counted in the
- * month it ends, and its totals now. What it used is its totals less what its records already
- * count (`recordedTotalTokens`, `recordedCostUsd`), as the job's row held them before this end; the
- * statement that ends the job sets them to its totals. The ends the hub makes itself and those its
- * Runners report are recorded alike.
+ * `db` builds: the job as it ended, what it used since its previous end, and its totals now. What
+ * it used is its totals less what its records already count (`recordedTotalTokens`,
+ * `recordedCostUsd`), as the job's row held them before this end; the statement that ends the job
+ * sets them to its totals. The ends the hub makes itself and those its Runners report are recorded
+ * alike.
  */
 export function insertUsageRecords(db: QueryCreator<Database & { ended: UsageOfEnd }>) {
   return db
@@ -909,8 +909,8 @@ function toDeletedJob(
 
 /**
  * A deleted job as it reads while its Runner still owes the deletion of its files, from the
- * snapshot that deletion keeps, which outlasts the job's Usage records' months; or nothing, once its
- * files are gone or when the hub has no such job.
+ * snapshot that deletion keeps; or nothing, once its files are gone or when the hub has no such
+ * job.
  */
 async function readDeletedJob(db: Kysely<Database>, jobId: JobId): Promise<Job | undefined> {
   const row = await db
