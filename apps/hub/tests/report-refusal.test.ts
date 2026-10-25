@@ -1,7 +1,6 @@
 import {
   createProtocolClient,
   hubNotifications,
-  JOB_STARTED,
   JOB_SUCCEEDED,
   type JobSubmission,
   runnerMethods,
@@ -43,9 +42,14 @@ function protocolClient(socket: WebSocket) {
   return client;
 }
 
-test("a report the hub cannot read for one job leaves the Runner's other jobs reporting", async () => {
+test.each([
+  { problem: "missing result", depth: undefined },
+  { problem: "result nested 65 containers deep", depth: 65 },
+  { problem: "result nested 5,000 containers deep", depth: 5_000 },
+])("a $problem refuses only that job's report", async ({ depth }) => {
   const client = await system.clientWithNewJobsKey();
-  const good = await client.jobs.submit(SUBMISSION);
+  const result = JSON.parse('{"child":'.repeat(64) + "0" + "}".repeat(64));
+  const good = await client.jobs.submit({ ...SUBMISSION, resultContract: { schema: {} } });
   const bad = await client.jobs.submit(SUBMISSION);
   const { socket } = await system.connectRunner();
   const runner = protocolClient(socket);
@@ -70,19 +74,24 @@ test("a report the hub cannot read for one job leaves the Runner's other jobs re
           intent: "run",
           position: 0,
           events: [
-            entry(JOB_STARTED, {
+            entry(JOB_SUCCEEDED, {
               timestamp: Date.now(),
-              runId: runOf(good.id).runId,
-              runnerVersion: "0.0.0",
+              result,
             }),
           ],
         },
-        // A success without its result: an entry whose data does not match its kind.
         {
           ...runOf(bad.id),
           intent: "run",
           position: 0,
-          events: [entry(JOB_SUCCEEDED, { timestamp: Date.now() })],
+          events: [
+            entry(JOB_SUCCEEDED, {
+              timestamp: Date.now(),
+              ...(depth === undefined
+                ? {}
+                : { result: JSON.parse('{"child":'.repeat(depth) + "0" + "}".repeat(depth)) }),
+            }),
+          ],
         },
       ],
     },
@@ -90,7 +99,7 @@ test("a report the hub cannot read for one job leaves the Runner's other jobs re
   );
 
   expect(answer.refused).toEqual([{ ...runOf(bad.id), reason: expect.any(String) }]);
-  expect((await client.jobs.get({ id: good.id })).status).toBe("running");
+  expect(await client.jobs.get({ id: good.id })).toMatchObject({ status: "succeeded", result });
   expect((await client.jobs.get({ id: bad.id })).status).toBe("queued");
   socket.close(1000);
 });

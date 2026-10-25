@@ -190,12 +190,9 @@ function submitResultTool(schema: Record<string, unknown>) {
           });
         }
       }
-      // Stored as Postgres's `jsonb`, which refuses NUL and lone surrogates.
       const storable = z.safeParse(jsonTextSchema, value);
       if (!storable.success) {
-        throw new Error(
-          `The result's strings and keys must be Unicode text without NUL:\n${z.prettifyError(storable.error)}`,
-        );
+        throw new Error(`The result cannot be stored:\n${z.prettifyError(storable.error)}`);
       }
       const { valid, errors } = contract.validate(value);
       if (!valid) {
