@@ -39,3 +39,6 @@ dist-ssr
 
 # Vitest
 .vitest/
+
+# The Runner's data folder when it runs from source: its key and sign-in
+apps/runner/data/

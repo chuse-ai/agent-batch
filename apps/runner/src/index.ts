@@ -91,7 +91,7 @@ export interface RunnerOptions {
   registrationKey: string;
   /** Where the Runner keeps what must survive restarts, such as its own key and its jobs' files. */
   dataDir: string;
-  /** The models the Runner's agents can run on, with their providers' keys. */
+  /** The models the Runner's agents can run on, with their providers' keys or sign-ins. */
   models: Models;
   /** The model every job runs on. */
   model: AgentModel;
