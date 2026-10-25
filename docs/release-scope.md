@@ -6,7 +6,7 @@ The hub runs on Cloudflare Workers with Postgres through Hyperdrive, or on Node/
 
 ## Planned capabilities
 
-Automatic cloud overflow, moving jobs between hosts, batch submission and canaries, labels, per-job model selection and governance, secret injection and network egress, richer file upload/download flows, validation scripts, incremental result submission, a dashboard, SSO, and CLI login/local orchestration are planned. The architecture records include designs for these features; their presence is not a statement that they ship.
+Automatic cloud overflow, moving jobs between hosts, batch submission and canaries, labels, per-job model selection and governance, secret injection and network egress, richer file upload/download flows, validation scripts, incremental result submission, a dashboard, SSO, and CLI login/local orchestration are planned.
 
 Events currently remain in Postgres. Object storage, event compaction and retention policies are planned. Deployments must account for database growth. The Docker hub runs as one process; multiple replicas do not yet coordinate Runner connections.
 

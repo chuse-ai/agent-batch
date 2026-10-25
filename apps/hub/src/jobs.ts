@@ -130,7 +130,7 @@ export function resultContractProblems(schema: Record.ReadonlyRecord<string, unk
   const root = compileSchema(schema);
   if (root.schemaErrors?.length) return root.schemaErrors.map((error) => error.message);
   const problems: string[] = [];
-  // A list of results is submitted as items, one job each (ADR 0009).
+  // `submit_result` takes one value (ADR 0009), so a list of results is one job per item.
   if ([schema.type].flat().includes("array")) {
     problems.push("The schema must describe a single value, not a list");
   }

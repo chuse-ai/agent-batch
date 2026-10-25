@@ -59,7 +59,7 @@ import type { JobEnvironments } from "./sandbox.ts";
 // contract, as the hub checks the contract itself (ADR 0025), and ends the run once a result is
 // accepted (ADR 0009).
 
-/** The model every job runs on until jobs choose their own, as Pi names it (ADR 0013). */
+/** The model every job on this Runner runs on, as Pi names it (ADR 0013). */
 export interface AgentModel {
   provider: string;
   modelId: string;
@@ -318,8 +318,9 @@ export function openJob(
             models: options.models,
             registry,
             env: () => env,
-            // Partial answers and command output are saved once a second rather than every 100 ms
-            // (ADR 0016): the saves run on the thread all jobs share, and only a restart reads them,
+            // Partial answers and command output are saved once a second rather than every 100 ms: the
+            // saves run on the thread all jobs share (with 100 jobs streaming answers for about 10.6 s,
+            // they took 3.3 s of CPU at 100 ms, 1.5 s at one second), and only a restart reads them,
             // losing at most a second of the output of a command it cut off.
             settings: { progress: { partialIntervalMs: 1_000, outputIntervalMs: 1_000 } },
           },
