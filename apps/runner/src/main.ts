@@ -233,8 +233,10 @@ const login = Effect.gen(function* () {
       provider,
       "oauth",
       { ...terminalInteraction, signal },
+      // OpenAI's sign-in guide asks a returning sign-in to reuse the client it issued; Pi registers a
+      // new one each time (earendil-works/pi#10670).
       {
-        // OpenAI's terms ask an app to sign in under its own name, not Pi's.
+        // The guide also asks an app to sign in under its own name, not Pi's.
         agentName: "agent-batch",
         getDeviceId: () => id,
       },
