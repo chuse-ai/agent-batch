@@ -63,11 +63,11 @@ const INSTALLATION_FILE = "installation.json";
 
 /**
  * Why the Runner cannot run jobs on the model, if it cannot: Pi does not know it, has no key or
- * sign-in for it, or cannot use the sign-in. `getAuth` rather than `checkAuth`, which finds a sign-in
- * stored without refreshing it, so an expired sign-in that no longer works stops the Runner here
- * rather than failing its jobs.
+ * sign-in for it, or cannot renew the sign-in. Renews an expired sign-in and saves the new tokens:
+ * `getAuth` rather than `checkAuth`, which finds a sign-in stored without renewing it, so a sign-in
+ * that can no longer be renewed stops the Runner here rather than failing its jobs.
  */
-async function modelProblem(models: Models, provider: string, modelId: string) {
+async function renewModelAuthProblem(models: Models, provider: string, modelId: string) {
   if (!models.getModel(provider, modelId)) {
     return withAvailable(
       models,
@@ -75,8 +75,10 @@ async function modelProblem(models: Models, provider: string, modelId: string) {
     );
   }
   const auth = await models.getAuth(provider).catch(ensureError);
+  // A renewal also fails while the provider cannot be reached, so the operator is told why it
+  // failed, not that the sign-in is gone.
   if (auth instanceof ModelsError && auth.code === "oauth") {
-    return `The sign-in to provider "${provider}" no longer works (${auth.message}); sign in again with \`login\`.`;
+    return `Pi cannot renew the sign-in to provider "${provider}": ${auth.message}. If the provider no longer accepts it, sign in again with \`login\`.`;
   }
   if (auth instanceof Error)
     return `Pi cannot authenticate to provider "${provider}": ${auth.message}`;
@@ -159,7 +161,8 @@ const installationId = (dataDir: string) =>
     const fs = yield* FileSystem.FileSystem;
     const file = path.join(dataDir, INSTALLATION_FILE);
     return yield* fs.readFileString(file).pipe(
-      Effect.map((saved) => Schema.decodeUnknownSync(installationSchema)(JSON.parse(saved)).id),
+      Effect.flatMap(Schema.decodeUnknownEffect(installationSchema)),
+      Effect.map(({ id }) => id),
       Effect.catchReason("PlatformError", "NotFound", () =>
         Effect.gen(function* () {
           const id = randomUUID();
@@ -170,7 +173,10 @@ const installationId = (dataDir: string) =>
     );
   });
 
-const installationSchema = Schema.Struct({ id: Schema.String });
+/** `installation.json`: Pi passes the ID on as a UUID. */
+const installationSchema = Schema.fromJsonString(
+  Schema.Struct({ id: Schema.String.check(Schema.isUUID()) }),
+);
 
 /**
  * Asks the operator in the terminal, for a sign-in: the sign-in's page, opened in a browser on any
@@ -221,12 +227,17 @@ const login = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(dataDir, { recursive: true }).pipe(Effect.orDie);
   const id = yield* installationId(dataDir).pipe(Effect.orDie);
-  yield* Effect.tryPromise(() =>
-    runnerModels(dataDir).login(provider, "oauth", terminalInteraction, {
-      // OpenAI's terms ask an app to sign in under its own name, not Pi's.
-      agentName: "agent-batch",
-      getDeviceId: () => id,
-    }),
+  yield* Effect.tryPromise((signal) =>
+    runnerModels(dataDir).login(
+      provider,
+      "oauth",
+      { ...terminalInteraction, signal },
+      {
+        // OpenAI's terms ask an app to sign in under its own name, not Pi's.
+        agentName: "agent-batch",
+        getDeviceId: () => id,
+      },
+    ),
   ).pipe(Effect.catch((error) => refuse(`Could not sign in: ${ensureError(error.cause).message}`)));
   console.log("Signed in. The Runner uses the sign-in from its next model call, running or not.");
 }).pipe(
@@ -240,7 +251,7 @@ const run = Effect.gen(function* () {
   const settings = yield* runnerSettings;
   const models = runnerModels(settings.dataDir);
   const problem = yield* Effect.promise(() =>
-    modelProblem(models, settings.provider, settings.modelId),
+    renewModelAuthProblem(models, settings.provider, settings.modelId),
   );
   if (problem) return yield* refuse(problem);
   return yield* runRunner({
