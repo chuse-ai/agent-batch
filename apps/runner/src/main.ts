@@ -60,7 +60,7 @@ const DEFAULT_THINKING_LEVEL = "medium";
 const CREDENTIALS_FILE = "auth.json";
 
 /** The file in the Runner's data directory holding the ID a provider knows this installation by. */
-const INSTALLATION_FILE = "installation.json";
+const INSTALLATION_FILE = "installation_id";
 
 /**
  * Why the Runner cannot run jobs on the model, if it cannot: Pi does not know it, has no key or
@@ -161,14 +161,13 @@ const loadOrCreateInstallationId = (dataDir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const file = path.join(dataDir, INSTALLATION_FILE);
-    const load = fs.readFileString(file).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(installationSchema)),
-      Effect.map(({ id }) => id),
-    );
+    const load = fs
+      .readFileString(file)
+      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(installationIdSchema)));
     return yield* load.pipe(
       Effect.catchReason("PlatformError", "NotFound", () => {
         const id = randomUUID();
-        return fs.writeFileString(file, JSON.stringify({ id }), { flag: "wx" }).pipe(
+        return fs.writeFileString(file, id, { flag: "wx" }).pipe(
           Effect.as(id),
           // Another sign-in made it first: this one uses its ID.
           Effect.catchReason("PlatformError", "AlreadyExists", () => load),
@@ -177,10 +176,8 @@ const loadOrCreateInstallationId = (dataDir: string) =>
     );
   });
 
-/** `installation.json`: Pi passes the ID on as a UUID. */
-const installationSchema = Schema.fromJsonString(
-  Schema.Struct({ id: Schema.String.check(Schema.isUUID()) }),
-);
+/** `installation_id`, the ID alone, as Codex keeps its own: Pi passes it on as a UUID. */
+const installationIdSchema = Schema.Trim.check(Schema.isUUID());
 
 /**
  * Asks the operator in the terminal, for a sign-in: the sign-in's page, opened in a browser on any
