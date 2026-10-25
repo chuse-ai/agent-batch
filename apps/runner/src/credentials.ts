@@ -68,7 +68,7 @@ export function fileCredentialStore(file: string): CredentialStore {
 
   /**
    * Runs `change` on the stored credentials while holding the file's lock, and saves what it
-   * returns, if anything. `signal` ends the wait for the lock; once the lock is held, the change
+   * returns, if anything. `signal` ends the wait for the lock; once the change has started, it
    * finishes and saves even if `signal` aborts, as a refresh's new tokens must be saved when the
    * old ones no longer work, though the call then rejects. Pi's errors pass through as they are.
    */

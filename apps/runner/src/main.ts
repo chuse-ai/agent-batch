@@ -23,6 +23,7 @@ import {
   Runtime,
   Schema,
   SchemaIssue,
+  Terminal,
 } from "effect";
 import * as Prompt from "effect/cli/Prompt";
 import ensureError from "ensure-error";
@@ -241,7 +242,14 @@ const login = Effect.gen(function* () {
         getDeviceId: () => id,
       },
     ),
-  ).pipe(Effect.catch((error) => refuse(`Could not sign in: ${ensureError(error.cause).message}`)));
+  ).pipe(
+    Effect.catch((error) =>
+      // Esc or Ctrl-C at a prompt, which the terminal reads in raw mode rather than as a signal.
+      Terminal.isQuitError(error.cause)
+        ? refuse("Sign-in cancelled.")
+        : refuse(`Could not sign in: ${ensureError(error.cause).message}`),
+    ),
+  );
   console.log("Signed in. The Runner uses the sign-in from its next model call, running or not.");
 }).pipe(
   Effect.catchTag("ConfigError", (error) =>
