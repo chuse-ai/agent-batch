@@ -51,3 +51,9 @@ The glossary records the names chosen so far, not the reasons for them: where a 
 If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
 
 > _Contradicts ADR-0007 (event-sourced orders), but worth reopening because…_
+
+## Where decisions are recorded
+
+- What the code makes clear needs no comment or ADR.
+- A choice made in one place: a comment there gives its reason.
+- A decision that spans the code and is hard to reverse, surprising and a real trade-off: an ADR gives its reasons, what ruled out each rejected option, and when to reconsider. It's written with the pull request that builds the decision, and rewritten or deleted with the one that changes it.
