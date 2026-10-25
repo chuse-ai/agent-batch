@@ -31,7 +31,7 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 - Until a migration is released, it is edited in place; no fix-up migration follows it.
 - Every foreign key states, in the migration, what deleting the parent means for the row. Where the row must outlive the parent, the parent's ID is copied and not referenced, as the job's submitter and Runner are; `kanel.config.cjs` keeps such a column typed as the parent's ID.
 - Every nullable column states, in the migration, why it can be null. A counter or flag is not null with a database default.
-- A column carrying a protocol field uses the field's name. Every column names its reader, present or decided; what cannot be recorded later is stored before anything reads it.
+- A column carrying a protocol field uses the field's name. A column nothing reads yet holds only a fact that could not be recorded later, such as who submitted a job.
 - A CHECK or unique constraint reflects a rule the data must hold; do not add one to make the schema look rigorous.
 - Instants are `timestamptz`, written as `Date`, never as strings. Where a table's columns record different clocks, such as the hub's and a Runner's, a comment says which clock each column records.
 - Kysely write semantics: `undefined` omits the column, `null` writes SQL `NULL`, any other value is written. Do not use `value ?? null` unless omission deliberately means clearing the column.
