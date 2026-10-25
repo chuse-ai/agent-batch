@@ -29,7 +29,7 @@ const lockWait = Schedule.spaced("100 millis").pipe(
 );
 
 /**
- * Model credentials, such as a ChatGPT sign-in, in the JSON file `file`, one per provider as Pi
+ * Model credentials, such as a provider sign-in, in the JSON file `file`, one per provider as Pi
  * names it, readable only by the operating-system user running the Runner. A change replaces the
  * file whole, so a read needs no lock: it sees the file before the change or after it.
  */

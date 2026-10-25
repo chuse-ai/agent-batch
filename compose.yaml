@@ -82,7 +82,7 @@ services:
       RUNNER_MODEL_PROVIDER:
       RUNNER_MODEL_ID:
       # The model provider's key, as Pi reads it; another provider's is added the same way. Or
-      # sign in to the provider's subscription instead, with
+      # sign in to the provider instead, with
       # `docker compose run --rm --no-deps runner node dist/main.mjs login`.
       OPENROUTER_API_KEY:
     volumes:

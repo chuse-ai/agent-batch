@@ -32,7 +32,7 @@ import { fileCredentialStore } from "./credentials.ts";
 import { DEFAULT_SANDBOX_SETTINGS, runRunner } from "./index.ts";
 
 // Runs a Runner from the environment; `register` discards its own key and registers it again, and
-// `login` signs in to the model's provider, as with a ChatGPT subscription. A stop signal interrupts
+// `login` signs in to the model's provider. A stop signal interrupts
 // a Runner: it closes its connection, so the hub drops it at once, and stops its jobs. Effect's Node
 // runtime logs a failure's cause and sets the exit code. The model is named as Pi names it; Pi reads
 // the provider's key from the environment, or uses the sign-in `login` saved.

@@ -65,7 +65,7 @@ A process that runs many jobs' agents at once; there can be many, self-hosted on
 _Avoid_: executor
 
 **Provider sign-in**:
-A Runner's sign-in to its model provider's subscription, such as a ChatGPT plan, used in place of the provider's key. Not a member's sign-in to the hub.
+A Runner's sign-in to its model provider, used in place of the provider's key. Not a member's sign-in to the hub.
 _Avoid_: log in, OAuth token
 
 **Workspace**:
