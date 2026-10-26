@@ -306,7 +306,7 @@ export function openJob(
     // sandbox after it, so no tool call is left on a stopped daemon.
     const sandbox = yield* Scope.fork(yield* Effect.scope);
     const { env } = yield* Effect.acquireRelease(
-      Effect.sync(() => options.environments.open(paths)),
+      Effect.sync(() => options.environments.open(jobId, paths)),
       (opened) => Effect.promise(() => opened.close()),
     ).pipe(Scope.provide(sandbox));
     const harness = yield* Effect.acquireRelease(

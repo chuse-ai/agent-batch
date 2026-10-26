@@ -71,9 +71,9 @@ services:
       # On hosts with AppArmor: Docker's profile denies mounts.
       - apparmor=unconfined
     # A container has no user systemd, so its jobs have no memory cap of their own: this caps the
-    # Runner and its jobs together, at its default 8 jobs of 1G, and one job can take all of it. A
-    # Runner the kernel kills for memory recovers its jobs when it starts again; capping each job
-    # needs the Runner on the host.
+    # Runner and its jobs together, at its default 8 jobs of 1G, and one job can take all of it. At
+    # the cap the kernel kills a job's process rather than the Runner, and the job carries on;
+    # capping each job needs the Runner on the host.
     mem_limit: 8g
     # Names without values take theirs from `.env` or the shell, and stay unset without one.
     environment:
