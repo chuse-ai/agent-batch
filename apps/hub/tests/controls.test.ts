@@ -362,7 +362,7 @@ test("removing a Runner ends the jobs it held, and leaves its finished jobs no w
   for (const id of [running, resumed]) {
     expect(await client.jobs.get({ id })).toMatchObject({
       status: "failed",
-      reason: "runnerRemoved",
+      failure: { reason: "runnerRemoved" },
     });
   }
   expect(await client.jobs.get({ id: cancelling })).toMatchObject({ status: "cancelled" });

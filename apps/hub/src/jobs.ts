@@ -35,7 +35,7 @@ import {
   InputFileName,
   JobId,
   type JobProgressRow,
-  type JobReason,
+  type JobFailureReason,
   type JobDeletionRow,
   type JobRow,
   type JobStatus,
@@ -58,7 +58,7 @@ const MAX_PAGE_BYTES = 1024 * 1024;
 export const USAGE_COPIED_COLUMNS = [
   "organizationId",
   "status",
-  "reason",
+  "failureReason",
   "runnerId",
   "submitterKeyId",
   "submitterKeyName",
@@ -78,23 +78,28 @@ const JOB_COLUMNS = [
   "runTimeoutSeconds",
   "modelBudgetUsd",
   "result",
-  "reason",
+  "failureReason",
+  "failureMessage",
   "pendingControl",
   "pendingControlRequestedAt",
 ] as const;
 const PROGRESS_COLUMNS = ["totalTokens", "costUsd", "activity"] as const;
 
 /**
- * A job as the API reports it: its result only once it has succeeded, its activity only while it
- * runs, and a control only while it waits for the job's Runner. The report of a run's start carries
- * its first activity, so a job running again never shows the last run's.
+ * A job as the API reports it: its result only once it has succeeded and its failure once it has
+ * failed, its activity only while it runs, and a control only while it waits for the job's Runner.
+ * The report of a run's start carries its first activity, so a job running again never shows the
+ * last run's.
  */
 function toApiJob(
   job: Pick<JobRow, (typeof JOB_COLUMNS)[number]> &
     Pick<JobProgressRow, (typeof PROGRESS_COLUMNS)[number]>,
 ): Job {
   const {
+    status,
     result,
+    failureReason,
+    failureMessage,
     totalTokens,
     costUsd,
     activity,
@@ -110,7 +115,43 @@ function toApiJob(
       ? { pendingControl: { type: pendingControl, requestedAt: pendingControlRequestedAt } }
       : {}),
   };
-  return job.status === "succeeded" ? { ...rest, ...summary, result } : { ...rest, ...summary };
+  return withOutcome({ ...rest, ...summary }, { status, result, failureReason, failureMessage });
+}
+
+/** What every job reports whatever its status. */
+type JobBase = Omit<Job, "status" | "result" | "failure">;
+
+/**
+ * `job` with its status and what the status carries: a succeeded job's result, where it has one,
+ * and a failed job's failure, with its message where the cause gave one.
+ */
+function withOutcome(
+  job: JobBase,
+  outcome: {
+    status: JobStatus;
+    result?: JobRow["result"];
+    failureReason: JobFailureReason | null;
+    failureMessage: string | null;
+  },
+): Job {
+  const { status, result, failureReason, failureMessage } = outcome;
+  switch (status) {
+    case "succeeded":
+      return { ...job, status, ...(result === undefined ? {} : { result }) };
+    case "failed":
+      // The migration keeps a reason on every failed job.
+      if (failureReason === null) throw new Error(`The failed job ${job.id} has no failure reason`);
+      return {
+        ...job,
+        status,
+        failure: {
+          reason: failureReason,
+          ...(failureMessage === null ? {} : { message: failureMessage }),
+        },
+      };
+    default:
+      return { ...job, status };
+  }
 }
 
 /**
@@ -337,7 +378,12 @@ const refused = (why: string): Decision => ({ kind: "refused", why });
  */
 function decide(control: Control, job: ControlledJob, now: Date, given: GivenLimits): Decision {
   const waiting = job.pendingControl;
-  const ended = { reason: null, pendingControl: null, pendingControlRequestedAt: null };
+  const ended = {
+    failureReason: null,
+    failureMessage: null,
+    pendingControl: null,
+    pendingControlRequestedAt: null,
+  };
   // The job's Runner, told to sync now when a control waits for it or the job resumes there.
   const toItsRunner = job.runnerId === null ? {} : { hint: job.runnerId };
   // A resume that changes the job gives it the limits it names, and is refused where its model
@@ -365,7 +411,8 @@ function decide(control: Control, job: ControlledJob, now: Date, given: GivenLim
           placedAt: null,
           endedAt: null,
           result: null,
-          reason: null,
+          failureReason: null,
+          failureMessage: null,
         },
         job.runnerId ?? undefined,
       );
@@ -413,7 +460,10 @@ function decide(control: Control, job: ControlledJob, now: Date, given: GivenLim
       }
       // A job held before it started has no journal, so any Runner may start it.
       if (job.startedAt === null) {
-        return resumeIfBudgetLeft({ status: "queued", reason: null }, "live");
+        return resumeIfBudgetLeft(
+          { status: "queued", failureReason: null, failureMessage: null },
+          "live",
+        );
       }
       return resumeOnItsRunner;
     case "failed":
@@ -698,7 +748,7 @@ export function deleteJob(jobId: JobId) {
               .returning([
                 "jobId",
                 "status",
-                "reason",
+                "failureReason",
                 "createdAt",
                 "startedAt",
                 "endedAt",
@@ -754,7 +804,7 @@ export function deleteJob(jobId: JobId) {
 const DELETED_JOB_COLUMNS = [
   "jobId",
   "status",
-  "reason",
+  "failureReason",
   "createdAt",
   "startedAt",
   "endedAt",
@@ -765,7 +815,7 @@ const DELETED_JOB_COLUMNS = [
 /**
  * Deletes the Runner `runnerId`'s row and, in the same transaction, ends the work it held: each
  * of its jobs that had not ended ends at once, `cancelled` where a cancel was waiting and otherwise
- * `failed` with reason `runnerRemoved`, with the Usage record of that end, and each deletion of a
+ * `failed` with the reason `runnerRemoved`, with the Usage record of that end, and each deletion of a
  * deleted job's files it owed is abandoned, on the job's Usage record. A job its Runner reported
  * ending before this keeps its end. Placement, reports and controls lock the Runner's row while
  * they use it, so the delete waits for them, and what follows sees what they did; once it is gone,
@@ -804,12 +854,15 @@ export function deleteRunnerWithItsWork(runnerId: RunnerId) {
                       .then(status("cancelled"))
                       .else(status("failed"))
                       .end(),
-                    reason: eb
+                    failureReason: eb
                       .case()
                       .when(cancelWaiting)
                       .then(eb.lit(null))
                       .else(
-                        eb.cast<JobReason>(eb.val("runnerRemoved"), sql.id(DB_SCHEMA, "jobReason")),
+                        eb.cast<JobFailureReason>(
+                          eb.val("runnerRemoved"),
+                          sql.id(DB_SCHEMA, "jobFailureReason"),
+                        ),
                       )
                       .end(),
                     endedAt: now,
@@ -892,19 +945,21 @@ function toDeletedJob(
   deletedAt: Date,
   deletionRequestedAt: Date | null,
 ): Job {
-  return {
-    id: snapshot.jobId,
-    status: snapshot.status,
-    createdAt: snapshot.createdAt,
-    startedAt: snapshot.startedAt,
-    endedAt: snapshot.endedAt,
-    reason: snapshot.reason,
-    usage: { totalTokens: snapshot.totalTokens, cost: { totalUsd: snapshot.costUsd } },
-    deletedAt,
-    ...(deletionRequestedAt !== null
-      ? { pendingControl: { type: "delete", requestedAt: deletionRequestedAt } }
-      : {}),
-  };
+  return withOutcome(
+    {
+      id: snapshot.jobId,
+      createdAt: snapshot.createdAt,
+      startedAt: snapshot.startedAt,
+      endedAt: snapshot.endedAt,
+      usage: { totalTokens: snapshot.totalTokens, cost: { totalUsd: snapshot.costUsd } },
+      deletedAt,
+      ...(deletionRequestedAt !== null
+        ? { pendingControl: { type: "delete", requestedAt: deletionRequestedAt } }
+        : {}),
+    },
+    // A deleted job's message went with its content.
+    { status: snapshot.status, failureReason: snapshot.failureReason, failureMessage: null },
+  );
 }
 
 /**

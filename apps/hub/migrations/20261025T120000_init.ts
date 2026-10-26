@@ -40,8 +40,15 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .execute();
   await schema.createType("jobControl").asEnum(["pause", "cancel"]).execute();
   await schema
-    .createType("jobReason")
-    .asEnum(["runnerRemoved", "runTimedOut", "modelBudgetExceeded"])
+    .createType("jobFailureReason")
+    .asEnum([
+      "noResult",
+      "runTimedOut",
+      "modelBudgetExceeded",
+      "modelFailed",
+      "runFaulted",
+      "runnerRemoved",
+    ])
     .execute();
   await schema
     .createType("hostDeletionOutcome")
@@ -101,9 +108,12 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     // waits is cleared once the job's status confirms it or the job ends first.
     .addColumn("pendingControl", sql`agent_batch."jobControl"`)
     .addColumn("pendingControlRequestedAt", "timestamptz")
-    // Why the job stopped: null unless it failed because its Runner was removed or a limit stopped
-    // it; a failure of the job's own agent has no reason.
-    .addColumn("reason", sql`agent_batch."jobReason"`)
+    // Why the job failed: null unless it failed, and cleared when it is resumed.
+    .addColumn("failureReason", sql`agent_batch."jobFailureReason"`)
+    // What the cause of the job's failure said: null when the cause has no text and when the job
+    // has not failed, and cleared when it is resumed. It is job content, so a Usage record does not
+    // copy it and it goes with the job's row when the job is deleted.
+    .addColumn("failureMessage", "text")
     // What the job's Usage records already count: its totals at its last end, 0 before any. Its next
     // end counts what it used from them, and updates them in the statement that writes its record.
     .addColumn("recordedTotalTokens", "bigint", (col) => col.notNull().defaultTo(0))
@@ -136,6 +146,14 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addCheckConstraint(
       "job_pendingControl_check",
       sql`("pendingControl" is null) = ("pendingControlRequestedAt" is null)`,
+    )
+    .addCheckConstraint(
+      "job_failureReason_check",
+      sql`("failureReason" is not null) = ("status" = 'failed')`,
+    )
+    .addCheckConstraint(
+      "job_failureMessage_check",
+      sql`"failureMessage" is null or "failureReason" is not null`,
     )
     .execute();
   // A Runner's sync reads its unfinished jobs; placement reads the queued jobs not yet sent to a
@@ -232,8 +250,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("jobId", "uuid", (col) => col.notNull())
     .addColumn("organizationId", "text", (col) => col.notNull())
     .addColumn("status", sql`agent_batch."jobStatus"`, (col) => col.notNull())
-    // Null unless the end has a reason, as a job its Runner's removal ended has.
-    .addColumn("reason", sql`agent_batch."jobReason"`)
+    // Why the job failed: null unless this end is a failure.
+    .addColumn("failureReason", sql`agent_batch."jobFailureReason"`)
     // Null for a job that ended before a Runner was sent it or started it.
     .addColumn("runnerId", "text")
     .addColumn("submitterKeyId", "text", (col) => col.notNull())
@@ -269,6 +287,10 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       sql`"status" in ('succeeded', 'failed', 'cancelled')`,
     )
     .addCheckConstraint(
+      "usageRecord_failureReason_check",
+      sql`("failureReason" is not null) = ("status" = 'failed')`,
+    )
+    .addCheckConstraint(
       "usageRecord_hostDeletionOutcome_check",
       sql`("hostDeletionOutcome" is null) = ("hostDeletionOutcomeAt" is null)`,
     )
@@ -300,10 +322,10 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("usageRecordId", "bigint", (col) => col.notNull())
     // When the job was deleted, by the hub's clock.
     .addColumn("requestedAt", "timestamptz", (col) => col.notNull())
-    // The deleted job as it reads while the deletion waits: its final status, its reason, null
-    // unless its end has one, its times, null for a start it never had, and its totals.
+    // The deleted job as it reads while the deletion waits: its final status, why it failed, null
+    // unless it did, its times, null for a start it never had, and its totals.
     .addColumn("status", sql`agent_batch."jobStatus"`, (col) => col.notNull())
-    .addColumn("reason", sql`agent_batch."jobReason"`)
+    .addColumn("failureReason", sql`agent_batch."jobFailureReason"`)
     .addColumn("createdAt", "timestamptz", (col) => col.notNull())
     .addColumn("startedAt", "timestamptz")
     .addColumn("endedAt", "timestamptz", (col) => col.notNull())
@@ -315,6 +337,10 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       "organization",
       ["id"],
       (constraint) => constraint.onDelete("cascade"),
+    )
+    .addCheckConstraint(
+      "jobDeletion_failureReason_check",
+      sql`("failureReason" is not null) = ("status" = 'failed')`,
     )
     .execute();
   await schema
@@ -346,7 +372,7 @@ export async function down(db: Kysely<unknown>): Promise<void> {
   ]) {
     await schema.dropTable(table).execute();
   }
-  for (const type of ["hostDeletionOutcome", "jobReason", "jobControl", "jobStatus"]) {
+  for (const type of ["hostDeletionOutcome", "jobFailureReason", "jobControl", "jobStatus"]) {
     await schema.dropType(type).execute();
   }
 }

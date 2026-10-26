@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-durable";
 import {
   type ConversationActivity,
+  FAILURE_MESSAGE_MAX_LENGTH,
   isoDate,
   JOB_CANCELLED,
   JOB_FAILED,
@@ -72,8 +73,8 @@ export const JobPaused = defineEntry<JobPause>(JOB_PAUSED);
 export const JobSucceeded = defineEntry<JobSuccess>(JOB_SUCCEEDED);
 
 /**
- * Written once per run, as its closing, when the job's agent stopped without a result, or a limit
- * stopped it, which it names.
+ * Written once per run, as its closing, when the job's agent stopped without a result, a limit
+ * stopped it or its run failed, with why.
  */
 export const JobFailed = defineEntry<JobFailure>(JOB_FAILED);
 
@@ -295,10 +296,14 @@ export async function readActivity(
 }
 
 /**
- * pi's wait before another attempt, with its end as an ISO date, as the hub stores it. Its error is
- * a provider's text, so it is made Unicode text without NUL (`textSchema`), which the hub's `jsonb`
- * stores.
+ * `text` cut to `FAILURE_MESSAGE_MAX_LENGTH`. A cut through a surrogate pair leaves half of it, which
+ * `toWellFormed` replaces; fewer UTF-16 units than the maximum are never more characters.
  */
+export function failureMessage(text: string): string {
+  return text.slice(0, FAILURE_MESSAGE_MAX_LENGTH).toWellFormed();
+}
+
+/** pi's wait before another attempt, with its end as an ISO date, as the hub stores it. */
 function isoRetry(retry: { at: number; error: string }) {
-  return { at: isoDate(retry.at), error: retry.error.toWellFormed().replaceAll("\0", "") };
+  return { at: isoDate(retry.at), error: retry.error };
 }

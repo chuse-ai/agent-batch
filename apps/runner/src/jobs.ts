@@ -7,6 +7,7 @@ import type {
   Intent,
   JobActivity,
   JobContent,
+  JobFailure,
   JobReport,
   JobUsage,
   RefusedReport,
@@ -22,7 +23,7 @@ import {
   deleteJobFiles,
   type Stop,
 } from "./agent.ts";
-import { readActivity, readEvents } from "./journal.ts";
+import { failureMessage, readActivity, readEvents } from "./journal.ts";
 
 // The Runner's jobs: each run the hub gives it runs as one supervised fiber (ADR 0022), and
 // its journal's new events, its usage and what it is doing are reported to the hub. The hub's
@@ -53,10 +54,10 @@ interface HeldJob {
    */
   journalKnownAbsent: boolean;
   /**
-   * When the job failed without its journal recording its end: its journal did not open, or the
-   * Runner faulted while it ran. The journal records every other start and end itself.
+   * The job's failure its journal did not record: its journal did not open, or the Runner faulted
+   * while it ran. The journal records every other start and end itself.
    */
-  failedAt?: string;
+  failure?: JobFailure;
   /** When the Runner first saw each part of the job's activity as it is now (`readActivity`). */
   seen: ReadonlyMap<string, number>;
   /** The activity and usage the Runner last reported, so that a change reports again. */
@@ -173,12 +174,12 @@ export class JobRunner {
         job.lastRead = ++this.#reads;
         const report = { ...job.run, intent: job.intent, position: job.position };
         // Taken before the read: a failure is set after the job's last entry, so the read holds it.
-        const { failedAt, journal } = job;
+        const { failure, journal } = job;
         if (!journal) {
           // A journal that did not exist before holds nothing of the job until its start is
           // written, which happens only once it has opened. A pause or cancel of a job without a
           // journal records nothing, so the report alone says the job never started.
-          if (failedAt && job.journalKnownAbsent) jobs.push({ ...report, events: [], failedAt });
+          if (failure && job.journalKnownAbsent) jobs.push({ ...report, events: [], failure });
           else if (job.intent !== "run" && job.journalKnownAbsent) {
             jobs.push({ ...report, events: [] });
           }
@@ -204,7 +205,7 @@ export class JobRunner {
         const due =
           all ||
           events.length > 0 ||
-          failedAt !== undefined ||
+          failure !== undefined ||
           job.intent !== "run" ||
           (activity !== undefined && !Equal.equals(activity, job.activityReported)) ||
           (usage !== undefined && !Equal.equals(usage, job.usageReported));
@@ -214,7 +215,7 @@ export class JobRunner {
           events,
           usage,
           activity,
-          failedAt: read.value.more ? undefined : failedAt,
+          failure: read.value.more ? undefined : failure,
         });
         job.activityReported = activity ?? job.activityReported;
         job.usageReported = usage ?? job.usageReported;
@@ -411,17 +412,21 @@ export class JobRunner {
           }).pipe(
             // A fault in the Runner itself, such as its storage failing, fails the job rather than
             // leaving it running for as long as the Runner stays connected, though its journal
-            // records no end. A distinct failure reason is planned. A stopping Runner interrupts
-            // the job instead, which reports nothing.
-            Effect.catchDefect((defect) =>
-              Effect.logError("A job's agent failed", ensureError(defect)).pipe(
+            // records no end. A stopping Runner interrupts the job instead, which reports nothing.
+            Effect.catchDefect((defect) => {
+              const error = ensureError(defect);
+              return Effect.logError("A job's agent failed", error).pipe(
                 Effect.andThen(
                   Effect.sync(() => {
-                    held.failedAt = new Date().toISOString();
+                    held.failure = {
+                      timestamp: Date.now(),
+                      reason: "runFaulted",
+                      message: failureMessage(error.message),
+                    };
                   }),
                 ),
-              ),
-            ),
+              );
+            }),
             Effect.tap(() =>
               Effect.sync(() => {
                 held.ended = true;

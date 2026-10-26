@@ -157,15 +157,48 @@ export type JobPause = z.infer<typeof jobPauseSchema>;
 export const jobSuccessSchema = z.object({ timestamp: timestampSchema, result: jsonTextSchema });
 export type JobSuccess = z.infer<typeof jobSuccessSchema>;
 
-/** Why a limit stopped a job: a run timed out, or its model calls' cost reached its budget. */
-export const limitReasonSchema = z.enum(["runTimedOut", "modelBudgetExceeded"]);
-export type LimitReason = z.infer<typeof limitReasonSchema>;
+/**
+ * The most characters a failure's message holds: a provider's error can be a whole page, and the
+ * Runner cuts it to this before recording it, as the kubelet cuts a termination message.
+ */
+export const FAILURE_MESSAGE_MAX_LENGTH = 4096;
 
-/** What a failure records: when, and the limit that stopped the job, if one did. */
-export const jobFailureSchema = z.object({
-  timestamp: timestampSchema,
-  reason: z.optional(limitReasonSchema),
+/**
+ * Why a job failed. The names follow the fault, error and failure chain (Avižienis, Laprie, Randell
+ * and Landwehr, 2004): the job is what fails, and its reason names the cause, a fault inside the
+ * system (`runFaulted`) or an outside service that failed it (`modelFailed`). The Runner records
+ * every reason but `runnerRemoved`, which the hub records.
+ */
+export const failureSchema = z.object({
+  // Described rather than only commented, so that callers reading the OpenAPI document learn to
+  // expect new reasons.
+  reason: z
+    .enum([
+      "noResult",
+      "runTimedOut",
+      "modelBudgetExceeded",
+      "modelFailed",
+      "runFaulted",
+      "runnerRemoved",
+    ])
+    .check(
+      z.describe(
+        "What failed the job: `noResult` when its agent ended without an accepted result; `runTimedOut` when a run went past its `runTimeoutSeconds`; `modelBudgetExceeded` when its model calls' cost reached its `modelBudgetUsd`; `modelFailed` when generating the agent's next step failed, as when the model's provider refused the call; `runFaulted` when its run broke on its Runner; `runnerRemoved` when its Runner was removed before it ended. New reasons may be added: treat one you do not know as a fault.",
+      ),
+    ),
+  message: z.optional(
+    textSchema.check(
+      z.maxLength(FAILURE_MESSAGE_MAX_LENGTH),
+      z.describe(
+        "What the cause said, where it gave text: the provider's error for `modelFailed`, and what broke for `runFaulted`. Cut to its first 4,096 characters.",
+      ),
+    ),
+  ),
 });
+export type Failure = z.infer<typeof failureSchema>;
+
+/** What a failure records: when, and why. */
+export const jobFailureSchema = z.extend(failureSchema, { timestamp: timestampSchema });
 export type JobFailure = z.infer<typeof jobFailureSchema>;
 
 /** What a cancel records: when. */
@@ -324,21 +357,12 @@ export const jobReportSchema = z
     /** What the job's conversations doing anything are doing; absent when it could not be read. */
     activity: z.optional(jobActivitySchema.check(storable)),
     /**
-     * When the job failed without its journal recording its end, as when the journal could not be
-     * opened or the Runner faulted. Sent until the hub drops the run, but only with a report
-     * that reaches the end of what the journal holds, or with no events when the job's journal never
-     * held any, so the hub never ends a job without an entry its journal holds.
+     * A failure its journal did not record, as when the journal could not be opened or the Runner
+     * faulted. Sent until the hub drops the run, but only with a report that reaches the end of what
+     * the journal holds, or with no events when the job's journal never held any, so the hub never
+     * ends a job without an entry its journal holds.
      */
-    failedAt: z.optional(
-      z.iso
-        .datetime()
-        .check(
-          z.refine(
-            (time) => z.safeParse(timestampSchema, Date.parse(time)).success,
-            "Must be a time the hub stores",
-          ),
-        ),
-    ),
+    failure: z.optional(jobFailureSchema),
   })
   .check(
     z.refine(
