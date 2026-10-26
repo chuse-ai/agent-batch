@@ -116,7 +116,7 @@ const KEPT_VARIABLES = ["PATH", "SHELL", "LOGNAME", "USER", "LANG", "LANGUAGE", 
  * every job. The kernel picks the process with the most memory once this score is added, in
  * thousandths of the host's memory, so at a lower score the Runner, the largest process, could
  * still be picked: at 500 against a user service's 200, whenever it held 30% of the host's memory
- * more than a job's largest process. A job survives losing a process, as when it goes over its
+ * more than a job's largest process; at 1000, only past 80%. A job survives losing a process, as when it goes over its
  * own limit. The score is set as the daemon starts, before its sandbox, so everything it starts
  * inherits it; a systemd scope cannot set one (`OOMScoreAdjust=` is a service setting), and raising
  * a process's own score needs no privilege.
@@ -590,8 +590,9 @@ function endingOnAbort<T extends object>(target: T): T {
  * command the kernel stops for that ends with signal 9 like any other kill, so the job's scope's
  * counts in its cgroup's `memory.events` tell them apart: `oom_kill` counts the job's processes the
  * kernel killed for memory, and `oom` the times the job reached its own limit, so a kill without
- * the latter was the host running short (or a slice above the job reaching its limit). Each kill is
- * logged with the job's ID, so operators see a host running short without reading conversations.
+ * the latter was the host running short (or a slice above the job reaching its limit). Each kill the
+ * counts show is logged with the job's ID, so operators see a host running short without reading
+ * conversations; a kill between commands is logged once the next command reads the counts.
  */
 class MemoryReportingEnv extends RemoteExecutionEnv {
   readonly #jobId: string;
@@ -621,14 +622,15 @@ class MemoryReportingEnv extends RemoteExecutionEnv {
     // Starts the daemon, and with it the scope, if this is the job's first request.
     await this.connection.session().catch(() => {});
     const before = await this.#memoryEvents();
+    if (before) this.#logKills(before);
     const result = await super.exec(command, options, context);
     const after = await this.#memoryEvents();
+    if (after) this.#logKills(after);
     const advice = `Files written to /tmp count against it; write large files to $TMPDIR, which is on disk.`;
     // The counts are the whole job's, and the commands of one round run at once, so the message
     // names the job, not the command: every command that ended while they rose is told.
     if (before && after?.scope === before.scope && after.oomKill > before.oomKill) {
       const overLimit = after.oom > before.oom;
-      this.#logKills(before, after, overLimit);
       options?.onOutput?.(
         overLimit
           ? `\nWhile this command ran, a process of this job was stopped because the job's processes went over their ${this.#memoryLimit} of memory; if this command failed, that is likely why. ${advice}\n`
@@ -647,18 +649,28 @@ class MemoryReportingEnv extends RemoteExecutionEnv {
     return result;
   }
 
-  /** The kills of the daemon's latest scope already logged, as commands running at once see each. */
-  #killsLogged: { scope: string; count: number } | undefined;
+  /**
+   * The counts of the daemon's latest scope last read, by any command: commands running at once
+   * read them in turn, and each kill is logged by the first read that shows it. A new scope's
+   * counts start at zero.
+   */
+  #seen: MemoryEvents | undefined;
 
-  /** Logs the kills that `after` counts beyond `before` and those already logged. */
-  #logKills(before: MemoryEvents, after: MemoryEvents, overLimit: boolean): void {
-    const logged = this.#killsLogged?.scope === after.scope ? this.#killsLogged.count : 0;
-    const kills = after.oomKill - Math.max(before.oomKill, logged);
-    if (kills <= 0) return;
-    this.#killsLogged = { scope: after.scope, count: after.oomKill };
-    const message = overLimit
-      ? `The kernel killed ${kills} process(es) of a job that went over its ${this.#memoryLimit} of memory`
-      : `The kernel killed ${kills} process(es) of a job because the host ran short of memory`;
+  /** Logs the kills `events` shows since the counts last read. */
+  #logKills(events: MemoryEvents): void {
+    // A read of a scope the daemon has since left is stale.
+    if (events.scope !== this.#scope()) return;
+    const seen =
+      this.#seen?.scope === events.scope ? this.#seen : { scope: events.scope, oom: 0, oomKill: 0 };
+    // The counts only rise, so lower ones are from a read that finished after a later one.
+    if (events.oomKill < seen.oomKill || events.oom < seen.oom) return;
+    this.#seen = events;
+    const kills = events.oomKill - seen.oomKill;
+    if (kills === 0) return;
+    const message =
+      events.oom > seen.oom
+        ? `The kernel killed ${kills} process(es) of a job that went over its ${this.#memoryLimit} of memory`
+        : `The kernel killed ${kills} process(es) of a job because the host ran short of memory`;
     Effect.runSync(Effect.logWarning(message).pipe(Effect.annotateLogs({ jobId: this.#jobId })));
   }
 
@@ -672,11 +684,11 @@ class MemoryReportingEnv extends RemoteExecutionEnv {
     const cgroup = await this.#cgroupOf(scope);
     if (cgroup === undefined) return undefined;
     try {
-      const events = await readFile(path.join("/sys/fs/cgroup", cgroup, "memory.events"), "utf8");
+      const read = await readFile(path.join("/sys/fs/cgroup", cgroup, "memory.events"), "utf8");
       return {
         scope,
-        oom: Number(/^oom (\d+)$/m.exec(events)?.[1] ?? 0),
-        oomKill: Number(/^oom_kill (\d+)$/m.exec(events)?.[1] ?? 0),
+        oom: Number(/^oom (\d+)$/m.exec(read)?.[1] ?? 0),
+        oomKill: Number(/^oom_kill (\d+)$/m.exec(read)?.[1] ?? 0),
       };
     } catch {
       // The scope has ended, and with it its cgroup.
