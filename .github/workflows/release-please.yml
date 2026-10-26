@@ -1,0 +1,36 @@
+name: Release Please
+
+# release-please's documented workflow, with the CLI published as its docs automate publication
+# to npm. Every release publishes the CLI at the system's version, unchanged or not (ADR 0032).
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    # The action acts with its token, not the job's: a release created with GITHUB_TOKEN would not
+    # start release.yml, and a release PR opened with it would not start CI.
+    permissions: {}
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+  publish-cli:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # npm's trusted publishing, which also attests the package's provenance.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+      # Publishes the workspace's public packages, the CLI alone (ADR 0004), built by its prepublishOnly.
+      - run: vp pm publish -r

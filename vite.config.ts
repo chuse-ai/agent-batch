@@ -4,6 +4,8 @@ export default defineConfig({
   fmt: {
     // Off by default in Oxfmt; on, so import order is the formatter's, not a review point.
     sortImports: true,
+    // release-please writes the changelog in its own Markdown style, and its release PR must pass checks.
+    ignorePatterns: ["CHANGELOG.md"],
   },
   staged: {
     "*": "vp check --fix",
