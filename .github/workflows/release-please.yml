@@ -1,0 +1,49 @@
+name: Release Please
+
+# release-please's documented workflow, with the CLI published as its docs automate publication
+# to npm. Every release publishes the CLI at the system's version, unchanged or not (ADR 0032).
+# Where it differs from those examples (one run at a time, the release's tag checked out to
+# publish), a comment says why.
+
+on:
+  push:
+    branches: [main]
+
+# release-please rewrites whole files, so a run that overlaps a push to main can silently revert a
+# package.json change in the release PR; found with a merge queue, as this repo uses
+# (googleapis/release-please#2890).
+concurrency:
+  group: release-please
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    # The action acts with its token, not the job's: a release created with GITHUB_TOKEN would not
+    # start release.yml, and a release PR opened with it would not start CI.
+    permissions: {}
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+  publish-cli:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # npm's trusted publishing, which also attests the package's provenance.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # GitHub cancels a run waiting in the concurrency group when a newer one arrives, so a later
+        # push's run may be the one that creates the release; it publishes the release's commit.
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+      # Publishes the workspace's public packages, the CLI alone (ADR 0004), built by its prepublishOnly.
+      - run: vp pm publish -r

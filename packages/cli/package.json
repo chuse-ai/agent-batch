@@ -46,7 +46,6 @@
     "@orpc/openapi": "catalog:",
     "@standard-schema/utils": "catalog:",
     "@types/node": "catalog:",
-    "bumpp": "^12.3.0",
     "contract": "workspace:*",
     "effect": "catalog:",
     "ensure-error": "catalog:",
