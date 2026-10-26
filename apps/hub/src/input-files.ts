@@ -110,13 +110,13 @@ export async function storeInputFiles(
   if (prepared.blobs.length === 0) return;
   // One statement takes every lock on the submission's blobs, row by row in the order of their
   // address, as a deletion takes its locks, so the two never wait for each other in turn; Postgres
-  // reads the rows of `values` in their order. A stored blob is locked by the update that `where
-  // false` keeps from happening: an update's lock on a column no key holds, which a deletion's `for
-  // update` waits for, without writing a new version of the row, which `set ... returning (xmax =
-  // 0)` would for each reuse. So only blobs it inserted come back. A blob whose deletion it waited
-  // for is gone once that commits, and is inserted afresh. The lock also conflicts with itself, so
-  // submissions that share a stored blob wait for each other to commit; Postgres 19's `on conflict
-  // do select for key share` would lock without that.
+  // reads the rows of `values` in their order. A stored blob is locked by the update that
+  // `where false` keeps from happening: an update's lock on a column no key holds, which a
+  // deletion's `for update` waits for, without writing a new version of the row, which
+  // `set ... returning (xmax = 0)` would for each reuse. So only blobs it inserted come back. A
+  // blob whose deletion it waited for is gone once that commits, and is inserted afresh. The lock
+  // also conflicts with itself, so submissions that share a stored blob wait for each other to
+  // commit; Postgres 19's `on conflict do select for key share` would lock without that.
   const inserted = await trx
     .insertInto("blob")
     .values(
