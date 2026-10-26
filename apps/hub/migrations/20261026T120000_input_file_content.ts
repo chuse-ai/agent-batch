@@ -46,7 +46,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("uploadId", "uuid", (col) =>
       col.notNull().references("upload.id").onDelete("cascade"),
     )
-    // The chunk's position in the file: chunk `index` holds the original bytes from `index` MiB.
+    // The chunk's position in the file: chunk `index` holds the original bytes from `index` times
+    // the upload's `chunkBytes`.
     .addColumn("index", "integer", (col) => col.notNull().check(sql`index >= 0`))
     // One zstd frame.
     .addColumn("bytes", "bytea", (col) => col.notNull())

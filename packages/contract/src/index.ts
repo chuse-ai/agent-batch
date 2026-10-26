@@ -559,7 +559,7 @@ export const contract = {
           // Not JSON, as every other call answers: read by its headers, which name a file.
           responseBodyHint: undefined,
           description:
-            "Reads one chunk of one of a job's Input files, for the Runner the job is placed on, called with that Runner's own key. Chunk `index` holds the file's original bytes from `index` times 1 MiB, at most 1 MiB of them, compressed as one zstd frame (`application/zstd`); a file has as many chunks as its size needs, an empty file none. Not found when the job, the file or the chunk does not exist, or the job is not placed on the calling Runner.",
+            "Reads one chunk of one of a job's Input files, for the Runner the job is placed on, called with that Runner's own key. Chunk `index` holds the file's original bytes from `index` times the `chunkBytes` the hub listed for the file, at most that many of them, compressed as one zstd frame (`application/zstd`); a file has as many chunks as its size needs, an empty file none. Not found when the job, the file or the chunk does not exist, or the job is not placed on the calling Runner.",
         }),
         ...byKey({ runner: ["connect"] }),
       )

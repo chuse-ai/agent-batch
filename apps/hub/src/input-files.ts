@@ -20,9 +20,9 @@ import {
 
 // Input files' content, stored once by the SHA-256 of its original bytes however many jobs use it,
 // in chunk rows of a fixed number of original bytes each, recorded with the content and listed to
-// the Runner, each compressed as one zstd frame. A
-// Runner reads a file a chunk at a time, so serving a file holds no more than a chunk on either
-// side, and a sync's answer names the files without their bytes.
+// the Runner, each compressed as one zstd frame. A Runner reads a file a chunk at a time, so serving
+// a file holds no more than a chunk on either side, and a sync's answer names the files without
+// their bytes.
 //
 // Content no job uses is deleted with the last job that used it. A submission and a deletion of the
 // same content lock its row, so whichever comes second sees what the first did: a submission waits
