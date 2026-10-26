@@ -43,8 +43,8 @@ import {
   type RunnerId,
 } from "./db/types.ts";
 import {
-  deleteUnusedContent,
-  lockInputFileContent,
+  deleteUnusedBlobs,
+  lockInputFileBlobs,
   prepareInputFiles,
   storeInputFiles,
 } from "./input-files.ts";
@@ -668,7 +668,7 @@ async function recordUsageOfEnd(trx: Transaction<Database>, jobId: JobId) {
 /**
  * Deletes the finished job `jobId` and returns it as it now reads, or fails with a 404 error
  * or, for an unfinished job, a 409; with its Runner to tell to sync now. In one transaction: the
- * job's row goes, and with it its input files, events and progress, and the content of its Input
+ * job's row goes, and with it its input files, events and progress, and the blobs of its Input
  * files that no other job uses; its latest Usage record is
  * marked deleted, as its tombstone; and the deletion of its files from its host is recorded for its
  * Runner, unless no Runner holds any of the job, as when none was sent it or none started it. A
@@ -713,8 +713,8 @@ export function deleteJob(jobId: JobId) {
                 : "The job is not finished; cancel it first",
           };
         }
-        // Locked before the job's files go, through which it is found.
-        const content = await lockInputFileContent(trx, jobId);
+        // Locked before the job's files go, through which they are found.
+        const blobs = await lockInputFileBlobs(trx, jobId);
         // One statement marks the Usage record deleted, records the deletion the Runner owes with a
         // snapshot of the job from that record, and deletes the job's row.
         const snapshot = await trx
@@ -785,7 +785,7 @@ export function deleteJob(jobId: JobId) {
           .select(DELETED_JOB_COLUMNS)
           // Every end writes a Usage record, so a finished job has one.
           .executeTakeFirstOrThrow();
-        await deleteUnusedContent(trx, content);
+        await deleteUnusedBlobs(trx, blobs);
         return {
           deleted: toDeletedJob(snapshot, now, job.runnerExists ? now : null),
           hint: job.runnerExists ? (job.runnerId ?? undefined) : undefined,

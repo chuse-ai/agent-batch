@@ -18,20 +18,20 @@ import {
   UploadId,
 } from "./db/types.ts";
 
-// Input files' content, stored once by the SHA-256 of its original bytes however many jobs use it,
-// in chunk rows of a fixed number of original bytes each, recorded with the content and listed to
-// the Runner, each compressed as one zstd frame. A Runner reads a file a chunk at a time, so serving
-// a file holds no more than a chunk on either side, and a sync's answer names the files without
-// their bytes.
+// Input files' blobs: each file's bytes stored once by the SHA-256 of its original bytes however
+// many jobs use it, in chunk rows of a fixed number of original bytes each, recorded with the blob's
+// upload and listed to the Runner, each compressed as one zstd frame. A Runner reads a file a chunk
+// at a time, so serving a file holds no more than a chunk on either side, and a sync's answer names
+// the files without their bytes.
 //
-// Content no job uses is deleted with the last job that used it. A submission and a deletion of the
-// same content lock its rows in the same order, so whichever comes second sees what the first did:
-// a submission waits for the deletion and stores the content again, and a deletion that waits for a
-// submission finds the content used and keeps it.
+// A blob no job uses is deleted with the last job that used it. A submission and a deletion lock
+// their blobs in the same order, so whichever comes second sees what the first did: a submission
+// waits for the deletion and stores the blob again, and a deletion that waits for a submission finds
+// the blob used and keeps it.
 
 /**
- * The original bytes in each chunk of new content but its last. Each request for a chunk costs CPU
- * for one chunk's frame, so this bounds the CPU of a request on any plan; content already stored
+ * The original bytes in each chunk of a new blob but its last. Each request for a chunk costs CPU
+ * for one chunk's frame, so this bounds the CPU of a request on any plan; a blob already stored
  * keeps the size it was stored with.
  */
 const CHUNK_BYTES = 1024 * 1024;
@@ -39,15 +39,15 @@ const CHUNK_BYTES = 1024 * 1024;
 /** zstd's own default level: as small as gzip's or much smaller, for a fraction of its CPU time. */
 const ZSTD_LEVEL = 3;
 
-/** A submission's Input files, hashed, with the content the hub did not hold when it looked. */
+/** A submission's Input files, hashed, compressed where the hub held no blob of them when it looked. */
 export interface PreparedInputFiles {
   readonly files: readonly { name: InputFileName; sha256: BlobSha256 }[];
-  /** Each distinct content once, in the order of its address, compressed if it was not stored. */
-  readonly contents: readonly { sha256: BlobSha256; bytes: Buffer; chunks?: Buffer[] }[];
+  /** Each distinct blob once, in the order of its address, compressed if it was not stored. */
+  readonly blobs: readonly { sha256: BlobSha256; bytes: Buffer; chunks?: Buffer[] }[];
 }
 
 /**
- * Hashes the Input files `files`, and compresses the content no stored blob had when the hub
+ * Hashes the Input files `files`, and compresses those whose blob the hub did not hold when it
  * looked, before the submission's transaction, so its locks are not held while it compresses.
  */
 export function prepareInputFiles(files: JobSubmission["inputFiles"]) {
@@ -60,22 +60,22 @@ export function prepareInputFiles(files: JobSubmission["inputFiles"]) {
     };
   });
   const distinct = new Map(named.map((file) => [file.sha256.toString("hex"), file]));
-  const contents = [...distinct.values()].toSorted((a, b) => Buffer.compare(a.sha256, b.sha256));
+  const blobs = [...distinct.values()].toSorted((a, b) => Buffer.compare(a.sha256, b.sha256));
   return Effect.gen(function* () {
-    if (contents.length === 0) return { files: [], contents: [] } satisfies PreparedInputFiles;
+    if (blobs.length === 0) return { files: [], blobs: [] } satisfies PreparedInputFiles;
     const database = yield* Db;
-    // A look without a lock: content deleted meanwhile is stored again, and compressed then.
+    // A look without a lock: a blob deleted meanwhile is stored again, and compressed then.
     const stored = yield* database.query((db) =>
       db
         .selectFrom("blob")
         .select("sha256")
-        .where("sha256", "=", (eb) => eb.fn.any(eb.val(contents.map((file) => file.sha256))))
+        .where("sha256", "=", (eb) => eb.fn.any(eb.val(blobs.map((blob) => blob.sha256))))
         .execute(),
     );
     const known = new Set(stored.map((row) => row.sha256.toString("hex")));
     return {
       files: named.map(({ name, sha256 }) => ({ name, sha256 })),
-      contents: contents.map(({ sha256, bytes }) =>
+      blobs: blobs.map(({ sha256, bytes }) =>
         known.has(sha256.toString("hex"))
           ? { sha256, bytes }
           : { sha256, bytes, chunks: compress(bytes) },
@@ -98,8 +98,8 @@ function compress(bytes: Buffer): Buffer[] {
 }
 
 /**
- * Stores the job `jobId`'s Input files, `prepared`, in the transaction `trx`: the content no stored
- * blob has yet, and the job's reference to each file's content. Content already stored is locked
+ * Stores the job `jobId`'s Input files, `prepared`, in the transaction `trx`: the blobs the hub does
+ * not hold yet, and the job's reference to each file's blob. A blob already stored is locked
  * against deletion until the transaction ends, rather than written again.
  */
 export async function storeInputFiles(
@@ -107,7 +107,7 @@ export async function storeInputFiles(
   jobId: JobId,
   prepared: PreparedInputFiles,
 ): Promise<void> {
-  if (prepared.contents.length === 0) return;
+  if (prepared.blobs.length === 0) return;
   // One statement takes every lock on the submission's blobs, row by row in the order of their
   // address, as a deletion takes its locks, so the two never wait for each other in turn; Postgres
   // reads the rows of `values` in their order. A stored blob is locked by the update that
@@ -115,12 +115,12 @@ export async function storeInputFiles(
   // deletion's `for update` waits for, without writing a new version of the row, which
   // `set ... returning (xmax = 0)` would for each reuse. So only blobs it inserted come back. A blob
   // whose deletion it waited for is gone once that commits, and is inserted afresh. The lock also
-  // conflicts with itself, so submissions that share stored content wait for each other to commit;
+  // conflicts with itself, so submissions that share a stored blob wait for each other to commit;
   // Postgres 19's `on conflict do select for key share` would lock without that.
   const inserted = await trx
     .insertInto("blob")
     .values(
-      prepared.contents.map(({ sha256, bytes }) => ({ sha256, originalSizeBytes: bytes.length })),
+      prepared.blobs.map(({ sha256, bytes }) => ({ sha256, originalSizeBytes: bytes.length })),
     )
     .onConflict((conflict) =>
       conflict
@@ -131,17 +131,19 @@ export async function storeInputFiles(
     .returning("sha256")
     .execute();
   const created = new Set(inserted.map((row) => row.sha256.toString("hex")));
-  for (const content of prepared.contents) {
-    if (!created.has(content.sha256.toString("hex"))) continue;
+  for (const blob of prepared.blobs) {
+    if (!created.has(blob.sha256.toString("hex"))) continue;
     const uploadId = UploadId(randomUUID());
     await trx
       .insertInto("upload")
-      .values({ id: uploadId, sha256: content.sha256, chunkBytes: CHUNK_BYTES })
+      .values({ id: uploadId, sha256: blob.sha256, chunkBytes: CHUNK_BYTES })
       .execute();
-    // Compressed here only when the content was stored when the submission looked and deleted since.
-    const chunks: NewUploadChunk[] = (content.chunks ?? compress(content.bytes)).map(
-      (bytes, index) => ({ uploadId, index: UploadChunkIndex(index), bytes }),
-    );
+    // Compressed here only when the blob was stored when the submission looked and deleted since.
+    const chunks: NewUploadChunk[] = (blob.chunks ?? compress(blob.bytes)).map((bytes, index) => ({
+      uploadId,
+      index: UploadChunkIndex(index),
+      bytes,
+    }));
     // An empty file has no chunks. pg sends a Buffer parameter as binary, so the bytes cross to
     // Postgres as they are.
     if (chunks.length > 0) await trx.insertInto("uploadChunk").values(chunks).execute();
@@ -153,11 +155,11 @@ export async function storeInputFiles(
 }
 
 /**
- * Locks the content of the job `jobId`'s Input files in the transaction `trx`, before the job is
- * deleted, so no submission can start using it unseen; returns its addresses, for
- * `deleteUnusedContent` once the job is gone.
+ * Locks the blobs of the job `jobId`'s Input files in the transaction `trx`, before the job is
+ * deleted, so no submission can start using them unseen; returns their addresses, for
+ * `deleteUnusedBlobs` once the job is gone.
  */
-export async function lockInputFileContent(
+export async function lockInputFileBlobs(
   trx: Kysely<Database>,
   jobId: JobId,
 ): Promise<BlobSha256[]> {
@@ -174,11 +176,11 @@ export async function lockInputFileContent(
 }
 
 /**
- * Deletes the content at `addresses`, locked by `lockInputFileContent`, that no job's Input file
- * uses any longer, with its chunks. A statement of its own after the job's deletion: it must see the
- * job's files gone, and a statement sees only what statements before it did.
+ * Deletes the blobs at `addresses`, locked by `lockInputFileBlobs`, that no job's Input file uses
+ * any longer, with their uploads and chunks. A statement of its own after the job's deletion: it
+ * must see the job's files gone, and a statement sees only what statements before it did.
  */
-export async function deleteUnusedContent(
+export async function deleteUnusedBlobs(
   trx: Kysely<Database>,
   addresses: BlobSha256[],
 ): Promise<void> {

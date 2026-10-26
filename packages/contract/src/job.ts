@@ -99,7 +99,7 @@ export const inputFilesSchema = z.record(fileNameSchema, inputFileSchema, {
       : undefined,
 });
 
-/** A SHA-256 digest as lowercase hex, as the hub names an Input file's content. */
+/** A SHA-256 digest as lowercase hex, as the hub names an Input file's blob. */
 export const sha256Schema = z.hash("sha256").check(z.lowercase());
 
 /**

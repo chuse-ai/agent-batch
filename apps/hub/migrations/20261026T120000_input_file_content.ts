@@ -3,23 +3,23 @@ import { constants, zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
 import { type Kysely, sql } from "kysely";
 
-// Input files' content moves out of `inputFile` into content stored once by its SHA-256: a file
+// Input files' content moves out of `inputFile` into blobs stored once by their SHA-256: a file
 // many jobs share is stored once, and its bytes sit in chunk rows of 1 MiB of original bytes, each
 // compressed as one zstd frame at level 3, which a Runner downloads one at a time.
 //
 // A blob's bytes belong to the upload that wrote them, and the blob is reached through the upload:
-// so an upload can write its chunks before its content is known and verified, and publishing it
+// so an upload can write its chunks before its blob is known and verified, and publishing it
 // copies no bytes. Today every upload is a submission's inline file, written whole and published in
 // the same transaction.
 
-/** The original bytes in each chunk but a file's last, for the content this migration stores. */
+/** The original bytes in each chunk but a file's last, for the blobs this migration stores. */
 const CHUNK_BYTES = 1024 * 1024;
 
 export async function up(db: Kysely<unknown>): Promise<void> {
   const schema = db.schema.withSchema("agent_batch");
   await schema
     .createTable("blob")
-    // The SHA-256 of the original bytes, as 32 raw bytes: the address of the content, which a Runner
+    // The SHA-256 of the original bytes, as 32 raw bytes: the address of the blob, which a Runner
     // checks what it downloads against.
     .addColumn("sha256", "bytea", (col) => col.primaryKey().check(sql`octet_length(sha256) = 32`))
     .addColumn("originalSizeBytes", "bigint", (col) =>
@@ -30,12 +30,12 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await schema
     .createTable("upload")
     .addColumn("id", "uuid", (col) => col.primaryKey())
-    // The content the upload published: deleting the blob deletes its upload, and with it the bytes.
+    // The blob the upload published: deleting the blob deletes its upload, and with it the bytes.
     .addColumn("sha256", "bytea", (col) =>
       col.notNull().references("blob.sha256").onDelete("cascade"),
     )
     // How many original bytes each of its chunks holds but the last, chosen as the upload starts,
-    // so the hub can choose another for new content without rewriting what it stored.
+    // so the hub can choose another for new blobs without rewriting what it stored.
     .addColumn("chunkBytes", "integer", (col) => col.notNull().check(sql`"chunkBytes" > 0`))
     // A blob's bytes are those of one upload, through which it is read.
     .addUniqueConstraint("upload_sha256_key", ["sha256"])
@@ -59,7 +59,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     db,
   );
 
-  // A job's file refers to its content, which cannot be deleted while any job's file refers to it.
+  // A job's file refers to its blob, which cannot be deleted while any job's file refers to it.
   await schema
     .alterTable("inputFile")
     .addColumn("sha256", "bytea", (col) => col.references("blob.sha256").onDelete("restrict"))
