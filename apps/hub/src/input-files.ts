@@ -4,7 +4,7 @@ import { constants, zstdCompressSync } from "node:zlib";
 
 import type { JobSubmission } from "contract";
 import { Effect, Record } from "effect";
-import { type Kysely, sql } from "kysely";
+import type { Kysely } from "kysely";
 
 import { Db } from "./db/database.ts";
 import {
@@ -25,9 +25,9 @@ import {
 // their bytes.
 //
 // Content no job uses is deleted with the last job that used it. A submission and a deletion of the
-// same content lock its rows in the same order, so whichever comes second sees what the first did: a submission waits
-// for the deletion and stores the content again, and a deletion that waits for a submission finds
-// the content used and keeps it.
+// same content lock its rows in the same order, so whichever comes second sees what the first did:
+// a submission waits for the deletion and stores the content again, and a deletion that waits for a
+// submission finds the content used and keeps it.
 
 /**
  * The original bytes in each chunk of new content but its last. Each request for a chunk costs CPU
@@ -109,12 +109,14 @@ export async function storeInputFiles(
 ): Promise<void> {
   if (prepared.contents.length === 0) return;
   // One statement takes every lock on the submission's blobs, row by row in the order of their
-  // address, as a deletion takes its locks, so the two never wait for each other in turn. A stored
-  // blob is locked by the update that `where false` keeps from happening: as strong a lock as an
-  // update of a column no key holds, which a deletion's `for update` waits for and another
-  // submission's foreign-key check does not, without writing a new version of the row, which
+  // address, as a deletion takes its locks, so the two never wait for each other in turn; Postgres
+  // reads the rows of `values` in their order. A stored blob is locked by the update that
+  // `where false` keeps from happening: an update's lock on a column no key holds, which a
+  // deletion's `for update` waits for, without writing a new version of the row, which
   // `set ... returning (xmax = 0)` would for each reuse. So only blobs it inserted come back. A blob
-  // whose deletion it waited for is gone once that commits, and is inserted afresh.
+  // whose deletion it waited for is gone once that commits, and is inserted afresh. The lock also
+  // conflicts with itself, so submissions that share stored content wait for each other to commit;
+  // Postgres 19's `on conflict do select for key share` would lock without that.
   const inserted = await trx
     .insertInto("blob")
     .values(
@@ -124,7 +126,7 @@ export async function storeInputFiles(
       conflict
         .column("sha256")
         .doUpdateSet((eb) => ({ originalSizeBytes: eb.ref("excluded.originalSizeBytes") }))
-        .where(sql<boolean>`false`),
+        .where((eb) => eb.lit(false)),
     )
     .returning("sha256")
     .execute();
