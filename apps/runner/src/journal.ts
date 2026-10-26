@@ -14,7 +14,7 @@ import {
 } from "@earendil-works/pi-durable";
 import {
   type ConversationActivity,
-  FAILURE_MESSAGE_MAX_BYTES,
+  FAILURE_MESSAGE_MAX_LENGTH,
   isoDate,
   JOB_CANCELLED,
   JOB_FAILED,
@@ -296,17 +296,12 @@ export async function readActivity(
 }
 
 /**
- * `text` as a failure's message: Unicode text without NUL (`textSchema`), which the hub stores, cut
- * to `FAILURE_MESSAGE_MAX_BYTES` of UTF-8, since a provider's error can be a whole page.
+ * `text` as a failure's message: cut to `FAILURE_MESSAGE_MAX_LENGTH`, and Unicode text without NUL
+ * (`textSchema`), which the hub stores. A cut through a surrogate pair leaves half of it, which
+ * `toWellFormed` replaces; fewer UTF-16 units than the maximum are never more characters.
  */
 export function failureMessage(text: string): string {
-  const storable = text.replaceAll("\0", "").toWellFormed();
-  // `encodeInto` stops before a character that would not fit, and says how much of the text it read.
-  const { read } = new TextEncoder().encodeInto(
-    storable,
-    new Uint8Array(FAILURE_MESSAGE_MAX_BYTES),
-  );
-  return storable.slice(0, read);
+  return text.replaceAll("\0", "").slice(0, FAILURE_MESSAGE_MAX_LENGTH).toWellFormed();
 }
 
 /**

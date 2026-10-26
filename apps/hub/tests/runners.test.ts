@@ -68,6 +68,6 @@ test("a runner offering no protocol version the hub supports is refused, told wh
   expect(answer.status).toBe(400);
   expect(await answer.json()).toMatchObject({
     code: "protocolUnsupported",
-    supported: ["agent-batch.v2"],
+    supported: ["agent-batch.v1"],
   });
 });
