@@ -109,7 +109,7 @@ test("deleting a job deletes the content of its Input files that no other job us
     inputFiles: { "shared.txt": shared, "own.txt": { content: "Only the first job's." } },
   });
   const second = await client.jobs.submit({ ...SUBMISSION, inputFiles: { "copy.txt": shared } });
-  // No API shows stored content, which the hub keeps once however many jobs use it.
+  // No API shows blobs, which the hub keeps once however many jobs use them.
   const all = [sha256(shared.content), sha256("Only the first job's.")].toSorted();
   await using db = openDatabase(inject("databaseUrl"));
   const stored = async () =>

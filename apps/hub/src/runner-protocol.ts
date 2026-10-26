@@ -703,8 +703,8 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                     jsonBuildObject({
                       prompt: eb.ref("prompt"),
                       resultContract: eb.ref("resultContract"),
-                      // The files by name, SHA-256 and size, without their bytes, which the
-                      // Runner downloads a chunk at a time.
+                      // The files by name, SHA-256, size and chunk size, without their bytes, which
+                      // the Runner downloads a chunk at a time.
                       inputFiles: jsonArrayFrom(
                         eb
                           .selectFrom("inputFile")

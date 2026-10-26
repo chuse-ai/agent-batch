@@ -38,7 +38,7 @@ export const InputFileName = Brand.nominal<InputFileName>();
 /** An event's ID in its job's journal, which a stored row of events is keyed by its last of. */
 export type EventId = JobEventChunkLastId;
 export const EventId = Brand.nominal<EventId>();
-/** Stored content's address: the SHA-256 of its original bytes, as the hub computed it. */
+/** A blob's address: the SHA-256 of its original bytes, as the hub computed it. */
 export type BlobSha256 = BlobSha256Type;
 export const BlobSha256 = Brand.nominal<BlobSha256>();
 export type UploadId = UploadIdType;
