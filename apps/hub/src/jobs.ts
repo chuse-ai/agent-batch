@@ -42,7 +42,12 @@ import {
   MemberId,
   type RunnerId,
 } from "./db/types.ts";
-import { deleteUnusedContent, lockInputFileContent, storeInputFiles } from "./input-files.ts";
+import {
+  deleteUnusedContent,
+  lockInputFileContent,
+  prepareInputFiles,
+  storeInputFiles,
+} from "./input-files.ts";
 import type { HubSettings } from "./settings.ts";
 
 /** The statuses a job ends in (`FINAL_JOB_STATUSES`), as the hub's database types them. */
@@ -258,6 +263,7 @@ export function submitJob(
     const database = yield* Db;
     const organization = yield* getOrganization;
     const contentHash = contentHashOf(submission);
+    const inputFiles = yield* prepareInputFiles(submission.inputFiles);
     const job = yield* database.query((db) =>
       db.transaction().execute(async (trx) => {
         // A concurrent submission with the same key waits here for the first to commit, then
@@ -300,7 +306,7 @@ export function submitJob(
           .values({ jobId: inserted.id })
           .returning(PROGRESS_COLUMNS)
           .executeTakeFirstOrThrow();
-        await storeInputFiles(trx, inserted.id, submission.inputFiles);
+        await storeInputFiles(trx, inserted.id, inputFiles);
         return { ...inserted, ...progress };
       }),
     );

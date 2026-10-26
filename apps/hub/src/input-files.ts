@@ -4,7 +4,7 @@ import { constants, zstdCompressSync } from "node:zlib";
 
 import type { JobSubmission } from "contract";
 import { Effect, Record } from "effect";
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 
 import { Db } from "./db/database.ts";
 import {
@@ -25,7 +25,7 @@ import {
 // their bytes.
 //
 // Content no job uses is deleted with the last job that used it. A submission and a deletion of the
-// same content lock its row, so whichever comes second sees what the first did: a submission waits
+// same content lock its rows in the same order, so whichever comes second sees what the first did: a submission waits
 // for the deletion and stores the content again, and a deletion that waits for a submission finds
 // the content used and keeps it.
 
@@ -39,74 +39,114 @@ const CHUNK_BYTES = 1024 * 1024;
 /** zstd's own default level: as small as gzip's or much smaller, for a fraction of its CPU time. */
 const ZSTD_LEVEL = 3;
 
+/** A submission's Input files, hashed, with the content the hub did not hold when it looked. */
+export interface PreparedInputFiles {
+  readonly files: readonly { name: InputFileName; sha256: BlobSha256 }[];
+  /** Each distinct content once, in the order of its address, compressed if it was not stored. */
+  readonly contents: readonly { sha256: BlobSha256; bytes: Buffer; chunks?: Buffer[] }[];
+}
+
 /**
- * Stores the job `jobId`'s Input files `files` in the transaction `trx`: the content no stored blob
- * has yet, compressed, and the job's reference to each file's content. Content already stored is
- * locked against deletion, rather than compressed and written again.
+ * Hashes the Input files `files`, and compresses the content no stored blob had when the hub
+ * looked, before the submission's transaction, so its locks are not held while it compresses.
+ */
+export function prepareInputFiles(files: JobSubmission["inputFiles"]) {
+  const named = Record.collect(files, (name, file) => {
+    const bytes = Buffer.from(file.content, "utf8");
+    return {
+      name: InputFileName(name),
+      bytes,
+      sha256: BlobSha256(createHash("sha256").update(bytes).digest()),
+    };
+  });
+  const distinct = new Map(named.map((file) => [file.sha256.toString("hex"), file]));
+  const contents = [...distinct.values()].toSorted((a, b) => Buffer.compare(a.sha256, b.sha256));
+  return Effect.gen(function* () {
+    if (contents.length === 0) return { files: [], contents: [] } satisfies PreparedInputFiles;
+    const database = yield* Db;
+    // A look without a lock: content deleted meanwhile is stored again, and compressed then.
+    const stored = yield* database.query((db) =>
+      db
+        .selectFrom("blob")
+        .select("sha256")
+        .where("sha256", "=", (eb) => eb.fn.any(eb.val(contents.map((file) => file.sha256))))
+        .execute(),
+    );
+    const known = new Set(stored.map((row) => row.sha256.toString("hex")));
+    return {
+      files: named.map(({ name, sha256 }) => ({ name, sha256 })),
+      contents: contents.map(({ sha256, bytes }) =>
+        known.has(sha256.toString("hex"))
+          ? { sha256, bytes }
+          : { sha256, bytes, chunks: compress(bytes) },
+      ),
+    } satisfies PreparedInputFiles;
+  });
+}
+
+/** `bytes` in chunks of `CHUNK_BYTES` original bytes, each one zstd frame; none for no bytes. */
+function compress(bytes: Buffer): Buffer[] {
+  const chunks: Buffer[] = [];
+  for (let start = 0; start < bytes.length; start += CHUNK_BYTES) {
+    chunks.push(
+      zstdCompressSync(bytes.subarray(start, start + CHUNK_BYTES), {
+        params: { [constants.ZSTD_c_compressionLevel]: ZSTD_LEVEL },
+      }),
+    );
+  }
+  return chunks;
+}
+
+/**
+ * Stores the job `jobId`'s Input files, `prepared`, in the transaction `trx`: the content no stored
+ * blob has yet, and the job's reference to each file's content. Content already stored is locked
+ * against deletion until the transaction ends, rather than written again.
  */
 export async function storeInputFiles(
   trx: Kysely<Database>,
   jobId: JobId,
-  files: JobSubmission["inputFiles"],
+  prepared: PreparedInputFiles,
 ): Promise<void> {
-  // Rows are locked in the order of the content's address, the stored ones by the select and the new
-  // ones as they are inserted, so two submissions sharing content do not each wait for the other.
-  // A deletion of a job that stored some of the new ones meanwhile can still deadlock with this
-  // transaction; Postgres then fails one of them, and that request can be sent again.
-  const contents = Record.collect(files, (name, file) => {
-    const bytes = Buffer.from(file.content, "utf8");
-    return { name, bytes, sha256: BlobSha256(createHash("sha256").update(bytes).digest()) };
-  }).toSorted((a, b) => Buffer.compare(a.sha256, b.sha256));
-  if (contents.length === 0) return;
-  const stored = await trx
-    .selectFrom("blob")
-    .select("sha256")
-    .where("sha256", "=", (eb) => eb.fn.any(eb.val(contents.map((content) => content.sha256))))
-    .orderBy("sha256")
-    .forKeyShare()
+  if (prepared.contents.length === 0) return;
+  // One statement takes every lock on the submission's blobs, row by row in the order of their
+  // address, as a deletion takes its locks, so the two never wait for each other in turn. A stored
+  // blob is locked by the update that `where false` keeps from happening: as strong a lock as an
+  // update of a column no key holds, which a deletion's `for update` waits for and another
+  // submission's foreign-key check does not, without writing a new version of the row, which
+  // `set ... returning (xmax = 0)` would for each reuse. So only blobs it inserted come back. A blob
+  // whose deletion it waited for is gone once that commits, and is inserted afresh.
+  const inserted = await trx
+    .insertInto("blob")
+    .values(
+      prepared.contents.map(({ sha256, bytes }) => ({ sha256, originalSizeBytes: bytes.length })),
+    )
+    .onConflict((conflict) =>
+      conflict
+        .column("sha256")
+        .doUpdateSet((eb) => ({ originalSizeBytes: eb.ref("excluded.originalSizeBytes") }))
+        .where(sql<boolean>`false`),
+    )
+    .returning("sha256")
     .execute();
-  const known = new Set(stored.map((row) => row.sha256.toString("hex")));
-  for (const content of contents) {
-    const hex = content.sha256.toString("hex");
-    if (known.has(hex)) continue;
-    known.add(hex);
-    // A concurrent submission of the same new content may store it first; this one then writes
-    // none of its own.
-    const inserted = await trx
-      .insertInto("blob")
-      .values({ sha256: content.sha256, originalSizeBytes: content.bytes.length })
-      .onConflict((conflict) => conflict.column("sha256").doNothing())
-      .returning("sha256")
-      .executeTakeFirst();
-    if (!inserted) continue;
+  const created = new Set(inserted.map((row) => row.sha256.toString("hex")));
+  for (const content of prepared.contents) {
+    if (!created.has(content.sha256.toString("hex"))) continue;
     const uploadId = UploadId(randomUUID());
     await trx
       .insertInto("upload")
       .values({ id: uploadId, sha256: content.sha256, chunkBytes: CHUNK_BYTES })
       .execute();
-    const chunks: NewUploadChunk[] = [];
-    for (let start = 0; start < content.bytes.length; start += CHUNK_BYTES) {
-      chunks.push({
-        uploadId,
-        index: UploadChunkIndex(chunks.length),
-        bytes: zstdCompressSync(content.bytes.subarray(start, start + CHUNK_BYTES), {
-          params: { [constants.ZSTD_c_compressionLevel]: ZSTD_LEVEL },
-        }),
-      });
-    }
+    // Compressed here only when the content was stored when the submission looked and deleted since.
+    const chunks: NewUploadChunk[] = (content.chunks ?? compress(content.bytes)).map(
+      (bytes, index) => ({ uploadId, index: UploadChunkIndex(index), bytes }),
+    );
     // An empty file has no chunks. pg sends a Buffer parameter as binary, so the bytes cross to
     // Postgres as they are.
     if (chunks.length > 0) await trx.insertInto("uploadChunk").values(chunks).execute();
   }
   await trx
     .insertInto("inputFile")
-    .values(
-      contents.map((content) => ({
-        jobId,
-        name: InputFileName(content.name),
-        sha256: content.sha256,
-      })),
-    )
+    .values(prepared.files.map(({ name, sha256 }) => ({ jobId, name, sha256 })))
     .execute();
 }
 
