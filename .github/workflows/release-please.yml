@@ -2,8 +2,9 @@ name: Release Please
 
 # release-please's documented workflow, with the CLI published as its docs automate publication
 # to npm. Every release stages the CLI at the system's version, unchanged or not (ADR 0032).
-# Where it differs from those examples (one run at a time, the release's tag checked out to
-# publish, staging instead of publishing), a comment says why.
+# Where it differs from those examples (an app's token instead of a personal one, one run at a
+# time, the release's tag checked out to publish, staging instead of publishing), a comment says
+# why.
 
 on:
   push:
@@ -18,17 +19,25 @@ concurrency:
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    # The action acts with its token, not the job's: a release created with GITHUB_TOKEN would not
-    # start release.yml, and a release PR opened with it would not start CI.
+    # The action acts with the release app's token, not the job's: a release created with
+    # GITHUB_TOKEN would not start release.yml, and a release PR opened with it would not start CI.
+    # An app's token, unlike a personal one, gets the release PR's commits signed by GitHub, which
+    # main's ruleset requires: release-please creates them through the API without signing them
+    # itself (googleapis/release-please#1314).
     permissions: {}
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
   publish-cli:
     needs: release-please
