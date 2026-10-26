@@ -117,7 +117,7 @@ test("a model call its provider refuses fails the job with the provider's error"
 
   expect(await runJob(SUBMISSION)).toMatchObject({
     status: "failed",
-    failure: { reason: "modelFailed", message: expect.stringContaining(error) },
+    failure: { reason: "modelFailed", message: error },
   });
 });
 

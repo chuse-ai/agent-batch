@@ -158,10 +158,10 @@ export const jobSuccessSchema = z.object({ timestamp: timestampSchema, result: j
 export type JobSuccess = z.infer<typeof jobSuccessSchema>;
 
 /**
- * The most UTF-16 code units a failure's message holds: a provider's error can be a whole page, and
+ * The most bytes of UTF-8 a failure's message holds: a provider's error can be a whole page, and
  * the Runner cuts it to this before recording it.
  */
-export const FAILURE_MESSAGE_MAX_LENGTH = 4096;
+export const FAILURE_MESSAGE_MAX_BYTES = 4096;
 
 /**
  * Why a job failed. The names follow the fault, error and failure chain (Avižienis, Laprie, Randell
@@ -169,9 +169,9 @@ export const FAILURE_MESSAGE_MAX_LENGTH = 4096;
  * system (`runFaulted`) or an outside service that failed it (`modelFailed`). The Runner records
  * every reason but `runnerRemoved`, which the hub records.
  */
-// Described rather than only commented, so that callers reading the OpenAPI document learn to expect
-// new reasons.
 export const failureSchema = z.object({
+  // Described rather than only commented, so that callers reading the OpenAPI document learn to
+  // expect new reasons.
   reason: z
     .enum([
       "noResult",
@@ -188,9 +188,14 @@ export const failureSchema = z.object({
     ),
   message: z.optional(
     textSchema.check(
-      z.maxLength(FAILURE_MESSAGE_MAX_LENGTH),
+      // Zod's length checks count code points, and JSON Schema's `maxLength` characters; neither
+      // bounds the bytes stored.
+      z.refine(
+        (text) => new TextEncoder().encode(text).byteLength <= FAILURE_MESSAGE_MAX_BYTES,
+        `Must be at most ${FAILURE_MESSAGE_MAX_BYTES} bytes of UTF-8`,
+      ),
       z.describe(
-        "What the cause said, where it gave text: the provider's error for `modelFailed`, and what broke for `runFaulted`. At most 4,096 UTF-16 code units.",
+        "What the cause said, where it gave text: the provider's error for `modelFailed`, and what broke for `runFaulted`. At most 4,096 bytes of UTF-8.",
       ),
     ),
   ),

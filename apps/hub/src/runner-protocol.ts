@@ -97,7 +97,10 @@ interface ReportRow {
   status: JobStatus | null;
   startedAt: string | null;
   endedAt: string | null;
-  /** Why the job failed, and what its cause said; null unless it failed, and without text. */
+  /**
+   * Why the job failed, null unless it did, and what the cause said, null too when the cause gave no
+   * text.
+   */
   failureReason: JobFailureReason | null;
   failureMessage: string | null;
   /** The result, absent unless the report carries a success; `null` is itself a result. */

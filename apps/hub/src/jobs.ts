@@ -86,9 +86,10 @@ const JOB_COLUMNS = [
 const PROGRESS_COLUMNS = ["totalTokens", "costUsd", "activity"] as const;
 
 /**
- * A job as the API reports it: its result only once it has succeeded, its activity only while it
- * runs, and a control only while it waits for the job's Runner. The report of a run's start carries
- * its first activity, so a job running again never shows the last run's.
+ * A job as the API reports it: its result only once it has succeeded and its failure once it has
+ * failed, its activity only while it runs, and a control only while it waits for the job's Runner.
+ * The report of a run's start carries its first activity, so a job running again never shows the
+ * last run's.
  */
 function toApiJob(
   job: Pick<JobRow, (typeof JOB_COLUMNS)[number]> &
@@ -130,7 +131,7 @@ function withOutcome(
     status: JobStatus;
     result?: JobRow["result"];
     failureReason: JobFailureReason | null;
-    failureMessage?: string | null;
+    failureMessage: string | null;
   },
 ): Job {
   const { status, result, failureReason, failureMessage } = outcome;
@@ -145,9 +146,7 @@ function withOutcome(
         status,
         failure: {
           reason: failureReason,
-          ...(failureMessage === null || failureMessage === undefined
-            ? {}
-            : { message: failureMessage }),
+          ...(failureMessage === null ? {} : { message: failureMessage }),
         },
       };
     default:
@@ -958,7 +957,8 @@ function toDeletedJob(
         ? { pendingControl: { type: "delete", requestedAt: deletionRequestedAt } }
         : {}),
     },
-    { status: snapshot.status, failureReason: snapshot.failureReason },
+    // A deleted job's message went with its content.
+    { status: snapshot.status, failureReason: snapshot.failureReason, failureMessage: null },
   );
 }
 
