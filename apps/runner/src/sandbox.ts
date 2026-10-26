@@ -110,6 +110,26 @@ const SECCOMP_HELPERS = fileURLToPath(
  */
 const KEPT_VARIABLES = ["PATH", "SHELL", "LOGNAME", "USER", "LANG", "LANGUAGE", "TZ"];
 
+/**
+ * The `oom_score_adj` of every job's processes on Linux: the most a process can have, so that when
+ * the host runs out of memory the kernel kills a job's process rather than the Runner, which holds
+ * every job. The kernel picks the process with the most memory once this score is added, in
+ * thousandths of the host's memory, so at a lower score the Runner, the largest process, could
+ * still be picked: at 500 against a user service's 200, whenever it held 30% of the host's memory
+ * more than a job's largest process; at 1000, only past 80%. A job survives losing a process, as
+ * when it goes over its own limit. The score is set as the daemon starts, before its sandbox, so
+ * everything it starts inherits it; a systemd scope cannot set one (`OOMScoreAdjust=` is a service
+ * setting), and raising a process's own score needs no privilege.
+ */
+const JOB_OOM_SCORE_ADJ = 1000;
+
+/** `command`, run with the score of a job's processes where the platform has one. */
+function withJobOomScore(command: readonly string[]): string[] {
+  return process.platform === "linux"
+    ? ["choom", "-n", String(JOB_OOM_SCORE_ADJ), "--", ...command]
+    : [...command];
+}
+
 /** How the Runner runs every job's sandbox. */
 export interface SandboxSettings {
   /** Folders a job may read besides the system's, such as tools installed in a home folder. */
@@ -141,10 +161,11 @@ export interface JobEnvironments {
   /** Why jobs run without a memory cap, if they do. */
   uncappedBecause: string | undefined;
   /**
-   * Opens the environment of the job whose files are in `workspace` and `temp`: nothing starts
-   * until its first operation, and a daemon lost, as when it ran out of memory, starts again.
+   * Opens the environment of the job `jobId`, whose files are in `workspace` and `temp`: nothing
+   * starts until its first operation, and a daemon lost, as when it ran out of memory, starts
+   * again.
    */
-  open(dirs: JobDirs): JobEnvironment;
+  open(jobId: string, dirs: JobDirs): JobEnvironment;
 }
 
 /** Jobs cannot run in a sandbox on this host, and the operator has not allowed running without one. */
@@ -179,8 +200,9 @@ export function prepareJobEnvironments(
     return {
       unsandboxedBecause,
       uncappedBecause,
-      open: (dirs: JobDirs) =>
+      open: (jobId: string, dirs: JobDirs) =>
         openJobEnvironment({
+          jobId,
           daemon,
           dirs,
           readable,
@@ -243,7 +265,7 @@ function setUpSandboxRuntime(
   return Effect.gen(function* () {
     // Initializing checks for the programs the sandbox needs, but not for AppArmor denying
     // bubblewrap its user namespaces, as on Ubuntu 24.04 and later, so a command proves the sandbox
-    // starts.
+    // starts, with the score every job's daemon starts with.
     yield* Effect.tryPromise({ try: () => initializeSandboxRuntime(), catch: ensureError });
     const scratch = yield* FileSystem.FileSystem.use((fs) =>
       fs.makeTempDirectoryScoped({ prefix: "agent-batch-sandbox-check-" }),
@@ -260,8 +282,9 @@ function setUpSandboxRuntime(
       }),
       () => Effect.sync(() => SandboxManager.cleanupAfterCommand()),
     );
+    const [command, ...args] = withJobOomScore(["/bin/sh", "-c", wrapped]);
     const { failure } = yield* runCommand(
-      ChildProcess.make("/bin/sh", ["-c", wrapped], {
+      ChildProcess.make(command, args, {
         env: { ...keptEnvironment(), AGENT_BATCH_DAEMON: daemon },
       }),
     );
@@ -396,6 +419,7 @@ const START_DAEMON = `export PI_ENV_TOKEN="$3"; exec /bin/sh -c "$0"`;
 const DAEMON_IN_SANDBOX = `token="$PI_ENV_TOKEN"; daemon="$AGENT_BATCH_DAEMON"; export TMPDIR="$AGENT_BATCH_TEMP" HOME="$AGENT_BATCH_TEMP"; unset PI_ENV_TOKEN AGENT_BATCH_DAEMON AGENT_BATCH_TEMP; exec "$daemon" serve --token "$token"`;
 
 function openJobEnvironment(options: {
+  jobId: string;
   daemon: string;
   dirs: JobDirs;
   readable: readonly string[];
@@ -440,7 +464,15 @@ function openJobEnvironment(options: {
         { ...keptEnvironment(), AGENT_BATCH_DAEMON: daemon, AGENT_BATCH_TEMP: dirs.temp },
         (name, value) => `${name}=${value}`,
       );
-      const start = ["env", "-i", ...daemonEnv, "/bin/sh", "-c", START_DAEMON, inner];
+      const start = withJobOomScore([
+        "env",
+        "-i",
+        ...daemonEnv,
+        "/bin/sh",
+        "-c",
+        START_DAEMON,
+        inner,
+      ]);
       if (memoryLimit === undefined) return start;
       scope = `agent-batch-job-${randomUUID()}.scope`;
       return cappedScope(scope, memoryLimit, start);
@@ -448,6 +480,7 @@ function openJobEnvironment(options: {
   });
   const env = new MemoryReportingEnv({
     connection,
+    jobId: options.jobId,
     id: `job:${dirs.workspace}`,
     cwd: dirs.workspace,
     memoryLimit,
@@ -553,23 +586,29 @@ function endingOnAbort<T extends object>(target: T): T {
 }
 
 /**
- * The job's environment, which tells the agent when a command was stopped for using more memory
- * than the job may. A command the kernel stops for that ends with signal 9 like any other kill, so
- * the job's scope's count of such stops (`oom_kill` in its cgroup's `memory.events`) tells them
- * apart.
+ * The job's environment, which tells the agent when a command was stopped for want of memory. A
+ * command the kernel stops for that ends with signal 9 like any other kill, so the job's scope's
+ * counts in its cgroup's `memory.events` tell them apart: `oom_kill` counts the job's processes the
+ * kernel killed for memory, and `oom` the times the job reached its own limit, so a kill without
+ * the latter was the host running short (or a slice above the job reaching its limit). Each kill the
+ * counts show is logged with the job's ID, so operators see a host running short without reading
+ * conversations; a kill between commands is logged once the next command reads the counts.
  */
 class MemoryReportingEnv extends RemoteExecutionEnv {
+  readonly #jobId: string;
   readonly #memoryLimit: string | undefined;
   readonly #scope: () => string | undefined;
 
   constructor(options: {
     connection: Connection;
+    jobId: string;
     id: string;
     cwd: string;
     memoryLimit: string | undefined;
     scope: () => string | undefined;
   }) {
     super({ connection: options.connection, id: options.id, cwd: options.cwd });
+    this.#jobId = options.jobId;
     this.#memoryLimit = options.memoryLimit;
     this.#scope = options.scope;
   }
@@ -582,15 +621,20 @@ class MemoryReportingEnv extends RemoteExecutionEnv {
     if (this.#memoryLimit === undefined) return super.exec(command, options, context);
     // Starts the daemon, and with it the scope, if this is the job's first request.
     await this.connection.session().catch(() => {});
-    const before = await this.#oomKills();
+    const before = await this.#memoryEvents();
+    if (before) this.#logKills(before);
     const result = await super.exec(command, options, context);
-    const after = await this.#oomKills();
+    const after = await this.#memoryEvents();
+    if (after) this.#logKills(after);
     const advice = `Files written to /tmp count against it; write large files to $TMPDIR, which is on disk.`;
-    // The count is the whole job's, and the commands of one round run at once, so the message
-    // names the job, not the command: every command that ended while it rose is told.
-    if (before !== undefined && after !== undefined && after > before) {
+    // The counts are the whole job's, and the commands of one round run at once, so the message
+    // names the job, not the command: every command that ended while they rose is told.
+    if (before && after?.scope === before.scope && after.oomKill > before.oomKill) {
+      const overLimit = after.oom > before.oom;
       options?.onOutput?.(
-        `\nWhile this command ran, a process of this job was stopped because the job's processes went over their ${this.#memoryLimit} of memory; if this command failed, that is likely why. ${advice}\n`,
+        overLimit
+          ? `\nWhile this command ran, a process of this job was stopped because the job's processes went over their ${this.#memoryLimit} of memory; if this command failed, that is likely why. ${advice}\n`
+          : `\nWhile this command ran, a process of this job was stopped because the host ran short of memory, not because of the job's own limit of ${this.#memoryLimit}; if this command failed, that is likely why, and running it again may work.\n`,
         context,
         { stream: "stderr" },
       );
@@ -606,17 +650,54 @@ class MemoryReportingEnv extends RemoteExecutionEnv {
   }
 
   /**
-   * How many processes the kernel has stopped in the job's scope for its memory limit, read from
-   * the cgroup: systemd's own `OOMKills` property needs systemd 259.
+   * The counts of the daemon's latest scope last read, by any command: commands running at once
+   * read them in turn, and each kill is logged by the first read that shows it. A new scope's
+   * counts start at zero.
    */
-  async #oomKills(): Promise<number | undefined> {
+  #seen: MemoryEvents | undefined;
+
+  /** Logs the kills `events` shows since the counts last read. */
+  #logKills(events: MemoryEvents): void {
+    // A read of a scope the daemon has since left is stale.
+    if (events.scope !== this.#scope()) return;
+    const seen =
+      this.#seen?.scope === events.scope ? this.#seen : { scope: events.scope, oom: 0, oomKill: 0 };
+    // The counts only rise, so lower ones are from a read that finished after a later one.
+    if (events.oomKill < seen.oomKill || events.oom < seen.oom) return;
+    this.#seen = events;
+    const kills = events.oomKill - seen.oomKill;
+    if (kills === 0) return;
+    const message =
+      events.oom > seen.oom
+        ? `The kernel killed ${kills} process(es) of a job that went over its ${this.#memoryLimit} of memory`
+        : `The kernel killed ${kills} process(es) of a job because the host ran short of memory`;
+    Effect.runSync(Effect.logWarning(message).pipe(Effect.annotateLogs({ jobId: this.#jobId })));
+  }
+
+  /**
+   * The memory events of the daemon's latest scope, read from its cgroup: systemd's own `OOMKills`
+   * property needs systemd 259, and it has no count of the times the job reached its limit.
+   */
+  async #memoryEvents(): Promise<MemoryEvents | undefined> {
     const scope = this.#scope();
     if (scope === undefined) return undefined;
     const cgroup = await this.#cgroupOf(scope);
     if (cgroup === undefined) return undefined;
     try {
-      const events = await readFile(path.join("/sys/fs/cgroup", cgroup, "memory.events"), "utf8");
-      return Number(/^oom_kill (\d+)$/m.exec(events)?.[1] ?? 0);
+      const read = await readFile(path.join("/sys/fs/cgroup", cgroup, "memory.events"), "utf8");
+      // cgroup v2's flat-keyed format: a key and its value per line. A key the kernel has not
+      // written yet counts as 0.
+      const counts: Record<string, string> = Object.fromEntries(
+        read
+          .trim()
+          .split("\n")
+          .map((line) => line.split(" ")),
+      );
+      return {
+        scope,
+        oom: Number(counts.oom ?? 0),
+        oomKill: Number(counts.oom_kill ?? 0),
+      };
     } catch {
       // The scope has ended, and with it its cgroup.
       return undefined;
@@ -643,4 +724,11 @@ class MemoryReportingEnv extends RemoteExecutionEnv {
     this.#cgroup = { scope, path: cgroup };
     return cgroup;
   }
+}
+
+/** A job's scope's counts in its cgroup's `memory.events`. */
+interface MemoryEvents {
+  scope: string;
+  oom: number;
+  oomKill: number;
 }

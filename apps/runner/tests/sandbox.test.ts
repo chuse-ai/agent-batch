@@ -20,8 +20,9 @@ import {
 // pi-durable's tools reach a job's files and commands only through this environment: pi-env's
 // daemon in the job's sandbox (ADR 0027). So it is held to the cases pi-durable defines for every
 // environment, and to what the sandbox promises a job: its own folders and the system's programs,
-// no network, none of the Runner's variables, no other processes, and a memory limit where systemd
-// can set one.
+// no network, none of the Runner's variables, no other processes, a memory limit where systemd can
+// set one, and on Linux processes the kernel kills before the Runner when the host runs out of
+// memory.
 
 let environments: JobEnvironments;
 beforeAll(async () => {
@@ -40,7 +41,7 @@ async function withJob(
   const dir = await mkdtemp(path.join(tmpdir(), "job-"));
   const dirs = { dir, workspace: path.join(dir, "workspace"), temp: path.join(dir, "tmp") };
   await mkdir(dirs.workspace);
-  const job = environments.open(dirs);
+  const job = environments.open(path.basename(dir), dirs);
   try {
     await use(job, dirs);
   } finally {
@@ -207,6 +208,15 @@ it("aborting or timing out a command stops it without touching another job's, an
       await expect.poll(sleeping).toBe(false);
     }),
   ));
+
+it("a job's processes are the kernel's choice over the Runner when the host runs out of memory", async (test) => {
+  if (process.platform !== "linux") test.skip(`${process.platform} has no OOM scores`);
+  await withJob(async (job) => {
+    const { output } = await run(job, "cat /proc/self/oom_score_adj");
+    const runners = Number(await readFile("/proc/self/oom_score_adj", "utf8"));
+    expect(Number(output)).toBeGreaterThan(runners);
+  });
+});
 
 it("a command that goes over the job's memory limit is stopped and the agent told, and the job carries on", async (test) => {
   if (environments.uncappedBecause) test.skip(environments.uncappedBecause);
