@@ -40,9 +40,14 @@ async function submitStalledJob(client: HubClient, limits: { runTimeoutSeconds?:
   await expect
     .poll(async () => (await client.jobs.get({ id })).activity?.[0]?.tools, { timeout: 10_000 })
     .toMatchObject([{ name: "submit_result", status: "running" }]);
+  // `pgrep` exits with 1 when nothing matches; any other failure tells nothing.
   const sleeping = () =>
-    new Promise<boolean>((resolve) =>
-      execFile("pgrep", ["-f", `^sleep ${seconds}$`], (error) => resolve(error === null)),
+    new Promise<boolean>((resolve, reject) =>
+      execFile("pgrep", ["-f", `^sleep ${seconds}$`], (error) => {
+        if (error === null) resolve(true);
+        else if (error.code === 1) resolve(false);
+        else reject(error);
+      }),
     );
   expect(await sleeping()).toBe(true);
   return { id, sleeping };
