@@ -11,6 +11,7 @@ import {
   intentSchema,
   isoDate,
   jobEndingSchema,
+  type JobFailure,
   jobFailureSchema,
   jobOpeningSchema,
   jobReportSchema,
@@ -31,7 +32,13 @@ import { jsonArrayFrom, jsonBuildObject } from "kysely/helpers/postgres";
 import * as z from "zod/mini";
 
 import { Db, DB_SCHEMA } from "./db/database.ts";
-import { type Database, JobId, type JobReason, type JobStatus, type RunnerId } from "./db/types.ts";
+import {
+  type Database,
+  JobId,
+  type JobFailureReason,
+  type JobStatus,
+  type RunnerId,
+} from "./db/types.ts";
 import {
   FINAL_STATUSES,
   insertUsageRecords,
@@ -90,8 +97,9 @@ interface ReportRow {
   status: JobStatus | null;
   startedAt: string | null;
   endedAt: string | null;
-  /** Why the job failed, when a limit stopped it; null otherwise. */
-  reason: JobReason | null;
+  /** Why the job failed, and what its cause said; null unless it failed, and without text. */
+  failureReason: JobFailureReason | null;
+  failureMessage: string | null;
   /** The result, absent unless the report carries a success; `null` is itself a result. */
   result?: JsonValue;
   /**
@@ -129,18 +137,40 @@ const ENDS: ReadonlyMap<string, JobStatus> = new Map([
  * end, one kind per outcome, makes it succeeded, with its result, failed or cancelled. Each
  * applies with the events that carry it, so a job pauses or ends only once every entry before it is
  * stored, and a hub that loses one loses those events too and is sent both again. A job that failed
- * without its journal recording an end says so in `failedAt`. A job its Runner never started has no
+ * without its journal recording an end says so in `failure`. A job its Runner never started has no
  * journal, so its pause or cancel arrives with no events at the start of the journal; the hub holds
  * or ends the job itself, at `now`.
  */
 function lifecycleOf(
   report: JobReport,
   now: Date,
-): Pick<ReportRow, "status" | "startedAt" | "endedAt" | "reason" | "result" | "neverStarted"> {
+): Pick<
+  ReportRow,
+  | "status"
+  | "startedAt"
+  | "endedAt"
+  | "failureReason"
+  | "failureMessage"
+  | "result"
+  | "neverStarted"
+> {
   const records = report.events.flatMap((event) => (event.type === "entry" ? [event.record] : []));
   const started = records.find((record) => record.kind === JOB_STARTED);
   const startedAt = started ? isoDate(z.parse(jobOpeningSchema, started.data).timestamp) : null;
-  const base = { startedAt, endedAt: null, reason: null, neverStarted: false };
+  const base = {
+    startedAt,
+    endedAt: null,
+    failureReason: null,
+    failureMessage: null,
+    neverStarted: false,
+  };
+  const failed = ({ timestamp, reason, message }: JobFailure) => ({
+    ...base,
+    status: "failed" as const,
+    endedAt: isoDate(timestamp),
+    failureReason: reason,
+    failureMessage: message ?? null,
+  });
   const end = records.find((record) => ENDS.has(record.kind));
   const status = end && ENDS.get(end.kind);
   if (end && status) {
@@ -149,19 +179,14 @@ function lifecycleOf(
       const { timestamp, result } = z.parse(jobSuccessSchema, end.data);
       return { ...ended, endedAt: isoDate(timestamp), result };
     }
-    if (status === "failed") {
-      const { timestamp, reason } = z.parse(jobFailureSchema, end.data);
-      return { ...ended, endedAt: isoDate(timestamp), reason: reason ?? null };
-    }
+    if (status === "failed") return failed(z.parse(jobFailureSchema, end.data));
     return { ...ended, endedAt: isoDate(z.parse(jobEndingSchema, end.data).timestamp) };
   }
   const pause = records.find((record) => record.kind === JOB_PAUSED);
   if (pause) {
     return { ...base, status: "paused" };
   }
-  if (report.failedAt) {
-    return { ...base, status: "failed", endedAt: report.failedAt };
-  }
+  if (report.failure) return failed(report.failure);
   if (
     (report.intent === "pause" || report.intent === "cancel") &&
     report.position === 0 &&
@@ -203,7 +228,7 @@ function jsonRows<Row extends object>(eb: ExpressionBuilder<Database, never>, ro
  */
 function applyReports(runnerId: RunnerId, reports: JobReport[]) {
   const jobStatus = sql.id(DB_SCHEMA, "jobStatus");
-  const jobReason = sql.id(DB_SCHEMA, "jobReason");
+  const jobFailureReason = sql.id(DB_SCHEMA, "jobFailureReason");
   const now = new Date();
   return Db.use((database) =>
     database.query(async (db) => {
@@ -232,7 +257,10 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
                   eb.cast<JobStatus | null>(field("status"), jobStatus).as("status"),
                   eb.cast<Date | null>(field("startedAt"), "timestamptz").as("startedAt"),
                   eb.cast<Date | null>(field("endedAt"), "timestamptz").as("endedAt"),
-                  eb.cast<JobReason | null>(field("reason"), jobReason).as("reason"),
+                  eb
+                    .cast<JobFailureReason | null>(field("failureReason"), jobFailureReason)
+                    .as("failureReason"),
+                  eb.cast<string | null>(field("failureMessage"), "text").as("failureMessage"),
                   json("result").as("result"),
                   eb.cast<boolean>(field("neverStarted"), "boolean").as("neverStarted"),
                 ];
@@ -387,7 +415,8 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
                 "status",
                 "startedAt",
                 "endedAt",
-                "reason",
+                "failureReason",
+                "failureMessage",
                 "result",
                 "neverStarted",
                 "nextTotalTokens",
@@ -429,12 +458,8 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
                     .then(eb.val(now))
                     .else(eb.ref("r.endedAt"))
                     .end(),
-                  reason: eb
-                    .case()
-                    .when(cancelledOnPause)
-                    .then(eb.lit(null))
-                    .else(eb.ref("r.reason"))
-                    .end(),
+                  failureReason: eb.ref("r.failureReason"),
+                  failureMessage: eb.ref("r.failureMessage"),
                   result: eb.ref("r.result"),
                   pendingControl: unlessSettled(eb.ref("j.pendingControl")),
                   pendingControlRequestedAt: unlessSettled(eb.ref("j.pendingControlRequestedAt")),

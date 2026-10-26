@@ -7,7 +7,7 @@ import type { ColumnType, Selectable, Insertable, Updateable } from "kysely";
 
 import type { ApikeyId } from "./Apikey.js";
 import type { default as JobControl } from "./JobControl.js";
-import type { default as JobReason } from "./JobReason.js";
+import type { default as JobFailureReason } from "./JobFailureReason.js";
 import type { default as JobStatus } from "./JobStatus.js";
 import type { MemberId } from "./Member.js";
 import type { OrganizationId } from "./Organization.js";
@@ -56,7 +56,13 @@ export default interface JobTable {
 
   pendingControlRequestedAt: ColumnType<Date | null, Date | string | null, Date | string | null>;
 
-  reason: ColumnType<JobReason | null, JobReason | null, JobReason | null>;
+  failureReason: ColumnType<
+    JobFailureReason | null,
+    JobFailureReason | null,
+    JobFailureReason | null
+  >;
+
+  failureMessage: ColumnType<string | null, string | null, string | null>;
 
   recordedTotalTokens: ColumnType<number, number | undefined, number>;
 

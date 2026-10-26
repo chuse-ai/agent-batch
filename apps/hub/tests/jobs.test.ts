@@ -52,7 +52,6 @@ test("a submitted job answers 201 and reads back as queued, with a key or a memb
     createdAt: expect.any(String),
     startedAt: null,
     endedAt: null,
-    reason: null,
     usage: unused,
     ...limits,
   });
@@ -63,7 +62,6 @@ test("a submitted job answers 201 and reads back as queued, with a key or a memb
     createdAt: new Date(job.createdAt),
     startedAt: null,
     endedAt: null,
-    reason: null,
     usage: unused,
     ...limits,
   };

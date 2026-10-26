@@ -13,7 +13,7 @@ import {
   runTimeoutSecondsSchema,
 } from "./job.ts";
 import { PROBLEM_DETAILS_CONTENT_TYPE } from "./problem-details.ts";
-import { jobActivitySchema, jobEventSchema, limitReasonSchema } from "./runner-protocol.ts";
+import { failureSchema, jobActivitySchema, jobEventSchema } from "./runner-protocol.ts";
 
 export * from "./problem-details.ts";
 export * from "./json-rpc.ts";
@@ -97,73 +97,82 @@ export const FINAL_JOB_STATUSES: readonly JobStatus[] = ["succeeded", "failed", 
 /** Any JSON value, such as a job's result: what its Result contract's schema accepts. */
 export type { JsonValue } from "type-fest";
 
-/** A job as the hub reports it. */
-export const jobSchema = z
-  .object({
-    id: jobIdSchema,
-    status: jobStatusSchema,
-    createdAt: z.date(),
-    /** When the job's agent started on its Runner, once it has. */
-    startedAt: z.nullable(z.date()),
-    /** When the job's agent finished, once it has. */
-    endedAt: z.nullable(z.date()),
-    /**
-     * The job's model usage so far, as pi counts it: every model call of the job's agent and its
-     * sub-agents, including those made inside tools. Zeros until the job runs.
-     */
-    usage: z.object({
-      /** Tokens of every kind, summed; cached input counts each time a model call reads it. */
-      totalTokens: z.int(),
-      cost: z.object({
-        /** pi's estimate at the models' prices, in US dollars. */
-        totalUsd: z.number(),
-      }),
+/** What a job reports whatever its status. */
+const jobBaseShape = {
+  id: jobIdSchema,
+  createdAt: z.date(),
+  /** When the job's agent started on its Runner, once it has. */
+  startedAt: z.nullable(z.date()),
+  /** When the job's agent finished, once it has. */
+  endedAt: z.nullable(z.date()),
+  /**
+   * The job's model usage so far, as pi counts it: every model call of the job's agent and its
+   * sub-agents, including those made inside tools. Zeros until the job runs.
+   */
+  usage: z.object({
+    /** Tokens of every kind, summed; cached input counts each time a model call reads it. */
+    totalTokens: z.int(),
+    cost: z.object({
+      /** pi's estimate at the models' prices, in US dollars. */
+      totalUsd: z.number(),
     }),
-    /**
-     * How long the job may work each time it runs on a Runner, in seconds: counted from when its
-     * agent starts there, so time queued, paused or waiting for a Runner counts nothing, and started
-     * afresh by a resume and by its Runner's restart. Past it, the job fails with `runTimedOut`.
-     * Absent once the job is deleted, as its content is.
-     */
-    runTimeoutSeconds: z.optional(z.int()),
-    /**
-     * The most the job's model calls may cost over its whole life, in US dollars, compared with
-     * `usage.cost.totalUsd` before each model call. Once the cost reaches it, the job fails with
-     * `modelBudgetExceeded`; the call in progress completes, so the cost usually ends a little past
-     * it. Absent once the job is deleted, as its content is.
-     */
-    modelBudgetUsd: z.optional(modelBudgetUsdSchema),
-    /**
-     * What the job is doing, for each of its conversations doing anything, as its Runner last
-     * reported: present only while the job runs, and empty between steps.
-     */
-    activity: z.optional(jobActivitySchema),
-    /** The job's result, once it has succeeded. */
-    result: z.optional(z.unknown()),
-    /**
-     * Why the job is in its status, given only where the status has more than one cause: once it
-     * has failed, `runnerRemoved` when its Runner was removed before it ended, `runTimedOut` when a
-     * run went past its `runTimeoutSeconds`, `modelBudgetExceeded` when its model calls' cost
-     * reached `modelBudgetUsd`; else null, as for an agent that stopped without a result. Only a
-     * caller pauses or cancels a job, so `paused` and `cancelled` carry none.
-     */
-    reason: z.nullable(z.enum(["runnerRemoved", ...limitReasonSchema.options])),
-    /**
-     * A control the job's Runner has not yet acted on, beside the last `status` it confirmed: present
-     * only while it waits. A pause or cancel waits for a job its Runner may be running, until
-     * the Runner stops the job, which is then `paused` or ends `cancelled`, or the job ends first,
-     * with its own status and result. A cancel replaces a waiting pause. A delete waits for the job's
-     * Runner to delete its files from its host.
-     */
-    pendingControl: z.optional(
-      z.object({ type: z.enum(["pause", "cancel", "delete"]), requestedAt: z.date() }),
-    ),
-    /**
-     * When the job was deleted, present only while its Runner still deletes its files: the job reads
-     * without its content, and as not found once they are gone.
-     */
-    deletedAt: z.optional(z.date()),
-  })
+  }),
+  /**
+   * How long the job may work each time it runs on a Runner, in seconds: counted from when its
+   * agent starts there, so time queued, paused or waiting for a Runner counts nothing, and started
+   * afresh by a resume and by its Runner's restart. Past it, the job fails with `runTimedOut`.
+   * Absent once the job is deleted, as its content is.
+   */
+  runTimeoutSeconds: z.optional(z.int()),
+  /**
+   * The most the job's model calls may cost over its whole life, in US dollars, compared with
+   * `usage.cost.totalUsd` before each model call. Once the cost reaches it, the job fails with
+   * `modelBudgetExceeded`; the call in progress completes, so the cost usually ends a little past
+   * it. Absent once the job is deleted, as its content is.
+   */
+  modelBudgetUsd: z.optional(modelBudgetUsdSchema),
+  /**
+   * What the job is doing, for each of its conversations doing anything, as its Runner last
+   * reported: present only while the job runs, and empty between steps.
+   */
+  activity: z.optional(jobActivitySchema),
+  /**
+   * A control the job's Runner has not yet acted on, beside the last `status` it confirmed: present
+   * only while it waits. A pause or cancel waits for a job its Runner may be running, until
+   * the Runner stops the job, which is then `paused` or ends `cancelled`, or the job ends first,
+   * with its own status and result. A cancel replaces a waiting pause. A delete waits for the job's
+   * Runner to delete its files from its host.
+   */
+  pendingControl: z.optional(
+    z.object({ type: z.enum(["pause", "cancel", "delete"]), requestedAt: z.date() }),
+  ),
+  /**
+   * When the job was deleted, present only while its Runner still deletes its files: the job reads
+   * without its content, and as not found once they are gone.
+   */
+  deletedAt: z.optional(z.date()),
+};
+
+/**
+ * A job as the hub reports it: once it has succeeded, with its `result`, and once it has failed,
+ * with its `failure`. Only a caller pauses or cancels a job, so the other statuses carry neither.
+ */
+export const jobSchema = z
+  .discriminatedUnion("status", [
+    z.object({ ...jobBaseShape, status: z.enum(["queued", "running", "paused", "cancelled"]) }),
+    z.object({
+      ...jobBaseShape,
+      status: z.literal("succeeded"),
+      /** The job's result. Absent once the job is deleted, as its content is. */
+      result: z.optional(z.unknown()),
+    }),
+    z.object({
+      ...jobBaseShape,
+      status: z.literal("failed"),
+      /** Why the job failed. Its message is absent once the job is deleted, as its content is. */
+      failure: failureSchema,
+    }),
+  ])
   .register(z.globalRegistry, { id: "Job" });
 export type Job = z.infer<typeof jobSchema>;
 

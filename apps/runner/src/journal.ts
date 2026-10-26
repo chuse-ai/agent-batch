@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-durable";
 import {
   type ConversationActivity,
+  FAILURE_MESSAGE_MAX_LENGTH,
   isoDate,
   JOB_CANCELLED,
   JOB_FAILED,
@@ -72,8 +73,8 @@ export const JobPaused = defineEntry<JobPause>(JOB_PAUSED);
 export const JobSucceeded = defineEntry<JobSuccess>(JOB_SUCCEEDED);
 
 /**
- * Written once per run, as its closing, when the job's agent stopped without a result, or a limit
- * stopped it, which it names.
+ * Written once per run, as its closing, when the job's agent stopped without a result, a limit
+ * stopped it or its run failed, with why.
  */
 export const JobFailed = defineEntry<JobFailure>(JOB_FAILED);
 
@@ -292,6 +293,14 @@ export async function readActivity(
     });
   }
   return { activity, seen: seenNow };
+}
+
+/**
+ * `text` as a failure's message: Unicode text without NUL (`textSchema`), which the hub stores, cut
+ * to `FAILURE_MESSAGE_MAX_LENGTH`, since a provider's error can be a whole page.
+ */
+export function failureMessage(text: string): string {
+  return text.replaceAll("\0", "").slice(0, FAILURE_MESSAGE_MAX_LENGTH).toWellFormed();
 }
 
 /**

@@ -11,8 +11,9 @@ import type WebSocket from "ws";
 import { startSystem } from "./harness.ts";
 
 // A Runner's report carries every job it holds, so the hub reads each job's on its own: one it
-// cannot apply is refused alone, and the Runner's other jobs keep reporting. No Runner of
-// the system's runs, so the jobs are placed on a socket that speaks the protocol directly.
+// cannot apply is refused alone, and the Runner's other jobs keep reporting. A failure the job's
+// journal could not record travels beside its events. No Runner of the system's runs, so the jobs
+// are placed on a socket that speaks the protocol directly.
 
 const system = startSystem();
 
@@ -119,5 +120,37 @@ test.each([
   ]);
   expect(await client.jobs.get({ id: good.id })).toMatchObject({ status: "succeeded", result });
   expect((await client.jobs.get({ id: bad.id })).status).toBe("queued");
+  socket.close(1000);
+});
+
+test("a failure the job's journal did not record fails the job with its reason and message", async () => {
+  const client = await system.clientWithNewJobsKey();
+  const { id } = await client.jobs.submit(SUBMISSION);
+  const { socket } = await system.connectRunner();
+  const runner = protocolClient(socket, undefined);
+  const { runs } = await runner.request("sync", { held: [], free: 1 }, 10_000);
+  const held = runs.map(({ jobId, runId }) => ({ jobId, runId }));
+  const failure = {
+    timestamp: Date.now(),
+    reason: "runFaulted" as const,
+    message: "The job's journal could not be opened",
+  };
+
+  await runner.request(
+    "report",
+    {
+      held,
+      free: 0,
+      deleted: [],
+      jobs: held.map((run) => ({ ...run, intent: "run", position: 0, events: [], failure })),
+    },
+    10_000,
+  );
+
+  expect(await client.jobs.get({ id })).toMatchObject({
+    status: "failed",
+    endedAt: new Date(failure.timestamp),
+    failure: { reason: "runFaulted", message: failure.message },
+  });
   socket.close(1000);
 });

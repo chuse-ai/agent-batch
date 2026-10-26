@@ -82,6 +82,11 @@ export function reply(prose: string) {
   return fauxAssistantMessage(fauxText(prose));
 }
 
+/** The model's provider failing the call with `message`, as it reports an error. */
+export function providerError(message: string) {
+  return fauxAssistantMessage([], { stopReason: "error", errorMessage: message });
+}
+
 /** A model call that ends only when the Runner aborts it, as a provider's request does. */
 export const untilAborted: FauxResponseFactory = async (_context, options) => {
   if (options?.signal) await once(options.signal, "abort");

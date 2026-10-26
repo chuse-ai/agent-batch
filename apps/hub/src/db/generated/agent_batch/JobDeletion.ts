@@ -5,7 +5,7 @@ import type { Brand } from "effect";
 import type { ColumnType, Selectable, Insertable, Updateable } from "kysely";
 
 import type { JobId } from "./Job.js";
-import type { default as JobReason } from "./JobReason.js";
+import type { default as JobFailureReason } from "./JobFailureReason.js";
 import type { default as JobStatus } from "./JobStatus.js";
 import type { OrganizationId } from "./Organization.js";
 import type { RunnerId } from "./Runner.js";
@@ -28,7 +28,11 @@ export default interface JobDeletionTable {
 
   status: ColumnType<JobStatus, JobStatus, JobStatus>;
 
-  reason: ColumnType<JobReason | null, JobReason | null, JobReason | null>;
+  failureReason: ColumnType<
+    JobFailureReason | null,
+    JobFailureReason | null,
+    JobFailureReason | null
+  >;
 
   createdAt: ColumnType<Date, Date | string, Date | string>;
 

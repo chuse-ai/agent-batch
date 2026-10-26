@@ -15,12 +15,13 @@ import {
   Harness,
   hook,
   ROOT_CONVERSATION_ID,
+  type SettledSubmissionRecord,
   type Submission,
   type UsageState,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { type Intent, type JobContent, jsonTextSchema, type Run } from "contract";
+import { type Failure, type Intent, type JobContent, jsonTextSchema, type Run } from "contract";
 import {
   Duration,
   Effect,
@@ -39,6 +40,7 @@ import * as z from "zod/mini";
 import {
   appendUnderRequest,
   closingRequest,
+  failureMessage,
   JobCancelled,
   JobFailed,
   JobPaused,
@@ -423,19 +425,20 @@ export function openJob(
       if (closed) return;
       const answered = Effect.promise(async () => {
         const submission = await submitInput();
-        await submission.wait(context);
+        return submission.wait(context);
       });
       // Once the job has finished, pi has failed or a limit is reached, all of its work stops. An
       // interrupt leaves the work pending instead. A limit stops the job as its own end does,
       // not as a pause does: the work it cut off is aborted and settled, and the job fails naming
       // the limit, unless the agent's result was accepted meanwhile. The timeout counts from here,
-      // so time spent waiting for a slot or while the Runner was down counts nothing.
-      const exceeded = yield* Effect.raceAllFirst([
-        answered.pipe(Effect.as(undefined)),
+      // so time spent waiting for a slot or while the Runner was down counts nothing. Each gives
+      // why the job failed, should its agent have no accepted result.
+      const failure: Failure = yield* Effect.raceAllFirst([
+        answered.pipe(Effect.map(failureOf)),
         Effect.sleep(Duration.seconds(options.runTimeoutSeconds)).pipe(
-          Effect.as("runTimedOut" as const),
+          Effect.as({ reason: "runTimedOut" } as const),
         ),
-        overBudget.await.pipe(Effect.as("modelBudgetExceeded" as const)),
+        overBudget.await.pipe(Effect.as({ reason: "modelBudgetExceeded" } as const)),
       ]).pipe(
         Effect.onExitIf(
           (exit) => !Exit.hasInterrupts(exit),
@@ -452,10 +455,7 @@ export function openJob(
       const timestamp = Date.now();
       yield* Effect.promise(() =>
         result === undefined
-          ? submitClosing(root, options.runId, JobFailed, {
-              timestamp,
-              ...(exceeded === undefined ? {} : { reason: exceeded }),
-            })
+          ? submitClosing(root, options.runId, JobFailed, { timestamp, ...failure })
           : submitClosing(root, options.runId, JobSucceeded, { timestamp, result }),
       );
     }).pipe(
@@ -469,6 +469,29 @@ export function openJob(
     );
     return runAgent;
   });
+}
+
+/**
+ * Why a job whose agent stopped without an accepted result failed, from how pi settled the input
+ * its run answered: `noResult` when the agent answered it; `modelFailed` for pi's `model_error`,
+ * which a compaction the model call needed also gives, with the provider's text; and `runFaulted`
+ * for any other reason, with pi's reason and text.
+ */
+function failureOf(settled: SettledSubmissionRecord): Failure {
+  if (settled.status === "done") return { reason: "noResult" };
+  const { reason, detail } = settled;
+  const text =
+    detail === undefined ? undefined : typeof detail === "string" ? detail : JSON.stringify(detail);
+  if (reason === "model_error") {
+    return {
+      reason: "modelFailed",
+      ...(text === undefined ? {} : { message: failureMessage(text) }),
+    };
+  }
+  return {
+    reason: "runFaulted",
+    message: failureMessage(text === undefined ? reason : `${reason}: ${text}`),
+  };
 }
 
 /** A job's cost so far, in US dollars: every model's and every tool's, as the hub adds them up. */

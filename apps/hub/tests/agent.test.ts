@@ -5,7 +5,7 @@ import type { JobSubmission } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 import { startSystem } from "./harness.ts";
-import { callTool, lastToolResult, reply, untilAborted } from "./scripted-model.ts";
+import { callTool, lastToolResult, providerError, reply, untilAborted } from "./scripted-model.ts";
 
 // What a job's agent works with and how it ends the job, driven by a scripted model: the Input files
 // in its Workspace, and `submit_result`, which takes only a result matching the Result contract.
@@ -105,7 +105,20 @@ test("a result nested too deeply goes back to the agent, which submits one at th
 test("an agent that stops without an accepted result fails the job", async () => {
   system.model.setResponses([reply("The quarter went well.")]);
 
-  expect((await runJob(SUBMISSION)).status).toBe("failed");
+  expect(await runJob(SUBMISSION)).toEqual(
+    expect.objectContaining({ status: "failed", failure: { reason: "noResult" } }),
+  );
+});
+
+test("a model call its provider refuses fails the job with the provider's error", async () => {
+  // Text that matches none of pi-ai's retry patterns, as a gateway's refusal did.
+  const error = "gateway_concurrency_limit: Concurrency limit reached for this key";
+  system.model.setResponses([providerError(error)]);
+
+  expect(await runJob(SUBMISSION)).toMatchObject({
+    status: "failed",
+    failure: { reason: "modelFailed", message: expect.stringContaining(error) },
+  });
 });
 
 test("reading a running job shows its model call, then its running tool call, and an ended job shows no activity", async () => {

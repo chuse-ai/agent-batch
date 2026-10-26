@@ -50,7 +50,7 @@ test("a job whose run passes its timeout fails, and a resume with a longer one c
   const { id } = await client.jobs.submit({ ...SUBMISSION, runTimeoutSeconds: 1 });
   await untilStatus(client, id, "failed");
   expect(await client.jobs.get({ id })).toMatchObject({
-    reason: "runTimedOut",
+    failure: { reason: "runTimedOut" },
     runTimeoutSeconds: 1,
   });
 
@@ -60,7 +60,9 @@ test("a job whose run passes its timeout fails, and a resume with a longer one c
     runTimeoutSeconds: 10 * 60,
   });
   await untilStatus(client, id, "succeeded");
-  expect(await client.jobs.get({ id })).toMatchObject({ reason: null, result: 1_000_000 });
+  const succeeded = await client.jobs.get({ id });
+  expect(succeeded).toMatchObject({ result: 1_000_000 });
+  expect(succeeded).not.toHaveProperty("failure");
 });
 
 test("a resume repeating a running job's limits returns it, and one changing them is refused", async () => {
@@ -84,7 +86,7 @@ test("a job whose model cost reaches its budget fails, and only a higher budget 
   const { id } = await client.jobs.submit({ ...SUBMISSION, modelBudgetUsd: 0.000001 });
   await untilStatus(client, id, "failed");
   const failed = await client.jobs.get({ id });
-  expect(failed.reason).toBe("modelBudgetExceeded");
+  expect(failed).toMatchObject({ failure: { reason: "modelBudgetExceeded" } });
   expect(failed.usage.cost.totalUsd).toBeGreaterThan(0.000001);
 
   await expect(client.jobs.resume({ id })).rejects.toMatchObject({ code: "CONFLICT" });

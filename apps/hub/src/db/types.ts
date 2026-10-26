@@ -14,7 +14,7 @@ export type { Job as JobRow, JobUpdate } from "./generated/agent_batch/Job.ts";
 export type { JobProgress as JobProgressRow } from "./generated/agent_batch/JobProgress.ts";
 export type { default as JobStatus } from "./generated/agent_batch/JobStatus.ts";
 export type { default as JobControl } from "./generated/agent_batch/JobControl.ts";
-export type { default as JobReason } from "./generated/agent_batch/JobReason.ts";
+export type { default as JobFailureReason } from "./generated/agent_batch/JobFailureReason.ts";
 export type { JobDeletion as JobDeletionRow } from "./generated/agent_batch/JobDeletion.ts";
 
 // Each ID type with its constructor under the same name, as Effect brands are declared. A string

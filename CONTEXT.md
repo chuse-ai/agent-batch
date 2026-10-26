@@ -19,7 +19,7 @@ A named, revocable credential owned by the organization that a service uses to c
 One self-contained piece of agent work: a prompt, its input files, and a result contract. It succeeds at most once, unattended, possibly over several runs; a caller may pause, resume or cancel it. Its agent works in conversations, pi's records within the job.
 
 **Job status**:
-Where a job is in its life: queued, running, paused, succeeded, failed or cancelled. Succeeded, failed and cancelled are final; a paused, failed or cancelled job that started can be resumed while its journal exists. A running job whose Runner restarts stays running: it is recovered from its journal and carries on where it left off; it is not resumed. Where a status has more than one cause, the job's reason says which. Status is the one word for where a piece of work is in its life, so a job and each of its tool calls have one.
+Where a job is in its life: queued, running, paused, succeeded, failed or cancelled. Succeeded, failed and cancelled are final; a paused, failed or cancelled job that started can be resumed while its journal exists. A running job whose Runner restarts stays running: it is recovered from its journal and carries on where it left off; it is not resumed. Where a status has more than one cause, the job's failure says which. Status is the one word for where a piece of work is in its life, so a job and each of its tool calls have one.
 _Avoid_: phase
 
 **Control**:
