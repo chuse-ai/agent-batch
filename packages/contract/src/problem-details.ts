@@ -82,7 +82,19 @@ export function createProblemDetailsLink<T extends ClientContext>(
       }
       if (response.ok) return response;
       const contentType = parseContentType(response.headers.get("content-type") ?? "");
-      if (contentType.type === "application/problem+json") return response;
+      if (contentType.type === "application/problem+json") {
+        // Read as JSON also for a call whose answer is a file, which oRPC reads by its headers
+        // rather than as the JSON every other call answers: the `standard-server` header is how
+        // oRPC's client is told a body's kind. oRPC itself counts only `application/json` as JSON
+        // (middleapi/orpc#2317).
+        const headers = new Headers(response.headers);
+        headers.set("standard-server", "json");
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      }
       await response.body?.cancel();
       const title = STATUS_CODES[response.status] ?? String(response.status);
       return Response.json(
@@ -90,7 +102,7 @@ export function createProblemDetailsLink<T extends ClientContext>(
         {
           status: response.status,
           statusText: response.statusText,
-          headers: { "content-type": PROBLEM_DETAILS_CONTENT_TYPE },
+          headers: { "content-type": PROBLEM_DETAILS_CONTENT_TYPE, "standard-server": "json" },
         },
       );
     },

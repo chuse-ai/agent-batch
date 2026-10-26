@@ -18,11 +18,13 @@ import ensureError from "ensure-error";
 import {
   type AgentSettings,
   journalExists,
+  jobPaths,
   openJob,
   recordStop,
   deleteJobFiles,
   type Stop,
 } from "./agent.ts";
+import { downloadInputFiles } from "./input-files.ts";
 import { failureMessage, readActivity, readEvents } from "./journal.ts";
 
 // The Runner's jobs: each run the hub gives it runs as one supervised fiber (ADR 0022), and
@@ -50,7 +52,10 @@ interface HeldJob {
   /** The job's journal, from when it opens until the hub drops the run. */
   journal?: Harness;
   /**
-   * Whether the job's journal was known not to exist when this run was about to open it. One that may have existed may hold entries the hub lacks, whether or not it opens.
+   * Whether the job's journal was known not to exist when this run was about to open it. One that
+   * may have existed may hold entries the hub lacks, whether or not it opens. Only a run that knows
+   * it absent downloads the job's Input files, since an existing journal means the agent may have
+   * changed them.
    */
   journalKnownAbsent: boolean;
   /**
@@ -89,7 +94,11 @@ export class JobRunner {
   readonly #held = new Map<string, HeldJob>();
   /** The fiber of each job's latest run, by job ID, until it ends and has closed the job's journal. */
   readonly #fibers = new Map<string, Fiber.Fiber<void>>();
-  /** The jobs this process has started, whose journals it has opened or is opening, by job ID. */
+  /**
+   * The jobs whose journals this process has opened, by job ID: one opened again is not recovered
+   * from a restart. A job whose run stopped before its journal opened, as while its Input files
+   * downloaded, has none, so its next run downloads them.
+   */
   readonly #opened = new Set<string>();
   /** The deletions the hub lists, by job ID, until it stops listing them. */
   readonly #deletions = new Map<string, Deletion>();
@@ -374,8 +383,7 @@ export class JobRunner {
     const forget = () => {
       if (this.#held.get(key) === held) this.#held.delete(key);
     };
-    const openedBefore = this.#opened.has(ref.jobId);
-    if (job) this.#opened.add(ref.jobId);
+    const opened = this.#opened;
     const settings = this.#agent;
     const fibers = this.#fibers;
     const previous = fibers.get(ref.jobId);
@@ -383,8 +391,9 @@ export class JobRunner {
     /** Runs the job, keeping its journal open after it ends, until interrupted. */
     const working = (content: JobContent) =>
       Effect.gen(function* () {
-        // Looked up once the earlier run is done, since it may have created the journal. A journal
+        // Looked up once the earlier run is done, since it may have opened the journal. A journal
         // that cannot be looked up may be there.
+        const openedBefore = opened.has(ref.jobId);
         held.journalKnownAbsent =
           !openedBefore &&
           !(yield* journalExists(settings, ref.jobId).pipe(
@@ -393,6 +402,36 @@ export class JobRunner {
             ),
             Effect.orElseSucceed(() => true),
           ));
+        // A job's Input files are downloaded on its first run, before its journal exists: a journal
+        // that exists means they were, and the agent may have changed them since. The job holds its
+        // slot meanwhile. A download that fails fails the job, as a journal that does not open does.
+        if (held.journalKnownAbsent) {
+          yield* downloadInputFiles(
+            settings.hub,
+            settings.fileSystem,
+            ref.jobId,
+            content.inputFiles,
+            jobPaths(settings.jobsDir, ref.jobId),
+          ).pipe(
+            // The failure is reported until the hub drops the run.
+            Effect.catchTag("InputFileFailed", (error) =>
+              Effect.logError("A job's Input files could not be downloaded", error.message).pipe(
+                Effect.andThen(
+                  Effect.sync(() => {
+                    held.failure = {
+                      timestamp: Date.now(),
+                      reason: "runFaulted",
+                      message: failureMessage(error.message),
+                    };
+                    held.ended = true;
+                    changed();
+                  }),
+                ),
+                Effect.andThen(Effect.never),
+              ),
+            ),
+          );
+        }
         const agent = {
           ...settings,
           runId: ref.runId,
@@ -401,6 +440,7 @@ export class JobRunner {
           openedBefore,
           // Held as soon as it opens, so whatever fails after that is read from the journal.
           journalOpened: (journal: Harness) => {
+            opened.add(ref.jobId);
             held.journal = journal;
           },
         };
@@ -448,6 +488,10 @@ export class JobRunner {
       Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* recordStop(ref.jobId, ref.runId, stop, settings);
+          // A job without a journal never started, and the hub forgets which Runner held it once
+          // told so; but its Input files' download may have written files already, so they go
+          // first. A deletion that fails is tried again with the rest.
+          if (journal === undefined) yield* deleteJobFiles(settings, ref.jobId);
           held.journal = journal;
           held.journalKnownAbsent = journal === undefined;
           held.intent = stop;

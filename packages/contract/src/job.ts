@@ -100,6 +100,27 @@ export const inputFilesSchema = z.record(fileNameSchema, inputFileSchema, {
 });
 
 /**
+ * How many original bytes each chunk of a stored file holds, except its last, which holds the rest:
+ * the hub compresses each chunk as one zstd frame, and a Runner downloads a file a chunk at a time,
+ * so chunk `n` of a file starts at byte `n * INPUT_FILE_CHUNK_BYTES`.
+ */
+export const INPUT_FILE_CHUNK_BYTES = 1024 * 1024;
+
+/** A SHA-256 digest as lowercase hex, as the hub names an Input file's content. */
+export const sha256Schema = z.hash("sha256").check(z.lowercase());
+
+/**
+ * An Input file as the hub lists it to a Runner: its name, and the SHA-256 and size of its original
+ * bytes, which the Runner checks what it downloads against.
+ */
+export const listedInputFileSchema = z.object({
+  name: fileNameSchema,
+  sha256: sha256Schema,
+  originalSizeBytes: z.int().check(z.nonnegative()),
+});
+export type ListedInputFile = z.infer<typeof listedInputFileSchema>;
+
+/**
  * The result a job must produce: a JSON Schema (2020-12 unless `$schema` says otherwise) describing
  * a single value, not a list, and referring to nothing outside itself.
  */

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { isJsonValue, type JsonValue } from "@earendil-works/chord";
@@ -37,6 +37,7 @@ import ensureError from "ensure-error";
 import { compileSchema } from "json-schema-library";
 import * as z from "zod/mini";
 
+import type { HubClient } from "./input-files.ts";
 import {
   appendUnderRequest,
   closingRequest,
@@ -74,6 +75,8 @@ export interface AgentSettings {
   jobsDir: string;
   /** The Runner's file system, where it looks for jobs' journals. */
   fileSystem: FileSystem.FileSystem;
+  /** The hub's API, called with the Runner's own key, which jobs' Input files are downloaded from. */
+  hub: HubClient;
   environments: JobEnvironments;
   models: Models;
   model: AgentModel;
@@ -100,22 +103,24 @@ const AcceptedResult = defineDoc<{ result?: JsonValue }>({
 });
 
 /**
- * Where a job's files are on the Runner: its journal, its Workspace with the Input files, and its
- * temp directory. Absolute, since the agent sees them at these paths.
+ * Where a job's files are on the Runner: its journal, its Workspace with the Input files, its temp
+ * directory, and the Input files while they download. Absolute, since the agent sees them at these
+ * paths.
  */
-function jobPaths(jobsDir: string, jobId: string) {
+export function jobPaths(jobsDir: string, jobId: string) {
   const dir = path.resolve(jobsDir, jobId);
   return {
     dir,
     journal: path.join(dir, "journal.sqlite"),
     workspace: path.join(dir, "workspace"),
     temp: path.join(dir, "tmp"),
+    downloads: path.join(dir, "downloads"),
   };
 }
 
 /**
- * Deletes everything of the job `jobId` on this Runner: its journal, its Workspace and its temp
- * directory. Nothing there and nothing to delete are the same.
+ * Deletes everything of the job `jobId` on this Runner: its journal, its Workspace, its temp
+ * directory and any download. Nothing there and nothing to delete are the same.
  */
 export function deleteJobFiles(
   settings: AgentSettings,
@@ -136,20 +141,6 @@ export function journalExists(
   jobId: string,
 ): Effect.Effect<boolean, PlatformError.PlatformError> {
   return settings.fileSystem.exists(jobPaths(settings.jobsDir, jobId).journal);
-}
-
-/**
- * Writes the Input files into the Workspace's `inputs/` folder, once, as the job's conversation is
- * created: a job recovered after its Runner restarts keeps the agent's edits to them. Their
- * names are flat file names valid on every platform: the contract's schema checked them again
- * when the run reached the Runner, so none leaves the folder.
- */
-async function writeInputFiles(workspace: string, files: JobContent["inputFiles"]) {
-  const inputs = path.join(workspace, "inputs");
-  await mkdir(inputs, { recursive: true });
-  for (const [name, file] of Object.entries(files)) {
-    await writeFile(path.join(inputs, name), file.content);
-  }
 }
 
 /**
@@ -298,8 +289,8 @@ export function openJob(
         ],
       }),
     );
-    // The Workspace exists before its Input files: they are written only when the job's
-    // conversation is created.
+    // A job's first run downloaded its Input files into the Workspace before this; a later one
+    // keeps the agent's edits to them.
     yield* Effect.promise(() => mkdir(paths.workspace, { recursive: true }));
     // The sandbox has a scope of its own, which `runAgent` closes once the agent has stopped, while
     // the journal stays open for reporting. A Runner that stops closes the journal first and the
@@ -350,7 +341,6 @@ export function openJob(
           await appendUnderRequest(tx, conversationId, openingRequest(options.runId), () =>
             tx.appendEntry(JobStarted, conversationId, { data: opening() }),
           );
-          await writeInputFiles(paths.workspace, job.inputFiles);
         },
       }),
     );

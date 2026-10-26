@@ -3,11 +3,14 @@
 import { Brand } from "effect";
 
 import type { ApikeyId as ApikeyIdType } from "./generated/agent_batch/Apikey.ts";
+import type { BlobSha256 as BlobSha256Type } from "./generated/agent_batch/Blob.ts";
 import type { InputFileName as InputFileNameType } from "./generated/agent_batch/InputFile.ts";
 import type { JobId as JobIdType } from "./generated/agent_batch/Job.ts";
 import type { JobEventChunkLastId } from "./generated/agent_batch/JobEventChunk.ts";
 import type { MemberId as MemberIdType } from "./generated/agent_batch/Member.ts";
 import type { RunnerId as RunnerIdType } from "./generated/agent_batch/Runner.ts";
+import type { UploadId as UploadIdType } from "./generated/agent_batch/Upload.ts";
+import type { UploadChunkIndex as UploadChunkIndexType } from "./generated/agent_batch/UploadChunk.ts";
 
 export type { default as Database } from "./generated/Database.ts";
 export type { Job as JobRow, JobUpdate } from "./generated/agent_batch/Job.ts";
@@ -16,11 +19,12 @@ export type { default as JobStatus } from "./generated/agent_batch/JobStatus.ts"
 export type { default as JobControl } from "./generated/agent_batch/JobControl.ts";
 export type { default as JobFailureReason } from "./generated/agent_batch/JobFailureReason.ts";
 export type { JobDeletion as JobDeletionRow } from "./generated/agent_batch/JobDeletion.ts";
+export type { NewUploadChunk } from "./generated/agent_batch/UploadChunk.ts";
 
 // Each ID type with its constructor under the same name, as Effect brands are declared. A string
 // becomes an ID through the constructor, once, where the ID enters the hub (ADR 0020): a new UUID,
-// a key's ID from Better Auth, a Durable Object's name, a file's name. No constructor checks its
-// value yet; `Brand.make` can, once an ID has a format worth checking.
+// a key's ID from Better Auth, a Durable Object's name, a file's name, a hash the hub computed. No
+// constructor checks its value yet; `Brand.make` can, once an ID has a format worth checking.
 export type JobId = JobIdType;
 export const JobId = Brand.nominal<JobId>();
 export type RunnerId = RunnerIdType;
@@ -34,3 +38,11 @@ export const InputFileName = Brand.nominal<InputFileName>();
 /** An event's ID in its job's journal, which a stored row of events is keyed by its last of. */
 export type EventId = JobEventChunkLastId;
 export const EventId = Brand.nominal<EventId>();
+/** Stored content's address: the SHA-256 of its original bytes, as the hub computed it. */
+export type BlobSha256 = BlobSha256Type;
+export const BlobSha256 = Brand.nominal<BlobSha256>();
+export type UploadId = UploadIdType;
+export const UploadId = Brand.nominal<UploadId>();
+/** A chunk's position in its file, from 0. */
+export type UploadChunkIndex = UploadChunkIndexType;
+export const UploadChunkIndex = Brand.nominal<UploadChunkIndex>();

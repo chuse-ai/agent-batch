@@ -1,9 +1,9 @@
 import * as z from "zod/mini";
 
 import {
-  inputFilesSchema,
   jobIdSchema,
   jsonTextSchema,
+  listedInputFileSchema,
   modelBudgetUsdSchema,
   promptSchema,
   resultContractSchema,
@@ -71,10 +71,14 @@ export type RunRef = z.infer<typeof runRefSchema>;
  */
 const positionSchema = z.int().check(z.nonnegative());
 
-/** A job as the Runner needs it to run the job: the submission's content, as submitted. */
+/**
+ * A job as the Runner needs it to run the job: the submission's Prompt and Result contract, and its
+ * Input files by name, SHA-256 and size, never their bytes, which the Runner downloads from the hub
+ * a chunk at a time (`jobs.inputFileChunk`), so an answer stays small whatever the files' size.
+ */
 export const jobContentSchema = z.object({
   prompt: promptSchema,
-  inputFiles: inputFilesSchema,
+  inputFiles: z.array(listedInputFileSchema),
   resultContract: resultContractSchema,
 });
 export type JobContent = z.infer<typeof jobContentSchema>;
