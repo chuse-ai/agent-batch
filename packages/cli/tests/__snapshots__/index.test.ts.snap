@@ -10,44 +10,6 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Registers a new Runner, called with the shared key Runners start with. Returns the Runner's ID and its own key, which the Runner keeps and connects with.",
-          "name": "register",
-          "options": [
-            {
-              "attributeName": "name",
-              "description": "The Runner's name, as the hub lists it.",
-              "flags": "--name <string>",
-              "name": "name",
-              "negate": false,
-              "optional": false,
-              "required": true,
-              "variadic": false,
-            },
-            {
-              "attributeName": "json",
-              "description": "Provide the complete procedure input as JSON - other flags and positional arguments are unavailable when using this option",
-              "flags": "--json <json>",
-              "name": "json",
-              "negate": false,
-              "optional": false,
-              "required": true,
-              "variadic": false,
-            },
-          ],
-          "usage": "[options]",
-        },
-      ],
-      "description": "Available subcommands: register",
-      "name": "runners",
-      "options": [],
-      "usage": "[options] [command]",
-    },
-    {
-      "arguments": [],
-      "commands": [
-        {
-          "arguments": [],
-          "commands": [],
           "description": "Submits a job. The hub checks the Result contract's schema, refusing one that is invalid, describes a list or refers outside itself.",
           "name": "submit",
           "options": [
@@ -376,7 +338,7 @@ exports[`the commands and their flags 1`] = `
       "usage": "[options] [command]",
     },
   ],
-  "description": "Available subcommands: runners, jobs",
+  "description": "Available subcommands: jobs",
   "name": "agent-batch",
   "options": [
     {
