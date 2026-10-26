@@ -14,6 +14,8 @@ export default interface UploadTable {
   id: ColumnType<UploadId, UploadId, UploadId>;
 
   sha256: ColumnType<BlobSha256, BlobSha256, BlobSha256>;
+
+  chunkBytes: ColumnType<number, number, number>;
 }
 
 export type Upload = Selectable<UploadTable>;

@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { constants, zstdCompressSync } from "node:zlib";
 
-import { INPUT_FILE_CHUNK_BYTES, type JobSubmission } from "contract";
+import type { JobSubmission } from "contract";
 import { Effect, Record } from "effect";
 import type { Kysely } from "kysely";
 
@@ -19,7 +19,8 @@ import {
 } from "./db/types.ts";
 
 // Input files' content, stored once by the SHA-256 of its original bytes however many jobs use it,
-// in chunk rows of `INPUT_FILE_CHUNK_BYTES` original bytes, each compressed as one zstd frame. A
+// in chunk rows of a fixed number of original bytes each, recorded with the content and listed to
+// the Runner, each compressed as one zstd frame. A
 // Runner reads a file a chunk at a time, so serving a file holds no more than a chunk on either
 // side, and a sync's answer names the files without their bytes.
 //
@@ -27,6 +28,13 @@ import {
 // same content lock its row, so whichever comes second sees what the first did: a submission waits
 // for the deletion and stores the content again, and a deletion that waits for a submission finds
 // the content used and keeps it.
+
+/**
+ * The original bytes in each chunk of new content but its last. Each request for a chunk costs CPU
+ * for one chunk's frame, so this bounds the CPU of a request on any plan; content already stored
+ * keeps the size it was stored with.
+ */
+const CHUNK_BYTES = 1024 * 1024;
 
 /** zstd's own default level: as small as gzip's or much smaller, for a fraction of its CPU time. */
 const ZSTD_LEVEL = 3;
@@ -72,13 +80,16 @@ export async function storeInputFiles(
       .executeTakeFirst();
     if (!inserted) continue;
     const uploadId = UploadId(randomUUID());
-    await trx.insertInto("upload").values({ id: uploadId, sha256: content.sha256 }).execute();
+    await trx
+      .insertInto("upload")
+      .values({ id: uploadId, sha256: content.sha256, chunkBytes: CHUNK_BYTES })
+      .execute();
     const chunks: NewUploadChunk[] = [];
-    for (let start = 0; start < content.bytes.length; start += INPUT_FILE_CHUNK_BYTES) {
+    for (let start = 0; start < content.bytes.length; start += CHUNK_BYTES) {
       chunks.push({
         uploadId,
         index: UploadChunkIndex(chunks.length),
-        bytes: zstdCompressSync(content.bytes.subarray(start, start + INPUT_FILE_CHUNK_BYTES), {
+        bytes: zstdCompressSync(content.bytes.subarray(start, start + CHUNK_BYTES), {
           params: { [constants.ZSTD_c_compressionLevel]: ZSTD_LEVEL },
         }),
       });

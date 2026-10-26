@@ -4,7 +4,7 @@ import { zstdDecompressSync } from "node:zlib";
 
 import { ORPCError } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
-import { contract, INPUT_FILE_CHUNK_BYTES, type ListedInputFile, problemOf } from "contract";
+import { contract, type ListedInputFile, problemOf } from "contract";
 import { Data, Duration, Effect, type FileSystem, Schedule } from "effect";
 import ensureError from "ensure-error";
 
@@ -107,9 +107,9 @@ function downloadFile(
             ),
           ),
         );
-        // A chunk holds at most `INPUT_FILE_CHUNK_BYTES`, and the file no more than it was listed
+        // A chunk holds at most the listed `chunkBytes`, and the file no more than it was listed
         // with: decompressing stops there rather than writing more.
-        const expected = Math.min(INPUT_FILE_CHUNK_BYTES, file.originalSizeBytes - written);
+        const expected = Math.min(file.chunkBytes, file.originalSizeBytes - written);
         const bytes = yield* Effect.try({
           try: () => zstdDecompressSync(frame, { maxOutputLength: expected }),
           catch: (error) =>

@@ -18,12 +18,7 @@ import { failureSchema, jobActivitySchema, jobEventSchema } from "./runner-proto
 
 export * from "./problem-details.ts";
 export * from "./json-rpc.ts";
-export {
-  INPUT_FILE_CHUNK_BYTES,
-  jsonTextSchema,
-  type ListedInputFile,
-  type ResultContract,
-} from "./job.ts";
+export { jsonTextSchema, type ListedInputFile, type ResultContract } from "./job.ts";
 export * from "./runner-protocol.ts";
 
 // `zod/mini` leaves messages out unless asked; without them every problem reads "Invalid input".
@@ -575,8 +570,8 @@ export const contract = {
           index: z.int32().check(z.nonnegative(), z.describe("The chunk's position, from 0.")),
         }),
       )
-      // A chunk is at most a frame of 1 MiB, so it is sent whole, with its length, rather than
-      // streamed: a stream would outlive the request's database connection on Workers.
+      // A chunk is one frame of a bounded size, so it is sent whole, with its length, rather than
+      // streamed.
       .output(z.file()),
   },
 };

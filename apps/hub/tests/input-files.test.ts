@@ -61,26 +61,36 @@ test("a sync names a job's Input files, and only the Runner the job is placed on
   try {
     const { runs } = await placed.runner.request("sync", { held: [], free: 1 }, 10_000);
 
-    expect(runs.find((run) => run.jobId === id)?.job?.inputFiles).toEqual(
+    const listed = runs.find((run) => run.jobId === id)?.job?.inputFiles;
+    expect(listed).toEqual(
       expect.arrayContaining([
         {
           name: "report.txt",
           sha256: sha256(LARGE),
           originalSizeBytes: Buffer.byteLength(LARGE),
+          chunkBytes: expect.any(Number),
         },
-        { name: "empty.txt", sha256: sha256(""), originalSizeBytes: 0 },
+        {
+          name: "empty.txt",
+          sha256: sha256(""),
+          originalSizeBytes: 0,
+          chunkBytes: expect.any(Number),
+        },
       ]),
     );
+    const chunkBytes = listed?.find((file) => file.name === "report.txt")?.chunkBytes;
+    assert(chunkBytes !== undefined);
+    const count = Math.ceil(Buffer.byteLength(LARGE) / chunkBytes);
     const chunks: Buffer[] = [];
-    for (const index of [0, 1, 2]) {
+    for (let index = 0; index < count; index++) {
       const chunk = await placed.api.jobs.inputFileChunk({ id, name: "report.txt", index });
       assert(chunk instanceof Blob, "a chunk arrives as a file");
       chunks.push(zstdDecompressSync(await chunk.arrayBuffer()));
     }
-    expect(chunks.map((chunk) => chunk.length).slice(0, 2)).toEqual([1024 * 1024, 1024 * 1024]);
+    expect(chunks.slice(0, -1).every((chunk) => chunk.length === chunkBytes)).toBe(true);
     expect(Buffer.concat(chunks).toString("utf8")).toBe(LARGE);
     await expect(
-      placed.api.jobs.inputFileChunk({ id, name: "report.txt", index: 3 }),
+      placed.api.jobs.inputFileChunk({ id, name: "report.txt", index: count }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(
       other.api.jobs.inputFileChunk({ id, name: "report.txt", index: 0 }),

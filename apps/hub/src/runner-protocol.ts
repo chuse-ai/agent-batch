@@ -709,12 +709,14 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                         eb
                           .selectFrom("inputFile")
                           .innerJoin("blob", "blob.sha256", "inputFile.sha256")
+                          .innerJoin("upload", "upload.sha256", "inputFile.sha256")
                           .select((fileEb) => [
                             "inputFile.name",
                             fileEb
                               .fn<string>("encode", ["blob.sha256", fileEb.val("hex")])
                               .as("sha256"),
                             "blob.originalSizeBytes",
+                            "upload.chunkBytes",
                           ])
                           .whereRef("inputFile.jobId", "=", "wanted.id"),
                       ),

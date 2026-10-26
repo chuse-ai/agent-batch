@@ -12,7 +12,7 @@ import { type Kysely, sql } from "kysely";
 // copies no bytes. Today every upload is a submission's inline file, written whole and published in
 // the same transaction.
 
-/** The original bytes in each chunk but a file's last; the contract's `INPUT_FILE_CHUNK_BYTES`. */
+/** The original bytes in each chunk but a file's last, for the content this migration stores. */
 const CHUNK_BYTES = 1024 * 1024;
 
 export async function up(db: Kysely<unknown>): Promise<void> {
@@ -34,6 +34,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("sha256", "bytea", (col) =>
       col.notNull().references("blob.sha256").onDelete("cascade"),
     )
+    // How many original bytes each of its chunks holds but the last, chosen as the upload starts,
+    // so the hub can choose another for new content without rewriting what it stored.
+    .addColumn("chunkBytes", "integer", (col) => col.notNull().check(sql`"chunkBytes" > 0`))
     // A blob's bytes are those of one upload, through which it is read.
     .addUniqueConstraint("upload_sha256_key", ["sha256"])
     .execute();
@@ -95,9 +98,10 @@ async function copyContentToBlobs(db: Kysely<unknown>) {
       `.execute(db);
       if (inserted.length > 0) {
         const uploadId = randomUUID();
-        await sql`insert into agent_batch.upload (id, sha256) values (${uploadId}, ${sha256})`.execute(
-          db,
-        );
+        await sql`
+          insert into agent_batch.upload (id, sha256, "chunkBytes")
+          values (${uploadId}, ${sha256}, ${CHUNK_BYTES})
+        `.execute(db);
         for (let index = 0; index * CHUNK_BYTES < bytes.length; index++) {
           const chunk = zstdCompressSync(
             bytes.subarray(index * CHUNK_BYTES, (index + 1) * CHUNK_BYTES),
