@@ -406,8 +406,8 @@ function openJobEnvironment(options: {
   /**
    * Sandboxes wrapped for this job, each to be released once: one per start of its daemon. Counted
    * by hand rather than in an Effect `Scope`, as this runs in pi-env's Promise callbacks: there an
-   * `acquireRelease` would still need `closing`, and would leak a wrap that resolves after the abort
-   * if made interruptible, or make `close()` wait on a stuck wrap if forked into the scope.
+   * `acquireRelease` would still need `closing`, and would leak a wrap that resolves after the
+   * abort if made interruptible, or make `close()` wait on a stuck wrap if forked into the scope.
    */
   let wraps = 0;
   /**
