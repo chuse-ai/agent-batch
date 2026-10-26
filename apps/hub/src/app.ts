@@ -12,6 +12,7 @@ import { ZodToJsonSchemaConverter } from "@orpc/zod";
 import {
   contract,
   getAccess,
+  NotFound,
   PROTOCOL_UNSUPPORTED,
   RUNNER_CONNECT_PATH,
   RUNNER_NOT_FOUND,
@@ -25,7 +26,6 @@ import {
   problemDetails,
   problemDetailsHandler,
 } from "hono-problem-details";
-import { sql } from "kysely";
 
 import {
   Auth,
@@ -38,8 +38,8 @@ import {
   requireKey,
 } from "./auth/auth.ts";
 import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
-import { Db } from "./db/database.ts";
-import { ApikeyId, EventId, JobId, RunnerId } from "./db/types.ts";
+import { ApikeyId, EventId, InputFileName, JobId, RunnerId, UploadChunkIndex } from "./db/types.ts";
+import { readInputFileChunk } from "./input-files.ts";
 import {
   type Control,
   controlJob,
@@ -244,6 +244,21 @@ const router = implement<typeof contract, ApiContext>(contract)
         // The IDs enter the hub here.
         return yield* readJobEvents(JobId(input.id), EventId(input.after), input.limit);
       }),
+      inputFileChunk: os.jobs.inputFileChunk.effect(function* ({ input, context }) {
+        const key = yield* callerKey(context.caller);
+        const runnerId = yield* findRunnerByKey(ApikeyId(key.id));
+        // The IDs and the name enter the hub here.
+        const chunk =
+          runnerId &&
+          (yield* readInputFileChunk(
+            runnerId,
+            JobId(input.id),
+            InputFileName(input.name),
+            UploadChunkIndex(input.index),
+          ));
+        if (!chunk) return yield* Effect.fail(new NotFound());
+        return new File([chunk], `${input.index}.zst`, { type: "application/zstd" });
+      }),
     },
   });
 
@@ -344,15 +359,10 @@ function authenticateRunner(headers: Headers) {
     const key = yield* requireKey(headers, { runner: ["connect"] });
     return (yield* findRunnerByKey(ApikeyId(key.id))) ?? runnerNotFound();
   }).pipe(
-    // Better Auth answers a key it could not check, such as while the database is unreachable, as it
-    // answers an unknown key. Only a hub that reaches its database tells a Runner it is unknown;
-    // otherwise the Runner retries.
-    catchORPCErrorCode("UNAUTHORIZED", () =>
-      Db.use((database) => database.query((db) => sql`select 1`.execute(db))).pipe(
-        Effect.as(runnerNotFound()),
-        Effect.orElseSucceed(() => new Response(null, { status: 503 })),
-      ),
-    ),
+    // A key the hub could check and does not know; a hub that cannot reach its database tells the
+    // Runner to retry.
+    catchORPCErrorCode("UNAUTHORIZED", () => Effect.succeed(runnerNotFound())),
+    Effect.catchTag("UnknownError", () => Effect.succeed(new Response(null, { status: 503 }))),
   );
 }
 

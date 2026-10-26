@@ -19,7 +19,6 @@ import {
   notification,
   runnerMethods,
   type DesiredState,
-  type JobContent,
   type JobReport,
   type JobActivity,
   type JobUsage,
@@ -704,22 +703,23 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                     jsonBuildObject({
                       prompt: eb.ref("prompt"),
                       resultContract: eb.ref("resultContract"),
-                      inputFiles: eb
-                        .selectFrom("inputFile")
-                        .select((fileEb) =>
-                          fileEb.fn
-                            .coalesce(
-                              // The files by name, as the contract carries them.
-                              fileEb.fn<JobContent["inputFiles"]>("jsonb_object_agg", [
-                                "name",
-                                jsonBuildObject({ content: fileEb.ref("content") }),
-                              ]),
-                              fileEb.cast<JobContent["inputFiles"]>(fileEb.val("{}"), "jsonb"),
-                            )
-                            .as("files"),
-                        )
-                        .whereRef("inputFile.jobId", "=", "wanted.id")
-                        .$asScalar(),
+                      // The files by name, SHA-256, size and chunk size, without their bytes, which
+                      // the Runner downloads a chunk at a time.
+                      inputFiles: jsonArrayFrom(
+                        eb
+                          .selectFrom("inputFile")
+                          .innerJoin("blob", "blob.sha256", "inputFile.sha256")
+                          .innerJoin("upload", "upload.sha256", "inputFile.sha256")
+                          .select((fileEb) => [
+                            "inputFile.name",
+                            fileEb
+                              .fn<string>("encode", ["blob.sha256", fileEb.val("hex")])
+                              .as("sha256"),
+                            "blob.originalSizeBytes",
+                            "upload.chunkBytes",
+                          ])
+                          .whereRef("inputFile.jobId", "=", "wanted.id"),
+                      ),
                     }),
                   )
                   .end()

@@ -30,12 +30,16 @@ const ac = createAccessControl(statements);
 
 /**
  * The permissions a member may grant an API key, as a role whose `authorize` checks a request. A
- * Runner's own key, with `runner: ["connect"]`, is created only by the hub when the Runner registers.
+ * Runner's own key, with `RUNNER_KEY_PERMISSIONS`, is created only by the hub when the Runner
+ * registers.
  */
 export const GRANTABLE_KEY_PERMISSIONS = ac.newRole({
   runner: ["register"],
   job: KEY_PERMISSIONS.job,
 });
+
+/** The permissions of a Runner's own key, which the hub creates when the Runner registers. */
+export const RUNNER_KEY_PERMISSIONS = ac.newRole({ runner: ["connect"] });
 
 /**
  * Better Auth's default organization roles, with key management granted to owners and admins, as in

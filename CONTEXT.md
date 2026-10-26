@@ -44,6 +44,10 @@ _Avoid_: instructions, query
 A file written into a job's workspace before its agent starts, such as a document, data or a script to run.
 _Avoid_: attachment, input data
 
+**Blob**:
+Verified, immutable file content, identified by the SHA-256 of its original bytes, which Input files can share.
+_Avoid_: object, upload, content
+
 **Result contract**:
 The JSON Schema a job's result must satisfy before the job counts as succeeded. It governs the result only.
 _Avoid_: output contract, output format, response schema

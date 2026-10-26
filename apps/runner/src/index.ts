@@ -44,6 +44,7 @@ import WebSocket from "ws";
 import * as z from "zod/mini";
 
 import type { AgentModel } from "./agent.ts";
+import type { HubClient } from "./input-files.ts";
 import { JobRunner } from "./jobs.ts";
 import {
   type JobEnvironments,
@@ -188,6 +189,12 @@ function runRegistered(
       const agent = {
         jobsDir: path.join(options.dataDir, "jobs"),
         fileSystem: yield* FileSystem.FileSystem,
+        hub: createORPCClient<HubClient>(
+          createProblemDetailsLink(contract, {
+            origin: hubUrl.origin,
+            headers: { "x-api-key": registration.key },
+          }),
+        ),
         environments,
         models: options.models,
         model: options.model,

@@ -32,7 +32,6 @@ import {
   ApikeyId,
   type Database,
   type EventId,
-  InputFileName,
   JobId,
   type JobProgressRow,
   type JobFailureReason,
@@ -43,6 +42,12 @@ import {
   MemberId,
   type RunnerId,
 } from "./db/types.ts";
+import {
+  deleteUnusedBlobs,
+  lockInputFileBlobs,
+  prepareInputFiles,
+  storeInputFiles,
+} from "./input-files.ts";
 import type { HubSettings } from "./settings.ts";
 
 /** The statuses a job ends in (`FINAL_JOB_STATUSES`), as the hub's database types them. */
@@ -258,6 +263,7 @@ export function submitJob(
     const database = yield* Db;
     const organization = yield* getOrganization;
     const contentHash = contentHashOf(submission);
+    const inputFiles = yield* prepareInputFiles(submission.inputFiles);
     const job = yield* database.query((db) =>
       db.transaction().execute(async (trx) => {
         // A concurrent submission with the same key waits here for the first to commit, then
@@ -300,18 +306,7 @@ export function submitJob(
           .values({ jobId: inserted.id })
           .returning(PROGRESS_COLUMNS)
           .executeTakeFirstOrThrow();
-        if (!Record.isEmptyRecord(submission.inputFiles)) {
-          await trx
-            .insertInto("inputFile")
-            .values(
-              Record.collect(submission.inputFiles, (name, file) => ({
-                jobId: inserted.id,
-                name: InputFileName(name),
-                content: file.content,
-              })),
-            )
-            .execute();
-        }
+        await storeInputFiles(trx, inserted.id, inputFiles);
         return { ...inserted, ...progress };
       }),
     );
@@ -671,13 +666,14 @@ async function recordUsageOfEnd(trx: Transaction<Database>, jobId: JobId) {
 }
 
 /**
- * Deletes the finished job `jobId` and returns it as it now reads, or fails with a 404 error
- * or, for an unfinished job, a 409; with its Runner to tell to sync now. In one transaction: the
- * job's row goes, and with it its input files, events and progress; its latest Usage record is
- * marked deleted, as its tombstone; and the deletion of its files from its host is recorded for its
- * Runner, unless no Runner holds any of the job, as when none was sent it or none started it. A
- * repeat while that deletion waits returns the job again, as Kubernetes returns a pod already being
- * deleted; once the deletion is done, the job is not found.
+ * Deletes the finished job `jobId` and returns it as it now reads, or fails with a 404 error or,
+ * for an unfinished job, a 409; with its Runner to tell to sync now. In one transaction: the job's
+ * row goes, and with it its Input files, events and progress, and the blobs of its Input files that
+ * no other job uses; its latest Usage record is marked deleted, as its tombstone; and the deletion
+ * of its files from its host is recorded for its Runner, unless no Runner holds any of the job, as
+ * when none was sent it or none started it. A repeat while that deletion waits returns the job
+ * again, as Kubernetes returns a pod already being deleted; once the deletion is done, the job is
+ * not found.
  */
 export function deleteJob(jobId: JobId) {
   return Effect.gen(function* () {
@@ -717,6 +713,8 @@ export function deleteJob(jobId: JobId) {
                 : "The job is not finished; cancel it first",
           };
         }
+        // Locked before the job's files go, through which they are found.
+        const blobs = await lockInputFileBlobs(trx, jobId);
         // One statement marks the Usage record deleted, records the deletion the Runner owes with a
         // snapshot of the job from that record, and deletes the job's row.
         const snapshot = await trx
@@ -787,6 +785,7 @@ export function deleteJob(jobId: JobId) {
           .select(DELETED_JOB_COLUMNS)
           // Every end writes a Usage record, so a finished job has one.
           .executeTakeFirstOrThrow();
+        await deleteUnusedBlobs(trx, blobs);
         return {
           deleted: toDeletedJob(snapshot, now, job.runnerExists ? now : null),
           hint: job.runnerExists ? (job.runnerId ?? undefined) : undefined,

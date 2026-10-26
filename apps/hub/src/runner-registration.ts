@@ -2,7 +2,7 @@ import { Forbidden, NotFound } from "contract";
 import { Effect, Predicate } from "effect";
 
 import { Auth, getOrganization } from "./auth/auth.ts";
-import { RUNNER_KEY_CONFIG } from "./auth/options.ts";
+import { RUNNER_KEY_CONFIG, RUNNER_KEY_PERMISSIONS } from "./auth/options.ts";
 import { Db } from "./db/database.ts";
 import { ApikeyId, RunnerId } from "./db/types.ts";
 import { deleteRunnerWithItsWork } from "./jobs.ts";
@@ -36,7 +36,7 @@ export function registerRunner(name: string) {
           organizationId: organization.id,
           userId: owner.userId,
           name: "Runner",
-          permissions: { runner: ["connect"] },
+          permissions: { runner: [...RUNNER_KEY_PERMISSIONS.statements.runner] },
         },
       }),
     );

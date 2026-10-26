@@ -4,6 +4,7 @@
 import type { Brand } from "effect";
 import type { ColumnType, Selectable, Insertable, Updateable } from "kysely";
 
+import type { BlobSha256 } from "./Blob.js";
 import type { JobId } from "./Job.js";
 
 /** Identifier type for agent_batch.inputFile */
@@ -15,7 +16,7 @@ export default interface InputFileTable {
 
   name: ColumnType<InputFileName, InputFileName, InputFileName>;
 
-  content: ColumnType<string, string, string>;
+  sha256: ColumnType<BlobSha256, BlobSha256, BlobSha256>;
 }
 
 export type InputFile = Selectable<InputFileTable>;

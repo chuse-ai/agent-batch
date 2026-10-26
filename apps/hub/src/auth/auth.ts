@@ -3,7 +3,7 @@ import { betterAuth } from "better-auth";
 import { isAPIError } from "better-auth/api";
 import { type Access, HubNotSetUp, Unauthorized } from "contract";
 import { Cause, Context, Effect, Layer } from "effect";
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import * as z from "zod/mini";
 
 import { Db, openScopedDatabase } from "../db/database.ts";
@@ -99,7 +99,16 @@ export function requireKey(headers: Headers, permissions: Record<string, string[
     const result = yield* auth.call((instance) =>
       instance.api.verifyApiKey({ body: { key, permissions } }),
     );
-    if (!result.valid || !result.key) return yield* Effect.fail(new Unauthorized());
+    if (!result.valid || !result.key) {
+      // Better Auth answers a key it could not check, such as while the database is unreachable, as
+      // it answers an unknown key. Only a hub that reaches its database calls a key unknown;
+      // otherwise the call fails as one the hub could not serve, and its caller may retry. Drop
+      // this probe once better-auth/better-auth#11665 ships, which makes such a check fail; the
+      // Runner's upgrade (`authenticateRunner`) must then answer that failure, an
+      // `INTERNAL_SERVER_ERROR` here, with its 503.
+      yield* Db.use((database) => database.query((db) => sql`select 1`.execute(db)));
+      return yield* Effect.fail(new Unauthorized());
+    }
     return result.key;
   });
 }
