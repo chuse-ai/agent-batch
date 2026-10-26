@@ -203,7 +203,7 @@ export const failureSchema = z.object({
 export type Failure = z.infer<typeof failureSchema>;
 
 /** What a failure records: when, and why. */
-export const jobFailureSchema = z.object({ timestamp: timestampSchema, ...failureSchema.shape });
+export const jobFailureSchema = z.extend(failureSchema, { timestamp: timestampSchema });
 export type JobFailure = z.infer<typeof jobFailureSchema>;
 
 /** What a cancel records: when. */

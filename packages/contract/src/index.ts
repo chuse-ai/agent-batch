@@ -98,7 +98,7 @@ export const FINAL_JOB_STATUSES: readonly JobStatus[] = ["succeeded", "failed", 
 export type { JsonValue } from "type-fest";
 
 /** What a job reports whatever its status. */
-const jobBaseShape = {
+const jobBaseSchema = z.object({
   id: jobIdSchema,
   createdAt: z.date(),
   /** When the job's agent started on its Runner, once it has. */
@@ -151,23 +151,22 @@ const jobBaseShape = {
    * without its content, and as not found once they are gone.
    */
   deletedAt: z.optional(z.date()),
-};
+});
 
 /**
  * A job as the hub reports it: once it has succeeded, with its `result`, and once it has failed,
- * with its `failure`. Only a caller pauses or cancels a job, so the other statuses carry neither.
+ * with its `failure`. Only a caller pauses or cancels a job, so `paused` and `cancelled` carry no
+ * reason.
  */
 export const jobSchema = z
   .discriminatedUnion("status", [
-    z.object({ ...jobBaseShape, status: z.enum(["queued", "running", "paused", "cancelled"]) }),
-    z.object({
-      ...jobBaseShape,
+    z.extend(jobBaseSchema, { status: z.enum(["queued", "running", "paused", "cancelled"]) }),
+    z.extend(jobBaseSchema, {
       status: z.literal("succeeded"),
       /** The job's result. Absent once the job is deleted, as its content is. */
       result: z.optional(z.unknown()),
     }),
-    z.object({
-      ...jobBaseShape,
+    z.extend(jobBaseSchema, {
       status: z.literal("failed"),
       /** Why the job failed. Its message is absent once the job is deleted, as its content is. */
       failure: failureSchema,
