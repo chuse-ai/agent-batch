@@ -2,7 +2,7 @@
 
 agent-batch is released as one version: the hub's and the Runner's images, the `agent-batch` CLI on npm and every workspace package take the release's version. release-please manages it as one root component: it reads the conventional commits on `main` since the last release, keeps a release PR with the next version and changelog, applies the version to every `package.json`, and creates the `vX.Y.Z` tag and GitHub release when that PR merges. Before 1.0 a breaking change bumps the minor version (`bump-minor-pre-major`), so no commit moves the system to 1.0 by itself; a commit whose body has `Release-As: x.y.z` sets the next release's version instead.
 
-The CLI is published at every release, even when it has not changed, so `agent-batch@X` is always the CLI for hub X. Callers match the command to their hub by version alone, at the cost of npm releases that differ only in their version.
+The CLI is published at every release, even when it has not changed, so `agent-batch@X` is always the CLI for hub X. Callers match the command to their hub by version alone, at the cost of npm releases that differ only in their version. The release stages the CLI with npm's staged publishing, and a maintainer approves it with 2FA, so the release workflow cannot publish a version alone.
 
 ## Considered options
 
