@@ -19,15 +19,15 @@ import {
 } from "./db/types.ts";
 
 // Input files' blobs: each file's bytes stored once by the SHA-256 of its original bytes however
-// many jobs use it, in chunk rows of a fixed number of original bytes each, recorded with the blob's
-// upload and listed to the Runner, each compressed as one zstd frame. A Runner reads a file a chunk
+// many jobs use it, in chunk rows of a fixed number of original bytes each, recorded with the
+// blob's upload and listed to the Runner, each compressed as one zstd frame. A Runner reads a file a chunk
 // at a time, so serving a file holds no more than a chunk on either side, and a sync's answer names
 // the files without their bytes.
 //
 // A blob no job uses is deleted with the last job that used it. A submission and a deletion lock
 // their blobs in the same order, so whichever comes second sees what the first did: a submission
-// waits for the deletion and stores the blob again, and a deletion that waits for a submission finds
-// the blob used and keeps it.
+// waits for the deletion and stores the blob again, and a deletion that waits for a submission
+// finds the blob used and keeps it.
 
 /**
  * The original bytes in each chunk of a new blob but its last. Each request for a chunk costs CPU
@@ -39,7 +39,7 @@ const CHUNK_BYTES = 1024 * 1024;
 /** zstd's own default level: as small as gzip's or much smaller, for a fraction of its CPU time. */
 const ZSTD_LEVEL = 3;
 
-/** A submission's Input files, hashed, compressed where the hub held no blob of them when it looked. */
+/** A submission's Input files, hashed, and compressed where the hub held no blob of them. */
 export interface PreparedInputFiles {
   readonly files: readonly { name: InputFileName; sha256: BlobSha256 }[];
   /** Each distinct blob once, in the order of its address, compressed if it was not stored. */
@@ -98,8 +98,8 @@ function compress(bytes: Buffer): Buffer[] {
 }
 
 /**
- * Stores the job `jobId`'s Input files, `prepared`, in the transaction `trx`: the blobs the hub does
- * not hold yet, and the job's reference to each file's blob. A blob already stored is locked
+ * Stores the job `jobId`'s Input files, `prepared`, in the transaction `trx`: the blobs the hub
+ * does not hold yet, and the job's reference to each file's blob. A blob already stored is locked
  * against deletion until the transaction ends, rather than written again.
  */
 export async function storeInputFiles(
@@ -113,8 +113,8 @@ export async function storeInputFiles(
   // reads the rows of `values` in their order. A stored blob is locked by the update that
   // `where false` keeps from happening: an update's lock on a column no key holds, which a
   // deletion's `for update` waits for, without writing a new version of the row, which
-  // `set ... returning (xmax = 0)` would for each reuse. So only blobs it inserted come back. A blob
-  // whose deletion it waited for is gone once that commits, and is inserted afresh. The lock also
+  // `set ... returning (xmax = 0)` would for each reuse. So only blobs it inserted come back. A
+  // blob whose deletion it waited for is gone once that commits, and is inserted afresh. The lock also
   // conflicts with itself, so submissions that share a stored blob wait for each other to commit;
   // Postgres 19's `on conflict do select for key share` would lock without that.
   const inserted = await trx
