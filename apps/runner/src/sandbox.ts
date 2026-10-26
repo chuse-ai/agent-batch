@@ -116,10 +116,10 @@ const KEPT_VARIABLES = ["PATH", "SHELL", "LOGNAME", "USER", "LANG", "LANGUAGE", 
  * every job. The kernel picks the process with the most memory once this score is added, in
  * thousandths of the host's memory, so at a lower score the Runner, the largest process, could
  * still be picked: at 500 against a user service's 200, whenever it held 30% of the host's memory
- * more than a job's largest process; at 1000, only past 80%. A job survives losing a process, as when it goes over its
- * own limit. The score is set as the daemon starts, before its sandbox, so everything it starts
- * inherits it; a systemd scope cannot set one (`OOMScoreAdjust=` is a service setting), and raising
- * a process's own score needs no privilege.
+ * more than a job's largest process; at 1000, only past 80%. A job survives losing a process, as
+ * when it goes over its own limit. The score is set as the daemon starts, before its sandbox, so
+ * everything it starts inherits it; a systemd scope cannot set one (`OOMScoreAdjust=` is a service
+ * setting), and raising a process's own score needs no privilege.
  */
 const JOB_OOM_SCORE_ADJ = 1000;
 
