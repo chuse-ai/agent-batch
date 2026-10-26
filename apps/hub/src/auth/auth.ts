@@ -103,6 +103,7 @@ export function requireKey(headers: Headers, permissions: Record<string, string[
       // Better Auth answers a key it could not check, such as while the database is unreachable,
       // as it answers an unknown key. Only a hub that reaches its database calls a key unknown;
       // otherwise the call fails as one the hub could not serve, and its caller may retry.
+      // Drop this probe once better-auth/better-auth#11665 ships, which makes such a check fail.
       yield* Db.use((database) => database.query((db) => sql`select 1`.execute(db)));
       return yield* Effect.fail(new Unauthorized());
     }
