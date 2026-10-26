@@ -8,6 +8,8 @@ import { contract, type ListedInputFile, problemOf } from "contract";
 import { Data, Duration, Effect, type FileSystem, Schedule } from "effect";
 import ensureError from "ensure-error";
 
+import { type AgentSettings, jobPaths } from "./agent.ts";
+
 // A job's Input files reach its Workspace apart from the hub's answers, which only name them: the
 // Runner downloads each a chunk at a time, one zstd frame per request, decompresses it, and checks
 // the whole file's size and SHA-256 before moving it into `inputs/`. Each request carries a whole
@@ -39,18 +41,18 @@ const RETRIES = Schedule.min([
 ]).pipe(Schedule.jittered);
 
 /**
- * Downloads the job `jobId`'s Input files `files` from the hub into `<workspace>/inputs/`, through a
- * temporary file each in `downloads`. A file whose download ends in other bytes than the
- * hub listed is downloaded once more, in case it was the transfer; a second mismatch, a file the hub
- * no longer has, or a hub that does not answer for five minutes fails with `InputFileFailed`.
+ * Downloads the job `jobId`'s Input files `files` from the hub into its Workspace's `inputs/`,
+ * through a temporary file each in its folder's `downloads/`. A file whose download ends in other
+ * bytes than the hub listed is downloaded once more, in case it was the transfer; a second
+ * mismatch, a file the hub no longer has, or a hub that does not answer for five minutes fails with
+ * `InputFileFailed`.
  */
 export function downloadInputFiles(
-  hub: HubClient,
-  fileSystem: FileSystem.FileSystem,
+  { hub, fileSystem, jobsDir }: Pick<AgentSettings, "hub" | "fileSystem" | "jobsDir">,
   jobId: string,
   files: readonly ListedInputFile[],
-  paths: { downloads: string; workspace: string },
 ): Effect.Effect<void, InputFileFailed> {
+  const paths = jobPaths(jobsDir, jobId);
   const { downloads } = paths;
   // The contract checks each name again as the run reaches the Runner (`fileNameSchema`), so no
   // name leaves these folders.

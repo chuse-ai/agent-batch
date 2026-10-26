@@ -18,7 +18,6 @@ import ensureError from "ensure-error";
 import {
   type AgentSettings,
   journalExists,
-  jobPaths,
   openJob,
   recordStop,
   deleteJobFiles,
@@ -388,6 +387,16 @@ export class JobRunner {
     const fibers = this.#fibers;
     const previous = fibers.get(ref.jobId);
 
+    /** Fails the job for a fault in the Runner itself, with the fault's `message`. */
+    const runFaulted = (message: string) =>
+      Effect.sync(() => {
+        held.failure = {
+          timestamp: Date.now(),
+          reason: "runFaulted",
+          message: failureMessage(message),
+        };
+      });
+
     /** Runs the job, keeping its journal open after it ends, until interrupted. */
     const working = (content: JobContent) =>
       Effect.gen(function* () {
@@ -406,23 +415,13 @@ export class JobRunner {
         // that exists means they were, and the agent may have changed them since. The job holds its
         // slot meanwhile. A download that fails fails the job, as a journal that does not open does.
         if (held.journalKnownAbsent) {
-          yield* downloadInputFiles(
-            settings.hub,
-            settings.fileSystem,
-            ref.jobId,
-            content.inputFiles,
-            jobPaths(settings.jobsDir, ref.jobId),
-          ).pipe(
+          yield* downloadInputFiles(settings, ref.jobId, content.inputFiles).pipe(
             // The failure is reported until the hub drops the run.
             Effect.catchTag("InputFileFailed", (error) =>
               Effect.logError("A job's Input files could not be downloaded", error.message).pipe(
+                Effect.andThen(runFaulted(error.message)),
                 Effect.andThen(
                   Effect.sync(() => {
-                    held.failure = {
-                      timestamp: Date.now(),
-                      reason: "runFaulted",
-                      message: failureMessage(error.message),
-                    };
                     held.ended = true;
                     changed();
                   }),
@@ -456,15 +455,7 @@ export class JobRunner {
             Effect.catchDefect((defect) => {
               const error = ensureError(defect);
               return Effect.logError("A job's agent failed", error).pipe(
-                Effect.andThen(
-                  Effect.sync(() => {
-                    held.failure = {
-                      timestamp: Date.now(),
-                      reason: "runFaulted",
-                      message: failureMessage(error.message),
-                    };
-                  }),
-                ),
+                Effect.andThen(runFaulted(error.message)),
               );
             }),
             Effect.tap(() =>
