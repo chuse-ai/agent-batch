@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
-import { constants, zstdCompressSync } from "node:zlib";
+import { zstdCompressSync } from "node:zlib";
 
 import type { JobSubmission } from "contract";
 import { Effect, Record } from "effect";
@@ -35,9 +35,6 @@ import {
  * keeps the size it was stored with.
  */
 const CHUNK_BYTES = 1024 * 1024;
-
-/** zstd's own default level: as small as gzip's or much smaller, for a fraction of its CPU time. */
-const ZSTD_LEVEL = 3;
 
 /** A submission's Input files, hashed, and compressed where the hub held no blob of them. */
 export interface PreparedInputFiles {
@@ -84,15 +81,14 @@ export function prepareInputFiles(files: JobSubmission["inputFiles"]) {
   });
 }
 
-/** `bytes` in chunks of `CHUNK_BYTES` original bytes, each one zstd frame; none for no bytes. */
+/**
+ * `bytes` in chunks of `CHUNK_BYTES` original bytes, each one zstd frame at zstd's default level:
+ * as small as gzip's or much smaller, for a fraction of its CPU time. None for no bytes.
+ */
 function compress(bytes: Buffer): Buffer[] {
   const chunks: Buffer[] = [];
   for (let start = 0; start < bytes.length; start += CHUNK_BYTES) {
-    chunks.push(
-      zstdCompressSync(bytes.subarray(start, start + CHUNK_BYTES), {
-        params: { [constants.ZSTD_c_compressionLevel]: ZSTD_LEVEL },
-      }),
-    );
+    chunks.push(zstdCompressSync(bytes.subarray(start, start + CHUNK_BYTES)));
   }
   return chunks;
 }

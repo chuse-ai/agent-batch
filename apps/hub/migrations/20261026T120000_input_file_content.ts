@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants, zstdCompressSync, zstdDecompressSync } from "node:zlib";
+import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
 import { type Kysely, sql } from "kysely";
 
 // Input files' content moves out of `inputFile` into blobs stored once by their SHA-256: a file
 // many jobs share is stored once, and its bytes sit in chunk rows of 1 MiB of original bytes, each
-// compressed as one zstd frame at level 3, which a Runner downloads one at a time.
+// compressed as one zstd frame at zstd's default level, which a Runner downloads one at a time.
 //
 // A blob's bytes belong to the upload that wrote them, and the blob is reached through the upload:
 // so an upload can write its chunks before its blob is known and verified, and publishing it
@@ -88,40 +88,37 @@ async function copyContentToBlobs(db: Kysely<unknown>) {
       order by "jobId", name
       limit 1
     `.execute(db);
-    for (const row of rows) {
-      const bytes = Buffer.from(row.content, "utf8");
-      const sha256 = createHash("sha256").update(bytes).digest();
-      const { rows: inserted } = await sql`
-        insert into agent_batch.blob (sha256, "originalSizeBytes")
-        values (${sha256}, ${bytes.length})
-        on conflict do nothing
-        returning sha256
-      `.execute(db);
-      if (inserted.length > 0) {
-        const uploadId = randomUUID();
-        await sql`
-          insert into agent_batch.upload (id, sha256, "chunkBytes")
-          values (${uploadId}, ${sha256}, ${CHUNK_BYTES})
-        `.execute(db);
-        for (let index = 0; index * CHUNK_BYTES < bytes.length; index++) {
-          const chunk = zstdCompressSync(
-            bytes.subarray(index * CHUNK_BYTES, (index + 1) * CHUNK_BYTES),
-            { params: { [constants.ZSTD_c_compressionLevel]: 3 } },
-          );
-          await sql`
-            insert into agent_batch."uploadChunk" ("uploadId", index, bytes)
-            values (${uploadId}, ${index}, ${chunk})
-          `.execute(db);
-        }
-      }
+    const [row] = rows;
+    if (!row) return;
+    const bytes = Buffer.from(row.content, "utf8");
+    const sha256 = createHash("sha256").update(bytes).digest();
+    const { rows: inserted } = await sql`
+      insert into agent_batch.blob (sha256, "originalSizeBytes")
+      values (${sha256}, ${bytes.length})
+      on conflict do nothing
+      returning sha256
+    `.execute(db);
+    if (inserted.length > 0) {
+      const uploadId = randomUUID();
       await sql`
-        update agent_batch."inputFile" set sha256 = ${sha256}
-        where "jobId" = ${row.jobId} and name = ${row.name}
+        insert into agent_batch.upload (id, sha256, "chunkBytes")
+        values (${uploadId}, ${sha256}, ${CHUNK_BYTES})
       `.execute(db);
+      for (let index = 0; index * CHUNK_BYTES < bytes.length; index++) {
+        const chunk = zstdCompressSync(
+          bytes.subarray(index * CHUNK_BYTES, (index + 1) * CHUNK_BYTES),
+        );
+        await sql`
+          insert into agent_batch."uploadChunk" ("uploadId", index, bytes)
+          values (${uploadId}, ${index}, ${chunk})
+        `.execute(db);
+      }
     }
-    const last = rows.at(-1);
-    if (!last) return;
-    after = last;
+    await sql`
+      update agent_batch."inputFile" set sha256 = ${sha256}
+      where "jobId" = ${row.jobId} and name = ${row.name}
+    `.execute(db);
+    after = { jobId: row.jobId, name: row.name };
   }
 }
 
@@ -138,19 +135,17 @@ export async function down(db: Kysely<unknown>): Promise<void> {
       order by f."jobId", f.name
       limit 1
     `.execute(db);
-    for (const row of rows) {
-      const { rows: chunks } = await sql<{ bytes: Buffer }>`
-        select bytes from agent_batch."uploadChunk" where "uploadId" = ${row.uploadId} order by index
-      `.execute(db);
-      const content = Buffer.concat(chunks.map((chunk) => zstdDecompressSync(chunk.bytes)));
-      await sql`
-        update agent_batch."inputFile" set content = ${content.toString("utf8")}
-        where "jobId" = ${row.jobId} and name = ${row.name}
-      `.execute(db);
-    }
-    const last = rows.at(-1);
-    if (!last) break;
-    after = last;
+    const [row] = rows;
+    if (!row) break;
+    const { rows: chunks } = await sql<{ bytes: Buffer }>`
+      select bytes from agent_batch."uploadChunk" where "uploadId" = ${row.uploadId} order by index
+    `.execute(db);
+    const content = Buffer.concat(chunks.map((chunk) => zstdDecompressSync(chunk.bytes)));
+    await sql`
+      update agent_batch."inputFile" set content = ${content.toString("utf8")}
+      where "jobId" = ${row.jobId} and name = ${row.name}
+    `.execute(db);
+    after = row;
   }
   await schema
     .alterTable("inputFile")
