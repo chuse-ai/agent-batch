@@ -427,7 +427,7 @@ function openJobEnvironment(options: {
         // released the others already.
         if (closing.signal.aborted) {
           SandboxManager.cleanupAfterCommand();
-          throw new Error("The job's environment is closed");
+          closing.signal.throwIfAborted();
         }
         wraps += 1;
       }
@@ -475,8 +475,9 @@ const OPENERS: ReadonlySet<PropertyKey> = new Set([
 ] satisfies Operation[]);
 
 /**
- * The operations that release what an environment or a handle holds. They run even under an aborted
- * context, as a tool closes its reader once it is cut off, and give back nothing.
+ * The operations that release what an environment or a handle holds. They are started even under an
+ * aborted context, as a tool closes its reader once it is cut off, but not waited for then, since
+ * the daemon may never answer; they give back nothing.
  */
 const RELEASES: ReadonlySet<PropertyKey> = new Set(["close", "cleanup"] satisfies Operation[]);
 
@@ -490,6 +491,13 @@ function abortedResult(name: PropertyKey) {
   return err(new FileError("aborted", "aborted"));
 }
 
+/** Whether an opener's `result` is a handle it opened, rather than its failure or an aborted result. */
+function isOpenedHandle(
+  result: unknown,
+): result is { ok: true; value: { close(context: Context): Promise<void> } } {
+  return typeof result === "object" && result !== null && "ok" in result && result.ok === true;
+}
+
 /**
  * `target`, an environment or a handle it opened, whose every operation ends as soon as the context
  * it is given is aborted, rather than when the daemon answers. pi aborts a tool call's context when
@@ -498,9 +506,10 @@ function abortedResult(name: PropertyKey) {
  * most file operations no signal, and waits for a start whose sandbox is still being wrapped; and a
  * daemon can stop answering a request while it still answers pings, as when the host refuses it a
  * thread for a command or a file operation opens a FIFO. So a job's timeout, pause, cancel and the
- * Runner's stop wait on nothing the daemon owes. Once a call is cut off, pi records the call as
- * aborted, not what its operations give back, and an operation left running carries on until the
- * sandbox closes, which stops the daemon. pi-env has no option for this, so it is done here, around
+ * Runner's stop wait on nothing the daemon owes. Once a call is cut off, pi takes nothing more from
+ * it: an abort records the call as aborted, and a close leaves it pending, for recovery to give it
+ * an interrupted result. An operation left running carries on until the sandbox closes, which stops
+ * the daemon. pi-env has no option for this, so it is done here, around
  * its public `ExecutionEnv`; every operation takes its context last.
  */
 function endingOnAbort<T extends object>(target: T): T {
@@ -512,25 +521,27 @@ function endingOnAbort<T extends object>(target: T): T {
         // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- every operation's last argument is its context
         const context = args.at(-1) as Context;
         if (context.abortSignal?.aborted && !RELEASES.has(key)) return abortedResult(key);
-        const operation = Promise.resolve(Reflect.apply(member, object, args)).then(
-          (result: unknown) => {
-            if (!OPENERS.has(key)) return result;
-            // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- an opener gives back a handle or a failure
-            const opened = result as Result<{ close(context: Context): Promise<void> }, FileError>;
-            if (!opened.ok) return opened;
-            // A handle opened once its caller was cut off reaches no caller to close it, as pi-env
-            // closes one opened after an abort.
-            if (context.abortSignal?.aborted)
-              opened.value.close(BACKGROUND_CONTEXT).catch(() => {});
-            return ok(endingOnAbort(opened.value));
-          },
-        );
+        const operation = Promise.resolve(Reflect.apply(member, object, args));
         // An operation the abort left behind may still fail, with nobody waiting for it.
         operation.catch(() => {});
-        return awaitWithContext(operation, context).catch((error: unknown) => {
-          if (context.abortSignal?.aborted) return abortedResult(key);
-          throw error;
-        });
+        const result: unknown = await awaitWithContext(operation, context).catch(
+          (error: unknown) => {
+            if (!context.abortSignal?.aborted) throw error;
+            // A handle opened once its caller was cut off reaches no caller to close it, as pi-env
+            // closes one opened after an abort.
+            if (OPENERS.has(key)) {
+              operation
+                .then((opened) =>
+                  isOpenedHandle(opened) ? opened.value.close(BACKGROUND_CONTEXT) : undefined,
+                )
+                .catch(() => {});
+            }
+            return abortedResult(key);
+          },
+        );
+        return OPENERS.has(key) && isOpenedHandle(result)
+          ? ok(endingOnAbort(result.value))
+          : result;
       };
     },
   });

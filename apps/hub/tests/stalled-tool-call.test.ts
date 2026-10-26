@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 import type { JobSubmission } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
@@ -8,8 +9,10 @@ import { callTool } from "./scripted-model.ts";
 
 // A job whose tool call never ends, against a real hub and Runner: its daemon never answers the
 // call while it keeps answering pings, as when the host refuses the daemon a thread, here because
-// the agent submits its result as a FIFO nothing writes. The run timeout, a cancel and the Runner's stop must end
-// the job all the same, and stop everything it left running.
+// the agent submits its result as a FIFO nothing writes. The run timeout, a cancel and the
+// Runner's stop must end the job all the same, and stop everything it left running.
+
+const run = promisify(execFile);
 
 const system = startSystem();
 
@@ -27,8 +30,8 @@ const SUBMISSION = {
 
 /**
  * Submits a job that leaves a `sleep` running, for a duration no other process uses, and then
- * submits its result from a FIFO, which never ends; waits until that call runs. Returns the job's ID and whether
- * the `sleep` still runs, as seen from outside its sandbox.
+ * submits its result from a FIFO, which never ends; waits until that call runs. Returns the job's
+ * ID and whether the `sleep` still runs, as seen from outside its sandbox.
  */
 async function submitStalledJob(client: HubClient, limits: { runTimeoutSeconds?: number } = {}) {
   const seconds = String(1000 + Math.floor(Math.random() * 9000));
@@ -42,14 +45,16 @@ async function submitStalledJob(client: HubClient, limits: { runTimeoutSeconds?:
     .toMatchObject([{ name: "submit_result", status: "running" }]);
   // `pgrep` exits with 1 when nothing matches; any other failure tells nothing.
   const sleeping = () =>
-    new Promise<boolean>((resolve, reject) =>
-      execFile("pgrep", ["-f", `^sleep ${seconds}$`], (error) => {
-        if (error === null) resolve(true);
-        else if (error.code === 1) resolve(false);
-        else reject(error);
-      }),
+    run("pgrep", ["-f", `^sleep ${seconds}$`]).then(
+      () => true,
+      (error: unknown) => {
+        if (error instanceof Error && "code" in error && error.code === 1) return false;
+        throw error;
+      },
     );
-  expect(await sleeping()).toBe(true);
+  // Polled: while the background shell execs `nohup` and then `sleep`, its command line is briefly
+  // empty.
+  await expect.poll(sleeping).toBe(true);
   return { id, sleeping };
 }
 
