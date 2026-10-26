@@ -10,6 +10,8 @@ In a UTF-8 database Postgres refuses two things in `text` and `jsonb`: NUL (U+00
 | A provider's error text: a failure's message, a retry's error | That job's report is refused                                                                                                                                                              | As for model output                                                                    |
 | The Runner's own cut of a failure's message                   | Repaired with `toWellFormed`, since the cut can split a pair                                                                                                                              | The damage is ours                                                                     |
 
+Input files' content is stored as `bytea` (ADR 0031), which holds NUL, but stays under the same rule: it arrives as JSON text like the prompt beside it, and a lone surrogate would still be rewritten as it is encoded to UTF-8.
+
 A refused report is refused for its job alone and logged by the hub and the Runner (ADR 0026). The Runner sends it again in each pass over every job, so the job's later events, its end included, never reach the hub, and it shows as running there.
 
 ## Considered options
