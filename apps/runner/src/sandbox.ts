@@ -685,10 +685,18 @@ class MemoryReportingEnv extends RemoteExecutionEnv {
     if (cgroup === undefined) return undefined;
     try {
       const read = await readFile(path.join("/sys/fs/cgroup", cgroup, "memory.events"), "utf8");
+      // cgroup v2's flat-keyed format: a key and its value per line. A key the kernel has not
+      // written yet counts as 0.
+      const counts: Record<string, string> = Object.fromEntries(
+        read
+          .trim()
+          .split("\n")
+          .map((line) => line.split(" ")),
+      );
       return {
         scope,
-        oom: Number(/^oom (\d+)$/m.exec(read)?.[1] ?? 0),
-        oomKill: Number(/^oom_kill (\d+)$/m.exec(read)?.[1] ?? 0),
+        oom: Number(counts.oom ?? 0),
+        oomKill: Number(counts.oom_kill ?? 0),
       };
     } catch {
       // The scope has ended, and with it its cgroup.
