@@ -296,19 +296,14 @@ export async function readActivity(
 }
 
 /**
- * `text` as a failure's message: cut to `FAILURE_MESSAGE_MAX_LENGTH`, and Unicode text without NUL
- * (`textSchema`), which the hub stores. A cut through a surrogate pair leaves half of it, which
+ * `text` cut to `FAILURE_MESSAGE_MAX_LENGTH`. A cut through a surrogate pair leaves half of it, which
  * `toWellFormed` replaces; fewer UTF-16 units than the maximum are never more characters.
  */
 export function failureMessage(text: string): string {
-  return text.replaceAll("\0", "").slice(0, FAILURE_MESSAGE_MAX_LENGTH).toWellFormed();
+  return text.slice(0, FAILURE_MESSAGE_MAX_LENGTH).toWellFormed();
 }
 
-/**
- * pi's wait before another attempt, with its end as an ISO date, as the hub stores it. Its error is
- * a provider's text, so it is made Unicode text without NUL (`textSchema`), which the hub's `jsonb`
- * stores.
- */
+/** pi's wait before another attempt, with its end as an ISO date, as the hub stores it. */
 function isoRetry(retry: { at: number; error: string }) {
-  return { at: isoDate(retry.at), error: retry.error.toWellFormed().replaceAll("\0", "") };
+  return { at: isoDate(retry.at), error: retry.error };
 }
