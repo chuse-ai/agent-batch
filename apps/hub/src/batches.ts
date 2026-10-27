@@ -222,9 +222,9 @@ export function createBatch(
           .values({
             id: BatchId(uuidv7()),
             organizationId: organization.id,
-            customId: customId ?? null,
+            customId,
             contentHash,
-            instructions: agent.instructions ?? null,
+            instructions: agent.instructions,
             resultContract: agent.resultContract,
             runTimeoutSeconds: agent.runTimeoutSeconds ?? settings.runTimeoutSecondsDefault,
             modelBudgetUsd: agent.modelBudgetUsd ?? settings.modelBudgetUsdDefault,
@@ -656,7 +656,9 @@ export function controlBatch(batchId: BatchId, control: "pause" | "resume") {
                   // The counts restart from the ends recorded after this, the Batch's lock keeping
                   // its jobs' counted ends, which take it first, before or after.
                   countedAfterUsageRecordId: eb.fn.coalesce(
-                    eb.selectFrom("usageRecord").select((max) => max.fn.max<number>("id").as("id")),
+                    eb
+                      .selectFrom("usageRecord")
+                      .select((max) => max.fn.max<UsageRecordId | null>("id").as("id")),
                     eb.lit(0),
                   ),
                   countedEnds: 0,

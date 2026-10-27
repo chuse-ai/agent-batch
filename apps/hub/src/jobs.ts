@@ -45,6 +45,7 @@ import {
   type JobUpdate,
   MemberId,
   type RunnerId,
+  type UsageRecordId,
 } from "./db/types.ts";
 import { deleteUnusedBlobs, lockInputFileBlobs } from "./input-files.ts";
 import type { HubSettings } from "./settings.ts";
@@ -670,7 +671,7 @@ async function withdrawCountedFailure(trx: Transaction<Database>, batchId: Batch
     .where("b.countedAfterUsageRecordId", "<", (eb) =>
       eb
         .selectFrom("usageRecord")
-        .select((max) => max.fn.max<number>("id").as("id"))
+        .select((max) => max.fn.max<UsageRecordId | null>("id").as("id"))
         .where("jobId", "=", jobId),
     )
     .execute();
@@ -1096,7 +1097,7 @@ export function listJobs(query: JobListQuery) {
   return Db.use((database) =>
     database.query(async (db) => {
       const { statuses, labels, batchId, customId, after, limit } = query;
-      const rows = await db
+      let selection = db
         .selectFrom("job as j")
         .innerJoin("jobProgress as p", "p.jobId", "j.id")
         // Without the content a list leaves out.
@@ -1109,18 +1110,19 @@ export function listJobs(query: JobListQuery) {
             batchId: eb.ref("j.batchId"),
             inCanary: eb.ref("j.inCanary"),
           }).as("blockedBy"),
-        ])
-        .$if(statuses.length > 0, (qb) =>
-          qb.where("j.status", "=", (eb) => eb.fn.any(eb.val([...statuses]))),
-        )
-        .$if(labels !== undefined && Object.keys(labels).length > 0, (qb) =>
-          qb.where((eb) =>
-            eb("j.labels", "@>", eb.cast<Labels>(eb.val(JSON.stringify(labels)), "jsonb")),
-          ),
-        )
-        .$if(batchId !== undefined, (qb) => qb.where("j.batchId", "=", batchId ?? null))
-        .$if(customId !== undefined, (qb) => qb.where("j.customId", "=", customId ?? null))
-        .$if(after !== undefined, (qb) => qb.where("j.id", "<", after ?? null))
+        ]);
+      if (statuses.length > 0) {
+        selection = selection.where("j.status", "=", (eb) => eb.fn.any(eb.val([...statuses])));
+      }
+      if (labels !== undefined && Object.keys(labels).length > 0) {
+        selection = selection.where((eb) =>
+          eb("j.labels", "@>", eb.cast<Labels>(eb.val(JSON.stringify(labels)), "jsonb")),
+        );
+      }
+      if (batchId !== undefined) selection = selection.where("j.batchId", "=", batchId);
+      if (customId !== undefined) selection = selection.where("j.customId", "=", customId);
+      if (after !== undefined) selection = selection.where("j.id", "<", after);
+      const rows = await selection
         .orderBy("j.id", "desc")
         // One more than the page, to learn whether more follow.
         .limit(limit + 1)

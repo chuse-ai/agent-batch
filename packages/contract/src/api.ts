@@ -524,8 +524,7 @@ export const apiContract = {
         ...byKey({ job: ["create"] }),
       )
       .input(
-        z.object({
-          ...batchRefSchema.shape,
+        z.extend(batchRefSchema, {
           jobs: z
             .array(jobSubmissionSchema)
             .check(

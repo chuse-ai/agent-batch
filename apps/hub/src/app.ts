@@ -257,10 +257,10 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
         // The IDs enter the hub here.
         return yield* listJobs({
           statuses: input.status ?? [],
-          ...(input.labels === undefined ? {} : { labels: input.labels }),
-          ...(input.batchId === undefined ? {} : { batchId: BatchId(input.batchId) }),
-          ...(input.customId === undefined ? {} : { customId: input.customId }),
-          ...(input.after === undefined ? {} : { after: JobId(input.after) }),
+          labels: input.labels,
+          batchId: input.batchId === undefined ? undefined : BatchId(input.batchId),
+          customId: input.customId,
+          after: input.after === undefined ? undefined : JobId(input.after),
           limit: input.limit,
         });
       }),
