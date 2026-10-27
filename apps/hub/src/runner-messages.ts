@@ -1,5 +1,5 @@
 import {
-  createProtocolServer,
+  createJsonRpcServer,
   hubNotifications,
   JOB_CANCELLED,
   JOB_FAILED,
@@ -17,7 +17,7 @@ import {
   jobReportSchema,
   jobSuccessSchema,
   notification,
-  runnerMethods,
+  runnerRequests,
   type DesiredState,
   type JobReport,
   type JobActivity,
@@ -46,8 +46,8 @@ import {
 } from "./jobs.ts";
 import { recordRunnerHello, recordRunnerSeen, SYNC_INTERVAL_MS } from "./runners.ts";
 
-// The hub's side of the Runner protocol (ADR 0026), shared by both hubs: each answers a Runner's
-// message by calling `handleRunnerMessage` with the Runner's identity and a database. A sync or a
+// The hub's side of the Runner protocol's socket (ADR 0026), shared by both hubs: each answers a
+// Runner's message by calling `handleRunnerMessage` with the Runner's identity and a database. A sync or a
 // report is answered by one statement that records what the Runner said and reads its desired
 // state: every queued or running job placed on it, with the content of those it does not hold,
 // queued jobs newly placed on its free slots, and the deletions of deleted jobs' files it owes.
@@ -752,8 +752,8 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
 }
 
 /** Answers a Runner's message: the text to send back, if any. */
-export const handleRunnerMessage = createProtocolServer<typeof runnerMethods, RunnerMessageContext>(
-  runnerMethods,
+export const handleRunnerMessage = createJsonRpcServer<typeof runnerRequests, RunnerMessageContext>(
+  runnerRequests,
   {
     hello: async ({ name }, context) => {
       await runWithServices(context, recordRunnerHello(context.runnerId, name, new Date()));

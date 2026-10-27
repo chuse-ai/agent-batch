@@ -11,14 +11,14 @@ import {
   HEARTBEAT_PONG,
   HEARTBEAT_TIMEOUT_MS,
   createProblemDetailsLink,
-  createProtocolClient,
+  createJsonRpcClient,
   hubNotifications,
   PROTOCOL_UNSUPPORTED,
   RUNNER_CONNECT_PATH,
   RUNNER_NOT_FOUND,
   RUNNER_PROTOCOL_VERSIONS,
   runnerHttpContract,
-  runnerMethods,
+  runnerRequests,
   type RegisteredRunner,
   registeredRunnerSchema,
   socketRefusalSchema,
@@ -349,8 +349,8 @@ function connectAndSync(
     const reader = yield* socket.reader;
     opened.at = Date.now();
     const pong = { at: Date.now() };
-    const hub = createProtocolClient(
-      runnerMethods,
+    const hub = createJsonRpcClient(
+      runnerRequests,
       hubNotifications,
       { syncNow: () => context.syncNow.openUnsafe() },
       // In the connection's scope: a write after the socket closed would otherwise wait forever.
@@ -361,7 +361,7 @@ function connectAndSync(
     );
 
     /** A request of the hub, dropped when not answered in time or at all. */
-    const request = <Name extends keyof typeof runnerMethods>(
+    const request = <Name extends keyof typeof runnerRequests>(
       name: Name,
       params: Parameters<typeof hub.request<Name>>[1],
     ) =>

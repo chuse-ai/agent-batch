@@ -11,7 +11,7 @@ import {
   type JobReport,
   jobReportSchema,
   registeredRunnerSchema,
-  runnerMethods,
+  runnerRequests,
 } from "contract";
 import { startRunner } from "runner";
 import { assert, expect, test } from "vite-plus/test";
@@ -74,7 +74,7 @@ async function runAgainstStandIn(
         }
         if (request.method !== "report") return;
         const jobs = z
-          .parse(runnerMethods.report.params, request.params)
+          .parse(runnerRequests.report.params, request.params)
           .jobs.map((job) => z.parse(jobReportSchema, job));
         const desired = answer(jobs, connection);
         if (!desired) return socket.terminate();

@@ -89,7 +89,7 @@ function toErrorResponse(id: JSONRPCID, error: unknown) {
  * library. Thrown errors other than refusals answer as a plain internal error, so nothing internal
  * reaches the peer.
  */
-export function createProtocolServer<M extends Methods, Context>(
+export function createJsonRpcServer<M extends Methods, Context>(
   methods: M,
   handlers: Handlers<M, Context>,
 ) {
@@ -112,7 +112,7 @@ export function notification<N extends Notifications, Name extends keyof N & str
 }
 
 /** The requests this side can make of a peer, and the notifications it takes from it. */
-export interface ProtocolClient<M extends Methods> {
+export interface JsonRpcClient<M extends Methods> {
   /** Makes a request, answered within `timeoutMs` or failed. */
   request<Name extends keyof M & string>(
     name: Name,
@@ -130,12 +130,12 @@ export interface ProtocolClient<M extends Methods> {
  * notifications to `onNotification`; the library routes each incoming message to one or the other.
  * Responses are checked against the method's result schema.
  */
-export function createProtocolClient<M extends Methods, N extends Notifications>(
+export function createJsonRpcClient<M extends Methods, N extends Notifications>(
   methods: M,
   notifications: N,
   onNotification: NotificationHandlers<N>,
   send: (text: string) => void,
-): ProtocolClient<M> {
+): JsonRpcClient<M> {
   const server = new JSONRPCServer();
   server.mapErrorToJSONRPCErrorResponse = toErrorResponse;
   const client = new JSONRPCClient<void>((payload) => send(JSON.stringify(payload)));

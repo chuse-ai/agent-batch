@@ -388,7 +388,7 @@ const refusedReportSchema = z.object({ ...runRefSchema.shape, reason: z.string()
 export type RefusedReport = z.infer<typeof refusedReportSchema>;
 
 /** The requests a Runner makes of the hub. */
-export const runnerMethods = {
+export const runnerRequests = {
   /** The first request on a new socket: who the Runner is. The hub says how often to sync. */
   hello: {
     params: z.object({ name: z.string() }),

@@ -4,10 +4,10 @@ import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 
 import {
-  createProtocolClient,
+  createJsonRpcClient,
   hubNotifications,
   type JobSubmission,
-  runnerMethods,
+  runnerRequests,
 } from "contract";
 import { sql } from "kysely";
 import { afterAll, assert, beforeAll, expect, inject, test } from "vite-plus/test";
@@ -41,7 +41,7 @@ function sha256(text: string): string {
 /** A Runner's side of the protocol on a socket the test opens itself. */
 async function connectProtocolRunner() {
   const { key, socket } = await system.connectRunner();
-  const runner = createProtocolClient(runnerMethods, hubNotifications, { syncNow() {} }, (text) =>
+  const runner = createJsonRpcClient(runnerRequests, hubNotifications, { syncNow() {} }, (text) =>
     socket.send(text),
   );
   socket.addEventListener("message", (event) => {
