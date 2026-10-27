@@ -163,7 +163,7 @@ export function journalExists(
  */
 function instructions(paths: { workspace: string }, job: JobContent) {
   const own = runnerInstructions(paths);
-  return job.instructions === undefined ? own : `${own}\n\n${job.instructions}`;
+  return job.instructions === null ? own : `${own}\n\n${job.instructions}`;
 }
 
 /** What the Runner tells every job's agent about running unattended. */

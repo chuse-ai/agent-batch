@@ -19,7 +19,6 @@ import {
   notification,
   runnerRequests,
   type DesiredState,
-  type JobContent,
   type JobReport,
   type JobActivity,
   type JobUsage,
@@ -795,7 +794,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
           jobId: row.id,
           runId: row.runId,
           intent: z.parse(intentSchema, row.intent),
-          ...(row.job === null ? {} : { job: jobContentOf(row.job) }),
+          ...(row.job === null ? {} : { job: row.job }),
           position: row.position,
           runTimeoutSeconds: row.runTimeoutSeconds,
           modelBudgetUsd: row.modelBudgetUsd,
@@ -804,12 +803,6 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
       };
     }),
   );
-}
-
-/** A job's content as the protocol sends it: without `instructions` where its agent has none. */
-function jobContentOf(content: Omit<JobContent, "instructions"> & { instructions: string | null }) {
-  const { instructions, ...rest } = content;
-  return { ...rest, ...(instructions === null ? {} : { instructions }) } satisfies JobContent;
 }
 
 /** Answers a Runner's message: the text to send back, if any. */

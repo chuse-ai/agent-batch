@@ -207,8 +207,11 @@ test("a cancel is final: the Batch takes no new jobs and resumes none, even with
 
   const cancelled = await client.batches.cancel({ id: batch.id });
   // No Runner was sent the job, so it ends at once.
-  expect(cancelled).toMatchObject({ status: "cancelled", jobCounts: { cancelled: 1 } });
-  expect(cancelled).not.toHaveProperty("pausedBy");
+  expect(cancelled).toMatchObject({
+    status: "cancelled",
+    pausedBy: null,
+    jobCounts: { cancelled: 1 },
+  });
   expect(cancelled).not.toHaveProperty("pendingControl");
   // Also an add of the job it has.
   await expect(

@@ -135,7 +135,7 @@ export async function readBatch(
   const cancelWaits = row.cancelledAt !== null && unfinished > 0;
   return {
     id: row.id,
-    ...(row.customId === null ? {} : { customId: row.customId }),
+    customId: row.customId,
     createdAt: row.createdAt,
     status:
       row.cancelledAt !== null && !cancelWaits
@@ -143,7 +143,7 @@ export async function readBatch(
         : row.pausedBy !== null
           ? "paused"
           : "active",
-    ...(row.pausedBy === null ? {} : { pausedBy: row.pausedBy }),
+    pausedBy: row.pausedBy,
     ...(cancelWaits && row.cancelledAt !== null
       ? { pendingControl: { type: "cancel" as const, requestedAt: row.cancelledAt } }
       : {}),

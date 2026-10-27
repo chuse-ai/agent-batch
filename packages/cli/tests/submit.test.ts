@@ -22,13 +22,16 @@ test("jobs submit retries an add whose connection dropped with the custom ID it 
   const hub = createServer(async (request, response) => {
     const body: unknown = JSON.parse(await text(request));
     if (request.url === "/batches") {
-      created.push(z.parse(z.object({ customId: z.string() }), body).customId);
+      const { customId } = z.parse(z.object({ customId: z.string() }), body);
+      created.push(customId);
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
         JSON.stringify({
           id: batchId,
+          customId,
           createdAt: new Date().toISOString(),
           status: "active",
+          pausedBy: null,
           labels: {},
           breaker: false,
           jobCounts: { queued: 0, running: 0, paused: 0, succeeded: 0, failed: 0, cancelled: 0 },

@@ -305,8 +305,8 @@ export const batchStatusSchema = z.enum(["active", "paused", "cancelled"]);
 export const batchSchema = z
   .object({
     id: z.uuid(),
-    /** The caller's own ID for the Batch, when it was created with one. */
-    customId: z.optional(z.string()),
+    /** The caller's own ID for the Batch; null when it was created without one. */
+    customId: z.nullable(z.string()),
     createdAt: z.date(),
     /**
      * `active` while it releases its jobs, an empty Batch and one whose jobs have all ended included,
@@ -315,8 +315,8 @@ export const batchSchema = z
      * Batch has no status of its own for having no unfinished job: `jobCounts` tells.
      */
     status: batchStatusSchema,
-    /** Who paused the Batch, while it is paused: a caller, or its failure breaker. */
-    pausedBy: z.optional(z.enum(["caller", "breaker"])),
+    /** Who paused the Batch, a caller or its failure breaker; null while it is not paused. */
+    pausedBy: z.nullable(z.enum(["caller", "breaker"])),
     /** A cancel waiting for its jobs' Runners to stop them, present only while it waits. */
     pendingControl: z.optional(z.object({ type: z.literal("cancel"), requestedAt: z.date() })),
     labels: labelsSchema,
