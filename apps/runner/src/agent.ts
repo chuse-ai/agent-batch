@@ -159,7 +159,7 @@ export function journalExists(
  * What the agent is told about the job, beside its input: the Runner's own text, the same for every
  * job, then the instructions of the job's Batch's agent, if any, which every job of the Batch shares.
  * Nothing that names the job, such as its Workspace's path, comes before its input, so every job of a
- * Batch has the same system prompt, which a model provider can cache with the tools before it. The
+ * Batch is told the same instructions, which a model provider can cache with the tools before them. The
  * sandbox's `/tmp` is the job's own but held in memory, which counts against the job's memory limit.
  */
 function instructions(job: JobContent) {
