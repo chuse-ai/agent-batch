@@ -11,7 +11,7 @@ import {
   NotFound,
 } from "contract";
 import { Array, Data, Effect } from "effect";
-import { type Kysely, sql, type Transaction } from "kysely";
+import { type Kysely, type NotNull, sql, type Transaction } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { v7 as uuidv7 } from "uuid";
 import * as z from "zod/mini";
@@ -209,7 +209,7 @@ export function createBatch(
     // so `true` and the defaults spelled out are the same.
     const contentHash =
       customId === undefined
-        ? null
+        ? undefined
         : contentHashOf({ agent, labels: creation.labels, breaker: apiBreakerOf(breaker) });
     const [files] = yield* prepareInputFiles([agent.inputFiles]);
     const created = yield* database.query((db) =>
@@ -776,10 +776,10 @@ export function cancelBatch(batchId: BatchId) {
           .where("placedAt", "is not", null)
           .where((eb) => eb("pendingControl", "is distinct from", "cancel"))
           .returning("runnerId")
+          // Placed jobs have a Runner (job_placedAt_check).
+          .$narrowType<{ runnerId: NotNull }>()
           .execute();
-        const hints = Array.dedupe(
-          waiting.flatMap(({ runnerId }) => (runnerId === null ? [] : [runnerId])),
-        );
+        const hints = Array.dedupe(waiting.map(({ runnerId }) => runnerId));
         return {
           decision: { kind: "changed", hints } as const,
           batch: await readBatch(trx, batchId),

@@ -24,7 +24,6 @@ export type { default as JobControl } from "./generated/agent_batch/JobControl.t
 export type { default as JobFailureReason } from "./generated/agent_batch/JobFailureReason.ts";
 export type { JobDeletion as JobDeletionRow } from "./generated/agent_batch/JobDeletion.ts";
 export type { UsageRecordId };
-export type { NewUpload } from "./generated/agent_batch/Upload.ts";
 export type { NewUploadChunk } from "./generated/agent_batch/UploadChunk.ts";
 
 // Each ID type with its constructor under the same name, as Effect brands are declared. A string

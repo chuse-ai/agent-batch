@@ -242,9 +242,7 @@ function commandsOf(router: object, path: readonly string[] = []): Commands {
  * on stderr before anything is sent. The custom ID names both the Batch and its job.
  */
 function submitCommand() {
-  // Omit before extending: the CLI makes customId optional and adds the Batch's agent. These
-  // helpers keep field types without inheriting JobSubmission's registry ID as a JSON Schema ref,
-  // which trpc-cli cannot follow (mmkal/trpc-cli#233). The submission has no object-level checks.
+  // extend may replace customId because the submission has no object-level checks.
   return os
     .meta({
       description:
@@ -259,7 +257,7 @@ function submitCommand() {
       ],
     })
     .input(
-      z.extend(z.omit(jobSubmissionSchema, { customId: true }), {
+      z.extend(jobSubmissionSchema, {
         customId: z.optional(
           jobSubmissionSchema.shape.customId.check(
             z.describe(

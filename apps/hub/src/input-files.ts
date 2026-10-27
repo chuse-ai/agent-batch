@@ -13,7 +13,6 @@ import {
   type Database,
   InputFileName,
   type JobId,
-  type NewUpload,
   type NewUploadChunk,
   type RunnerId,
   UploadChunkIndex,
@@ -226,12 +225,12 @@ async function storeBlobs(trx: Kysely<Database>, prepared: readonly PreparedInpu
     .execute();
   const created = new Set(inserted.map((row) => row.sha256.toString("hex")));
   if (created.size === 0) return;
-  const uploads: NewUpload[] = [];
+  const uploads: { id: UploadId; sha256: string }[] = [];
   const chunks: NewUploadChunk[] = [];
   for (const [hex, blob] of blobs) {
     if (!created.has(hex)) continue;
     const uploadId = UploadId(randomUUID());
-    uploads.push({ id: uploadId, sha256: blob.sha256, chunkBytes: CHUNK_BYTES });
+    uploads.push({ id: uploadId, sha256: hex });
     // Compressed here only when the blob was stored when the submission looked and deleted since.
     for (const [index, bytes] of (blob.chunks ?? compress(blob.bytes)).entries()) {
       chunks.push({ uploadId, index: UploadChunkIndex(index), bytes });
@@ -242,18 +241,13 @@ async function storeBlobs(trx: Kysely<Database>, prepared: readonly PreparedInpu
     .columns(["id", "sha256", "chunkBytes"])
     .expression(
       trx
-        .selectFrom((eb) =>
-          jsonRows(
-            eb,
-            uploads.map((upload) => ({ ...upload, sha256: upload.sha256.toString("hex") })),
-          ),
-        )
+        .selectFrom((eb) => jsonRows(eb, uploads))
         .select((eb) => [
           eb.cast<UploadId>(eb.ref("row.value", "->>").key("id"), "uuid").as("id"),
           eb
             .fn<BlobSha256>("decode", [eb.ref("row.value", "->>").key("sha256"), eb.val("hex")])
             .as("sha256"),
-          eb.cast<number>(eb.ref("row.value", "->>").key("chunkBytes"), "integer").as("chunkBytes"),
+          eb.val(CHUNK_BYTES).as("chunkBytes"),
         ]),
     )
     .execute();
