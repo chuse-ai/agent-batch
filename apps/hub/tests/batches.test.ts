@@ -373,6 +373,25 @@ test("a caller's pause keeps the breaker counting, and the caller's resume after
   await untilBatchStatus(client, batch.id, "cancelled");
 });
 
+test("a Batch without a breaker releases every job at once and never pauses itself", async () => {
+  // Every job's model call fails.
+  system.model.setResponses([]);
+  const client = await system.clientWithNewJobsKey();
+  const batch = await client.batches.create({ agent: AGENT, breaker: false });
+  const added = await client.batches.addJobs({
+    id: batch.id,
+    jobs: ["1", "2", "3"].map((customId) => jobNamed(customId)),
+  });
+  expect(blockedBy(added)).toEqual(["none", "none", "none"]);
+
+  await expect
+    .poll(async () => (await client.batches.get({ id: batch.id })).jobCounts.failed, {
+      timeout: 15_000,
+    })
+    .toBe(3);
+  expect(await client.batches.get({ id: batch.id })).toMatchObject({ status: "active" });
+});
+
 test("a Batch's summary counts its jobs by status and adds up their cost, those deleted left out", async () => {
   system.model.setResponses([
     callTool("submit_result", { value: 1 }),
