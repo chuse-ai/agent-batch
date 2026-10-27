@@ -11,3 +11,5 @@ A list of jobs is read newest first, the same way: `after` takes the ID of the l
 ## Considered options
 
 snake_case field names, as in Cloudflare's account-level REST API, Wrangler configuration, and the OpenAI and Anthropic APIs, would look familiar to some callers, but the same job would then be snake_case over HTTP and camelCase in JavaScript, with camelCase schema keywords nested inside snake_case fields. Our callers send jobs, not model requests, so they gain little from matching the model APIs.
+
+An opaque cursor the hub mints, as Google's AIP-158 `page_token` is, would hold only the job ID `after` already takes, and would need a rule for a request whose filters differ from those the cursor was minted with. A later sort order, such as by when a job ended, would need a position the ID alone cannot give; a cursor for that order would then come beside `after`.
