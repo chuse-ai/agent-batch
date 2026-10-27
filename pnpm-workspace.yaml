@@ -83,4 +83,5 @@ catalog:
   ws: ^8.22.0
   zod: ^4.6.7
 patchedDependencies:
+  "@anthropic-ai/sandbox-runtime@0.0.81": patches/@anthropic-ai__sandbox-runtime@0.0.81.patch
   generate-license-file: patches/generate-license-file.patch

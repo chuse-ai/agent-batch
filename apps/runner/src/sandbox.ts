@@ -130,6 +130,19 @@ function withJobOomScore(command: readonly string[]): string[] {
     : [...command];
 }
 
+/**
+ * The shell sandbox-runtime runs the commands it wraps in: the startup check and the start of a
+ * job's daemon. Its default is bash, which it looks up by name on every wrap with a blocking
+ * `which` spawn: under load that took about a tenth of the Runner's thread and, past its 1 s
+ * timeout, failed wraps (anthropics/sandbox-runtime#548). Both commands are plain sh, like the
+ * Runner's own around them, so any `/bin/sh` serves, dash in the Runner's Debian image included.
+ * The daemon's start `exec`s it, and the daemon runs the agent's commands in a shell of its own
+ * choosing, bash where the host has it. Given an absolute path, sandbox-runtime skips the spawn
+ * only with the patch in `patches/`, which applies anthropics/sandbox-runtime#551 and goes once a
+ * release includes it.
+ */
+const JOB_SHELL = "/bin/sh";
+
 /** How the Runner runs every job's sandbox. */
 export interface SandboxSettings {
   /** Folders a job may read besides the system's, such as tools installed in a home folder. */
@@ -275,7 +288,7 @@ function setUpSandboxRuntime(
         try: () =>
           SandboxManager.wrapWithSandbox(
             `test -x "$AGENT_BATCH_DAEMON"`,
-            undefined,
+            JOB_SHELL,
             jobPolicy({ workspace: scratch, temp: scratch }, readable),
           ),
         catch: ensureError,
@@ -448,7 +461,7 @@ function openJobEnvironment(options: {
       if (options.sandboxed) {
         inner = await SandboxManager.wrapWithSandbox(
           DAEMON_IN_SANDBOX,
-          undefined,
+          JOB_SHELL,
           jobPolicy(dirs, options.readable),
           closing.signal,
         );
