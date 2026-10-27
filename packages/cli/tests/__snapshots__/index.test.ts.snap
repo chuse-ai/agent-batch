@@ -492,7 +492,7 @@ exports[`the commands and their flags 1`] = `
             },
             {
               "attributeName": "labels",
-              "description": "Labels the job must all have, as \`labels[customer]=acme\`; repeat for more.; Property names: {"type":"string"}",
+              "description": "Labels the job must all have, as \`labels[customer]=acme\`; repeat for more.; Property names: {"type":"string","pattern":"^(?:(?=.{1,253}\\\\/)[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\\\\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*\\\\/)?[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?$"}",
               "flags": "--labels [json]",
               "name": "labels",
               "negate": false,
@@ -512,7 +512,7 @@ exports[`the commands and their flags 1`] = `
             },
             {
               "attributeName": "customId",
-              "description": "The job's own \`customId\`, which is unique in its Batch, so without \`batchId\` it may match a job in each of several Batches.",
+              "description": "The job's own \`customId\`, which is unique in its Batch, so without \`batchId\` it may match a job in each of several Batches.; Min length: 1; Max length: 255",
               "flags": "--custom-id [string]",
               "name": "custom-id",
               "negate": false,

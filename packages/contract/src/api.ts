@@ -9,7 +9,9 @@ import {
   instructionsSchema,
   jobIdSchema,
   jobRefSchema,
+  labelKeySchema,
   labelsSchema,
+  labelValueSchema,
   MAX_LABELS,
   modelBudgetUsdSchema,
   resultContractSchema,
@@ -727,7 +729,7 @@ export const apiContract = {
           ),
           labels: z.optional(
             z
-              .record(z.string(), z.string())
+              .record(labelKeySchema, labelValueSchema)
               .check(
                 z.describe(
                   "Labels the job must all have, as `labels[customer]=acme`; repeat for more.",
@@ -736,13 +738,11 @@ export const apiContract = {
           ),
           batchId: z.optional(z.uuid().check(z.describe("The Batch the job belongs to."))),
           customId: z.optional(
-            z
-              .string()
-              .check(
-                z.describe(
-                  "The job's own `customId`, which is unique in its Batch, so without `batchId` it may match a job in each of several Batches.",
-                ),
+            customIdSchema.check(
+              z.describe(
+                "The job's own `customId`, which is unique in its Batch, so without `batchId` it may match a job in each of several Batches.",
               ),
+            ),
           ),
           after: z.optional(
             jobIdSchema.check(
