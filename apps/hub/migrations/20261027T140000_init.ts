@@ -311,7 +311,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .createIndex("job_runnerId_unfinished_idx")
     .on("job")
     .columns(["runnerId"])
-    .where(sql.ref("status"), "in", sql`('queued', 'running')`)
+    .where(sql.ref("status"), "in", ["queued", "running"])
     .execute();
   await schema
     .createIndex("job_queued_unsent_idx")
@@ -323,15 +323,18 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   // Listing jobs by custom ID across Batches.
   await schema.createIndex("job_customId_idx").on("job").column("customId").execute();
   // Listing jobs by label reads `labels @> …`, which this operator class serves.
-  await sql`create index "job_labels_idx" on agent_batch.job using gin (labels jsonb_path_ops)`.execute(
-    db,
-  );
+  await schema
+    .createIndex("job_labels_idx")
+    .on("job")
+    .using("gin")
+    .expression(sql`${sql.ref("labels")} jsonb_path_ops`)
+    .execute();
   // A Batch's summary and its controls read its unfinished jobs; placement, its unfinished Canary.
   await schema
     .createIndex("job_batchId_unfinished_idx")
     .on("job")
     .columns(["batchId", "inCanary"])
-    .where(sql.ref("status"), "in", sql`('queued', 'running', 'paused')`)
+    .where(sql.ref("status"), "in", ["queued", "running", "paused"])
     .execute();
   // Listing a Batch's jobs, newest first.
   await schema.createIndex("job_batchId_id_idx").on("job").columns(["batchId", "id"]).execute();
