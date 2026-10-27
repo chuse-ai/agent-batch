@@ -1,5 +1,12 @@
 export * from "./api.ts";
-export { jsonTextSchema, type ListedInputFile, type ResultContract, jobRefSchema } from "./job.ts";
+export {
+  jsonTextSchema,
+  type Labels,
+  labelsSchema,
+  type ListedInputFile,
+  type ResultContract,
+  jobRefSchema,
+} from "./job.ts";
 export * from "./json-rpc.ts";
 export * from "./problem-details.ts";
 export {

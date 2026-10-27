@@ -3,36 +3,40 @@ import { createHash } from "node:crypto";
 
 import canonicalize from "canonicalize";
 import {
+  type BlockedBy,
   ControlRefused,
   FINAL_JOB_STATUSES,
-  IdempotencyKeyReused,
   NotFound,
   type Job,
   type JobEvent,
   type JobEventsPage,
+  type JobsPage,
+  type Labels,
   jobEventSchema,
-  type JobSubmission,
 } from "contract";
 import { Array, Effect, Order, Record, String, Struct } from "effect";
 import { compileSchema, isJsonError } from "json-schema-library";
 import {
+  type AliasableExpression,
+  type Expression,
   type ExpressionBuilder,
+  expressionBuilder,
   type Kysely,
   type QueryCreator,
   sql,
   type Transaction,
 } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
-import { v7 as uuidv7 } from "uuid";
 import * as z from "zod/mini";
 
-import { getOrganization, keyMetadataSchema } from "./auth/auth.ts";
+import { keyMetadataSchema } from "./auth/auth.ts";
 import { Db, DB_SCHEMA } from "./db/database.ts";
 import {
   ApikeyId,
+  type BatchId,
   type Database,
   type EventId,
-  JobId,
+  type JobId,
   type JobProgressRow,
   type JobFailureReason,
   type JobDeletionRow,
@@ -41,13 +45,9 @@ import {
   type JobUpdate,
   MemberId,
   type RunnerId,
+  type UsageRecordId,
 } from "./db/types.ts";
-import {
-  deleteUnusedBlobs,
-  lockInputFileBlobs,
-  prepareInputFiles,
-  storeInputFiles,
-} from "./input-files.ts";
+import { deleteUnusedBlobs, lockInputFileBlobs } from "./input-files.ts";
 import type { HubSettings } from "./settings.ts";
 
 /** The statuses a job ends in (`FINAL_JOB_STATUSES`), as the hub's database types them. */
@@ -62,6 +62,8 @@ const MAX_PAGE_BYTES = 1024 * 1024;
 /** What a job's Usage record copies from the job's row at its end, beside the job's ID. */
 export const USAGE_COPIED_COLUMNS = [
   "organizationId",
+  "batchId",
+  "labels",
   "status",
   "failureReason",
   "runnerId",
@@ -87,6 +89,9 @@ const JOB_COLUMNS = [
   "failureMessage",
   "pendingControl",
   "pendingControlRequestedAt",
+  "batchId",
+  "customId",
+  "labels",
 ] as const;
 const PROGRESS_COLUMNS = ["totalTokens", "costUsd", "activity"] as const;
 
@@ -98,7 +103,7 @@ const PROGRESS_COLUMNS = ["totalTokens", "costUsd", "activity"] as const;
  */
 function toApiJob(
   job: Pick<JobRow, (typeof JOB_COLUMNS)[number]> &
-    Pick<JobProgressRow, (typeof PROGRESS_COLUMNS)[number]>,
+    Pick<JobProgressRow, (typeof PROGRESS_COLUMNS)[number]> & { blockedBy: BlockedBy | null },
 ): Job {
   const {
     status,
@@ -110,6 +115,7 @@ function toApiJob(
     activity,
     pendingControl,
     pendingControlRequestedAt,
+    blockedBy,
     ...rest
   } = job;
   const summary = {
@@ -119,8 +125,83 @@ function toApiJob(
     ...(pendingControl !== null && pendingControlRequestedAt !== null
       ? { pendingControl: { type: pendingControl, requestedAt: pendingControlRequestedAt } }
       : {}),
+    ...(blockedBy === null ? {} : { blockedBy }),
   };
   return withOutcome({ ...rest, ...summary }, { status, result, failureReason, failureMessage });
+}
+
+/**
+ * What keeps the job from being sent to a Runner, or null: only a queued job not yet sent to
+ * one is blocked, by its Batch's pause, a caller's or the breaker's, or, outside its Batch's Canary,
+ * by the Canary while any of its jobs is unfinished. Derived whenever it is read, from the Batch,
+ * so pausing or resuming a Batch is one write; placement sends only the jobs this finds nothing for.
+ */
+export function blockedByOf(job: {
+  status: Expression<JobRow["status"]>;
+  placedAt: Expression<JobRow["placedAt"]>;
+  batchId: Expression<JobRow["batchId"]>;
+  inCanary: Expression<JobRow["inCanary"]>;
+}): AliasableExpression<BlockedBy | null> {
+  const eb = expressionBuilder<Database>();
+  return eb
+    .case()
+    .when(eb.or([eb(job.status, "!=", "queued"), eb(job.placedAt, "is not", null)]))
+    .then(eb.lit(null))
+    .else(
+      eb
+        .selectFrom("batch as b")
+        .select((batch) =>
+          batch
+            .case()
+            .when("b.pausedBy", "=", "caller")
+            .then(batch.val<BlockedBy>("batchPausedByCaller"))
+            .when("b.pausedBy", "=", "breaker")
+            .then(batch.val<BlockedBy>("batchPausedByBreaker"))
+            .when(
+              batch.and([
+                batch(job.inCanary, "=", false),
+                batch.exists(
+                  batch
+                    .selectFrom("job as canary")
+                    .select("canary.id")
+                    .whereRef("canary.batchId", "=", job.batchId)
+                    .where("canary.inCanary", "=", true)
+                    .where("canary.status", "in", UNFINISHED),
+                ),
+              ]),
+            )
+            .then(batch.val<BlockedBy>("batchCanary"))
+            .else(batch.lit(null))
+            .end()
+            .as("reason"),
+        )
+        .whereRef("b.id", "=", job.batchId),
+    )
+    .end();
+}
+
+/** The statuses of a job that has not ended. */
+export const UNFINISHED: JobStatus[] = ["queued", "running", "paused"];
+
+/** The jobs `ids` as the API reports them, in no particular order, each with what blocks it. */
+export async function readJobs(db: Kysely<Database>, ids: readonly JobId[]): Promise<Job[]> {
+  if (ids.length === 0) return [];
+  const rows = await db
+    .selectFrom("job as j")
+    .innerJoin("jobProgress as p", "p.jobId", "j.id")
+    .select((eb) => [
+      ...JOB_COLUMNS.map((column) => `j.${column}` as const),
+      ...PROGRESS_COLUMNS.map((column) => `p.${column}` as const),
+      blockedByOf({
+        status: eb.ref("j.status"),
+        placedAt: eb.ref("j.placedAt"),
+        batchId: eb.ref("j.batchId"),
+        inCanary: eb.ref("j.inCanary"),
+      }).as("blockedBy"),
+    ])
+    .where("j.id", "=", (eb) => eb.fn.any(eb.val([...ids])))
+    .execute();
+  return rows.map(toApiJob);
 }
 
 /** What every job reports whatever its status. */
@@ -201,7 +282,7 @@ export type GivenLimits = Pick<JobUpdate, "runTimeoutSeconds" | "modelBudgetUsd"
  * which the API refuses as it refuses any invalid input.
  */
 export function limitProblems(given: GivenLimits, settings: HubSettings["jobLimits"]) {
-  const problems: { message: string; path: string[] }[] = [];
+  const problems: { message: string; path: (string | number)[] }[] = [];
   if (
     given.runTimeoutSeconds !== undefined &&
     given.runTimeoutSeconds > settings.runTimeoutSecondsMax
@@ -221,7 +302,7 @@ export function limitProblems(given: GivenLimits, settings: HubSettings["jobLimi
 }
 
 /** Who submitted a job: the API key and the member who created it, copied as they were. */
-interface Submitter {
+export interface Submitter {
   keyId: ApikeyId;
   keyName: string | null;
   memberId: MemberId;
@@ -238,96 +319,24 @@ export function submitterOf(key: { id: string; name: string | null; metadata: un
 }
 
 /**
- * The submission's content without its idempotency key, as the hex SHA-256 of its RFC 8785
- * canonical JSON: the same content always hashes the same, however its JSON was written.
+ * The `content` of a job or a Batch, without the custom ID that names it, as the hex SHA-256 of its
+ * RFC 8785 canonical JSON: the same content always hashes the same, however its JSON was written.
  */
-function contentHashOf(submission: JobSubmission) {
-  // Canonical JSON, like JSON, leaves out properties whose value is `undefined`.
-  const content = canonicalize({ ...submission, idempotencyKey: undefined });
+export function contentHashOf(content: object) {
+  // Canonical JSON, like JSON, leaves out properties whose value is `undefined`, so a key set to
+  // `undefined` is left out.
+  const canonical = canonicalize(content);
   return createHash("sha256")
-    .update(content ?? "")
+    .update(canonical ?? "")
     .digest("hex");
-}
-
-/**
- * Accepts the job `submission` as `queued`, with the hub's default for each limit it leaves out.
- * A submission with the idempotency key of an earlier job returns that job if their content is
- * the same, and fails otherwise.
- */
-export function submitJob(
-  submission: JobSubmission,
-  submitter: Submitter,
-  settings: HubSettings["jobLimits"],
-) {
-  return Effect.gen(function* () {
-    const database = yield* Db;
-    const organization = yield* getOrganization;
-    const contentHash = contentHashOf(submission);
-    const inputFiles = yield* prepareInputFiles(submission.inputFiles);
-    const job = yield* database.query((db) =>
-      db.transaction().execute(async (trx) => {
-        // A concurrent submission with the same key waits here for the first to commit, then
-        // inserts nothing; the select after it sees the committed job.
-        const inserted = await trx
-          .insertInto("job")
-          .values({
-            id: JobId(uuidv7()),
-            organizationId: organization.id,
-            status: "queued",
-            prompt: submission.prompt,
-            resultContract: submission.resultContract,
-            runTimeoutSeconds: submission.runTimeoutSeconds ?? settings.runTimeoutSecondsDefault,
-            modelBudgetUsd: submission.modelBudgetUsd ?? settings.modelBudgetUsdDefault,
-            idempotencyKey: submission.idempotencyKey ?? null,
-            contentHash,
-            submitterKeyId: submitter.keyId,
-            submitterKeyName: submitter.keyName,
-            submitterMemberId: submitter.memberId,
-            createdAt: new Date(),
-          })
-          .onConflict((conflict) =>
-            conflict.constraint("job_organizationId_idempotencyKey_key").doNothing(),
-          )
-          .returning([...JOB_COLUMNS, "contentHash"])
-          .executeTakeFirst();
-        // Only a submission with an idempotency key can conflict.
-        if (!inserted) {
-          return await trx
-            .selectFrom("job")
-            .innerJoin("jobProgress", "jobProgress.jobId", "job.id")
-            .select([...JOB_COLUMNS, "contentHash", ...PROGRESS_COLUMNS])
-            .where("organizationId", "=", organization.id)
-            .where("idempotencyKey", "=", submission.idempotencyKey ?? null)
-            .executeTakeFirstOrThrow();
-        }
-        // Reports from the job's Runner update this row, starting from nothing stored and nothing used.
-        const progress = await trx
-          .insertInto("jobProgress")
-          .values({ jobId: inserted.id })
-          .returning(PROGRESS_COLUMNS)
-          .executeTakeFirstOrThrow();
-        await storeInputFiles(trx, inserted.id, inputFiles);
-        return { ...inserted, ...progress };
-      }),
-    );
-    if (job.contentHash !== contentHash) return yield* Effect.fail(new IdempotencyKeyReused());
-    return toApiJob(Struct.pick(job, [...JOB_COLUMNS, ...PROGRESS_COLUMNS]));
-  });
 }
 
 /** The job `jobId`, or a 404 error. */
 export function getJob(jobId: JobId) {
   return Effect.gen(function* () {
     const database = yield* Db;
-    const job = yield* database.query((db) =>
-      db
-        .selectFrom("job")
-        .innerJoin("jobProgress", "jobProgress.jobId", "job.id")
-        .select([...JOB_COLUMNS, ...PROGRESS_COLUMNS])
-        .where("id", "=", jobId)
-        .executeTakeFirst(),
-    );
-    if (job) return toApiJob(job);
+    const [job] = yield* database.query((db) => readJobs(db, [jobId]));
+    if (job) return job;
     const deleted = yield* database.query((db) => readDeletedJob(db, jobId));
     if (!deleted) return yield* Effect.fail(new NotFound());
     return deleted;
@@ -349,6 +358,8 @@ type ControlledJob = Pick<
     runnerExists: boolean;
     budgetLeft: boolean;
     givenLimitsHold: boolean;
+    /** Whether its Batch is cancelled, which is final. */
+    batchCancelled: boolean;
   };
 
 /**
@@ -384,11 +395,16 @@ function decide(control: Control, job: ControlledJob, now: Date, given: GivenLim
   // A resume that changes the job gives it the limits it names, and is refused where its model
   // budget, the one it names or its own, would leave nothing to spend.
   const resumeIfBudgetLeft = (set: JobUpdate, hint?: RunnerId | "live"): Decision =>
-    job.budgetLeft
-      ? { kind: "changed", set: { ...set, ...given }, ...(hint === undefined ? {} : { hint }) }
-      : refused(
-          `The job's model calls have cost $${job.costUsd}, so it resumes only with a modelBudgetUsd above that`,
-        );
+    // A Batch's cancel is final: a job resumed would run in a Batch that takes no jobs, and, while
+    // the cancel waits, under a cancel that is never to stop it. A cancelled job does not record who
+    // cancelled it, so the job a person cancelled cannot be told from one its Batch's cancel ended.
+    job.batchCancelled
+      ? refused("The job's Batch is cancelled")
+      : job.budgetLeft
+        ? { kind: "changed", set: { ...set, ...given }, ...(hint === undefined ? {} : { hint }) }
+        : refused(
+            `The job's model calls have cost $${job.costUsd}, so it resumes only with a modelBudgetUsd above that`,
+          );
   // A resumed job that started carries on from its journal, which only its Runner holds, as a new
   // run there (ADR 0026), sent when that Runner next syncs; one that never started has
   // no work to carry on.
@@ -477,6 +493,22 @@ function decide(control: Control, job: ControlledJob, now: Date, given: GivenLim
 }
 
 /**
+ * Locks, in the transaction `trx`, the Batch of the job `jobId` before the job is locked: a Batch is
+ * locked before its jobs wherever both are (ADR 0033). A job's Batch never changes, so it is read
+ * without a lock first.
+ */
+async function lockBatchOfJob(trx: Transaction<Database>, jobId: JobId) {
+  await trx
+    .selectFrom("batch")
+    .select("batch.id")
+    .where("batch.id", "=", (eb) =>
+      eb.selectFrom("job").select("job.batchId").where("job.id", "=", jobId),
+    )
+    .forUpdate()
+    .execute();
+}
+
+/**
  * Applies `control` to the job `jobId`, with the limits `given` for a resume, and returns
  * the job, or fails with a 404 error or, for a control that cannot take effect, a 409 saying why;
  * with the Runners to tell to sync now. The job's row is locked while the control is decided, so
@@ -491,12 +523,21 @@ export function controlJob(jobId: JobId, control: Control, given: GivenLimits = 
     const now = new Date();
     const controlled = yield* database.query((db) =>
       db.transaction().execute(async (trx) => {
+        // A resume is decided on its Batch's cancel, which waits for this resume or comes first,
+        // and may withdraw the job's failure from its breaker's counts.
+        if (control === "resume") await lockBatchOfJob(trx, jobId);
         const job = await trx
           .selectFrom("job")
           .innerJoin("jobProgress", "jobProgress.jobId", "job.id")
           .select((eb) => [
             ...JOB_COLUMNS.map((column) => `job.${column}` as const),
             ...PROGRESS_COLUMNS,
+            blockedByOf({
+              status: eb.ref("job.status"),
+              placedAt: eb.ref("job.placedAt"),
+              batchId: eb.ref("job.batchId"),
+              inCanary: eb.ref("job.inCanary"),
+            }).as("blockedBy"),
             "job.runnerId",
             "job.placedAt",
             // The Runner's row is locked, so a removal of the Runner waits for this control and then
@@ -540,21 +581,49 @@ export function controlJob(jobId: JobId, control: Control, given: GivenLimits = 
               ])
               .$castTo<boolean>()
               .as("givenLimitsHold"),
+            eb
+              .exists(
+                eb
+                  .selectFrom("batch")
+                  .select("batch.id")
+                  .whereRef("batch.id", "=", "job.batchId")
+                  .where("batch.cancelledAt", "is not", null),
+              )
+              .$castTo<boolean>()
+              .as("batchCancelled"),
           ])
           .where("job.id", "=", jobId)
           .forUpdate("job")
           .executeTakeFirst();
         if (!job) return undefined;
         const decision = decide(control, job, now, given);
-        if (decision.kind !== "changed") return { decision, job };
+        if (decision.kind !== "changed") {
+          const shown = Struct.pick(job, [...JOB_COLUMNS, ...PROGRESS_COLUMNS, "blockedBy"]);
+          return { decision, job: toApiJob(shown) };
+        }
+        // The job as the control left it; a control changes nothing of its progress.
         const changed = await trx
           .updateTable("job")
           .set(decision.set)
           .where("id", "=", jobId)
-          .returning(JOB_COLUMNS)
+          .returning((eb) => [
+            ...JOB_COLUMNS,
+            blockedByOf({
+              status: eb.ref("job.status"),
+              placedAt: eb.ref("job.placedAt"),
+              batchId: eb.ref("job.batchId"),
+              inCanary: eb.ref("job.inCanary"),
+            }).as("blockedBy"),
+          ])
           .executeTakeFirstOrThrow();
         if (FINAL_STATUSES.includes(changed.status)) await recordUsageOfEnd(trx, jobId);
-        return { decision, job: { ...job, ...changed } };
+        if (control === "resume" && job.status === "failed") {
+          await withdrawCountedFailure(trx, job.batchId, jobId);
+        }
+        return {
+          decision,
+          job: toApiJob({ ...changed, ...Struct.pick(job, PROGRESS_COLUMNS) }),
+        };
       }),
     );
     if (!controlled) {
@@ -577,11 +646,35 @@ export function controlJob(jobId: JobId, control: Control, given: GivenLimits = 
       return yield* Effect.fail(new ControlRefused({ message: decision.why }));
     }
     const hint = decision.kind === "changed" ? decision.hint : undefined;
-    return {
-      job: toApiJob(Struct.pick(job, [...JOB_COLUMNS, ...PROGRESS_COLUMNS])),
-      hint,
-    } satisfies { job: Job; hint?: RunnerId | "live" };
+    return { job, hint } satisfies { job: Job; hint?: RunnerId | "live" };
   });
+}
+
+/**
+ * Withdraws, in the transaction `trx` that resumes the failed job `jobId`, its failure from the
+ * breaker's counts of its Batch `batchId`, locked first, if they counted it: if its failure's Usage
+ * record, its latest, came after its Batch's current Canary began. The breaker counts a job once,
+ * by its latest end, as a resumed job's next end is evidence about that job, not about the content
+ * the jobs share. A failure the breaker did not count, as one before the Canary began, is left.
+ * The record's ID orders it against the Canary's start, which the hub records under the Batch's
+ * lock; the job's `endedAt` would not, as a Runner's clock gives it.
+ */
+async function withdrawCountedFailure(trx: Transaction<Database>, batchId: BatchId, jobId: JobId) {
+  await trx
+    .updateTable("batch as b")
+    .set((eb) => ({
+      countedEnds: eb("b.countedEnds", "-", eb.lit(1)),
+      countedFailures: eb("b.countedFailures", "-", eb.lit(1)),
+    }))
+    .where("b.id", "=", batchId)
+    .where("b.canary", "is not", null)
+    .where("b.countedAfterUsageRecordId", "<", (eb) =>
+      eb
+        .selectFrom("usageRecord")
+        .select((max) => max.fn.max<UsageRecordId | null>("id").as("id"))
+        .where("jobId", "=", jobId),
+    )
+    .execute();
 }
 
 /** A job's end that gets a Usage record: the job as it ended, and its totals then. */
@@ -834,6 +927,16 @@ export function deleteRunnerWithItsWork(runnerId: RunnerId) {
           .returning("keyId")
           .executeTakeFirst();
         if (!runner) return undefined;
+        // Its unfinished jobs, locked in the order of their IDs before the statement below ends
+        // them, as a Batch's cancel and a report lock jobs.
+        await trx
+          .selectFrom("job")
+          .select("id")
+          .where("runnerId", "=", runnerId)
+          .where("status", "not in", FINAL_STATUSES)
+          .orderBy("id")
+          .forUpdate()
+          .execute();
         const ended = await insertUsageRecords(
           trx
             .with("endedJob", (qb) =>
@@ -975,6 +1078,82 @@ async function readDeletedJob(db: Kysely<Database>, jobId: JobId): Promise<Job |
   // The deletion is requested as the job is deleted.
   return row && toDeletedJob(row, row.requestedAt, row.requestedAt);
 }
+
+/** What a list of jobs is filtered by, each filter optional, and where its page starts. */
+export interface JobListQuery {
+  statuses: readonly JobStatus[];
+  labels?: Labels;
+  batchId?: BatchId;
+  customId?: string;
+  after?: JobId;
+  limit: number;
+}
+
+/**
+ * A page of jobs matching `query`, newest first, after the job `query.after`: at most
+ * `query.limit` of them, without their content, and whether more follow.
+ */
+export function listJobs(query: JobListQuery) {
+  return Db.use((database) =>
+    database.query(async (db) => {
+      const { statuses, labels, batchId, customId, after, limit } = query;
+      let selection = db
+        .selectFrom("job as j")
+        .innerJoin("jobProgress as p", "p.jobId", "j.id")
+        // Without the content a list leaves out.
+        .select((eb) => [
+          ...LISTED_JOB_COLUMNS.map((column) => `j.${column}` as const),
+          ...(["totalTokens", "costUsd"] as const).map((column) => `p.${column}` as const),
+          blockedByOf({
+            status: eb.ref("j.status"),
+            placedAt: eb.ref("j.placedAt"),
+            batchId: eb.ref("j.batchId"),
+            inCanary: eb.ref("j.inCanary"),
+          }).as("blockedBy"),
+        ]);
+      if (statuses.length > 0) {
+        selection = selection.where("j.status", "=", (eb) => eb.fn.any(eb.val([...statuses])));
+      }
+      if (labels !== undefined && Object.keys(labels).length > 0) {
+        selection = selection.where((eb) =>
+          eb("j.labels", "@>", eb.cast<Labels>(eb.val(JSON.stringify(labels)), "jsonb")),
+        );
+      }
+      if (batchId !== undefined) selection = selection.where("j.batchId", "=", batchId);
+      if (customId !== undefined) selection = selection.where("j.customId", "=", customId);
+      if (after !== undefined) selection = selection.where("j.id", "<", after);
+      const rows = await selection
+        .orderBy("j.id", "desc")
+        // One more than the page, to learn whether more follow.
+        .limit(limit + 1)
+        .execute();
+      return {
+        // Read without their content, which the contract's `ListedJob` leaves out of the answer.
+        jobs: rows
+          .slice(0, limit)
+          .map((row) => toApiJob({ ...row, result: null, failureMessage: null, activity: null })),
+        hasMore: rows.length > limit,
+      } satisfies JobsPage;
+    }),
+  );
+}
+
+/** What a list reads of a job's row: its columns without its result and its failure's message. */
+const LISTED_JOB_COLUMNS = [
+  "id",
+  "status",
+  "createdAt",
+  "startedAt",
+  "endedAt",
+  "runTimeoutSeconds",
+  "modelBudgetUsd",
+  "failureReason",
+  "pendingControl",
+  "pendingControlRequestedAt",
+  "batchId",
+  "customId",
+  "labels",
+] as const satisfies readonly (typeof JOB_COLUMNS)[number][];
 
 /**
  * A page of the job `jobId`'s events after the position `after`, or a 404 error. Stored rows

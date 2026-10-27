@@ -1,10 +1,11 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { JobSubmission } from "contract";
+import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil-works/pi-ai";
+import type { FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
-import { startSystem } from "./harness.ts";
+import { type OneJob, startSystem, submitJob, untilStatus } from "./harness.ts";
 import { callTool, lastToolResult, providerError, reply, untilAborted } from "./scripted-model.ts";
 
 // What a job's agent works with and how it ends the job, driven by a scripted model: the Input files
@@ -19,17 +20,17 @@ beforeAll(async () => {
 afterAll(() => system.stop());
 
 const SUBMISSION = {
-  prompt: "Summarise the quarter.",
+  input: "Summarise the quarter.",
   inputFiles: { "q3.md": { content: "Revenue grew 4%." } },
   resultContract: {
     schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
   },
-} satisfies JobSubmission;
+} satisfies OneJob;
 
 /** Submits `submission` with a new key and waits for the job to end; returns the job. */
-async function runJob(submission: JobSubmission) {
+async function runJob(submission: OneJob) {
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(submission);
+  const { id } = await submitJob(client, submission);
   await expect
     .poll(async () => (await client.jobs.get({ id })).status, { timeout: 10_000 })
     .toMatch(/^(succeeded|failed)$/);
@@ -47,6 +48,41 @@ test("the agent finds the Input files in inputs/ and submits a result read from 
     status: "succeeded",
     result: { summary: expect.stringContaining("Revenue grew 4%.") },
   });
+});
+
+test("every job of a Batch is told the same instructions, the Runner's then the Batch's, before its own input", async () => {
+  // Each job's messages at its first model call.
+  const told: Message[][] = [];
+  const submit: FauxResponseFactory = (context) => {
+    told.push(context.messages);
+    return callTool("submit_result", { value: { summary: "Le chiffre a crû de 4 %." } });
+  };
+  system.model.setResponses([submit, submit]);
+  const client = await system.clientWithNewJobsKey();
+  const batch = await client.batches.create({
+    agent: { instructions: "Answer in French.", resultContract: SUBMISSION.resultContract },
+    breaker: false,
+  });
+  const inputs = ["Summarise the quarter.", "Summarise the year."];
+  const { jobs } = await client.batches.addJobs({
+    id: batch.id,
+    jobs: inputs.map((input, index) => ({ customId: `job-${index}`, input })),
+  });
+  for (const { job } of jobs) await untilStatus(client, job.id, "succeeded");
+
+  // The whole system prompt and the tools before it are the same for both jobs, so a model
+  // provider can cache them across the Batch.
+  const [first, second] = told.map((messages) => ({
+    systemPrompt: getCurrentSystemPrompt(messages),
+    tools: getCurrentTools(messages),
+  }));
+  expect(second).toEqual(first);
+  const runners = first?.systemPrompt.indexOf("You are running a job unattended") ?? -1;
+  expect(runners).toBeGreaterThan(-1);
+  expect(first?.systemPrompt.indexOf("Answer in French.")).toBeGreaterThan(runners);
+  expect(
+    told.map((messages) => JSON.stringify(messages.find((message) => message.role === "user"))),
+  ).toEqual(expect.arrayContaining(inputs.map((input) => expect.stringContaining(input))));
 });
 
 test("a result that does not match the Result contract goes back to the agent, which corrects it", async () => {
@@ -133,7 +169,7 @@ test("reading a running job shows its model call, then its running tool call, an
   ]);
   const client = await system.clientWithNewJobsKey();
   const before = Date.now();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
 
   await expect
     .poll(async () => (await client.jobs.get({ id })).activity, { timeout: 10_000 })
@@ -185,7 +221,7 @@ test("a runner stopped during a job's model call stops at once, leaving the job 
     },
   ]);
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
   await expect.poll(() => calling, { timeout: 10_000 }).toBe(true);
   // The model call can start before the hub has stored the Runner's report that the job started.
   await expect

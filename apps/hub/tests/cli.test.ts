@@ -5,7 +5,6 @@ import path from "node:path";
 import * as NodeChildProcessSpawner from "@effect/platform-node-shared/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
 import * as NodePath from "@effect/platform-node-shared/NodePath";
-import type { JobSubmission } from "contract";
 import { Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
@@ -29,10 +28,9 @@ beforeAll(async () => {
 afterAll(() => system.stop());
 
 const SUBMISSION = {
-  prompt: "Count to a million.",
-  inputFiles: {},
-  resultContract: { schema: { type: "integer" } },
-} satisfies JobSubmission;
+  agent: { resultContract: { schema: { type: "integer" } } },
+  input: "Count to a million.",
+};
 
 const CLI = path.join(import.meta.dirname, "../node_modules/.bin/agent-batch");
 const NodeServices = NodeChildProcessSpawner.layer.pipe(

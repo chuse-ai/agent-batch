@@ -1,11 +1,10 @@
 import { setTimeout } from "node:timers/promises";
 
-import type { JobSubmission } from "contract";
 import { afterAll, assert, beforeAll, expect, inject, test } from "vite-plus/test";
 
 import { DB_SCHEMA, openDatabase } from "../src/db/database.ts";
 import { JobId } from "../src/db/types.ts";
-import { startSystem } from "./harness.ts";
+import { type OneJob, startSystem, submitJob } from "./harness.ts";
 import { callTool, untilAborted } from "./scripted-model.ts";
 
 const system = startSystem();
@@ -14,7 +13,7 @@ beforeAll(() => system.start());
 afterAll(() => system.stop());
 
 const SUBMISSION = {
-  prompt: "Say hello.",
+  input: "Say hello.",
   resultContract: {
     schema: {
       type: "object",
@@ -22,7 +21,7 @@ const SUBMISSION = {
       required: ["greeting"],
     },
   },
-} satisfies Omit<JobSubmission, "inputFiles">;
+} satisfies Omit<OneJob, "inputFiles">;
 
 /** The result the scripted agent submits, which matches the Result contract. */
 const RESULT = { greeting: "Hello." };
@@ -34,7 +33,7 @@ test("a job submitted while a runner is connected succeeds, and its result is re
   const before = Date.now();
   system.model.setResponses([callTool("submit_result", { value: RESULT })]);
 
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
 
   await expect
     .poll(() => client.jobs.get({ id }), { timeout: 10_000 })
@@ -63,7 +62,7 @@ test("a job submitted while no runner is connected stays queued, and runs once o
   const client = await system.clientWithNewJobsKey();
   system.model.setResponses([callTool("submit_result", { value: RESULT })]);
 
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
   await setTimeout(1_000);
   expect((await client.jobs.get({ id })).status).toBe("queued");
 
@@ -81,10 +80,10 @@ test("a Runner started again with fewer slots than its jobs recovers only as man
   const before = calls();
   system.model.setResponses([untilAborted, untilAborted]);
   await system.startRunner({ maxJobs: 2 });
-  const first = await client.jobs.submit(SUBMISSION);
-  const second = await client.jobs.submit(SUBMISSION);
+  const first = await submitJob(client, SUBMISSION);
+  const second = await submitJob(client, SUBMISSION);
   await expect.poll(() => calls() - before, { timeout: 10_000 }).toBe(2);
-  const third = await client.jobs.submit(SUBMISSION);
+  const third = await submitJob(client, SUBMISSION);
   await system.stopRunner();
 
   // The job recovered first submits its result only once the test, having checked the rest,

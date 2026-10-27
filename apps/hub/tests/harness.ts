@@ -63,6 +63,41 @@ const HUB_SETTINGS = {
   REPORT_INTERVAL_MS: "100",
 };
 
+/** What an agent's creation takes, as a caller writes it. */
+type AgentInput = Parameters<ApiClient["batches"]["create"]>[0]["agent"];
+/** What a job's add takes, as a caller writes it. */
+export type JobInput = Parameters<ApiClient["batches"]["addJobs"]>[0]["jobs"][number];
+
+/** One job as the tests submit it: its agent's fields and its own, its custom ID optional. */
+export type OneJob = AgentInput &
+  Omit<JobInput, "customId" | "inputFiles"> & {
+    customId?: string;
+    /** The job's own Input files. */
+    inputFiles?: JobInput["inputFiles"];
+  };
+
+/**
+ * Submits `job` as the CLI's `jobs submit` does: a Batch of one, without a failure breaker, running
+ * the job's agent, and the job added to it; returns the job as the add answers it.
+ */
+export async function submitJob(client: ApiClient, job: OneJob) {
+  const { instructions, resultContract, runTimeoutSeconds, modelBudgetUsd, ...own } = job;
+  const agent = {
+    resultContract,
+    ...(instructions === undefined ? {} : { instructions }),
+    ...(runTimeoutSeconds === undefined ? {} : { runTimeoutSeconds }),
+    ...(modelBudgetUsd === undefined ? {} : { modelBudgetUsd }),
+  };
+  const batch = await client.batches.create({ agent, breaker: false });
+  const { jobs } = await client.batches.addJobs({
+    id: batch.id,
+    jobs: [{ ...own, customId: own.customId ?? crypto.randomUUID() }],
+  });
+  const [added] = jobs;
+  if (!added) throw new Error("The add answered without the job");
+  return added.job;
+}
+
 /** Waits until the job `id` has `status`. */
 export async function untilStatus(client: ApiClient, id: string, status: string, timeout = 10_000) {
   await expect.poll(async () => (await client.jobs.get({ id })).status, { timeout }).toBe(status);

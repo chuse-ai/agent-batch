@@ -5,7 +5,9 @@ const OUTPUT_PATH = "./src/db/generated";
 
 /** The contract's type for each JSON column, as ADR 0020 asks, by table and column. */
 const JSON_COLUMN_TYPES = {
-  job: { resultContract: "ResultContract", result: "JsonValue" },
+  job: { result: "JsonValue", labels: "Labels" },
+  batch: { resultContract: "ResultContract", labels: "Labels" },
+  usageRecord: { labels: "Labels" },
   jobProgress: { usage: "JobUsage", activity: "JobActivity" },
 };
 
@@ -15,8 +17,10 @@ const JSON_COLUMN_TYPES = {
  */
 const COPIED_ID_COLUMNS = {
   job: { runnerId: "Runner", submitterKeyId: "Apikey", submitterMemberId: "Member" },
+  batch: { submitterKeyId: "Apikey", submitterMemberId: "Member" },
   usageRecord: {
     jobId: "Job",
+    batchId: "Batch",
     runnerId: "Runner",
     submitterKeyId: "Apikey",
     submitterMemberId: "Member",
@@ -25,9 +29,17 @@ const COPIED_ID_COLUMNS = {
 };
 
 /**
+ * Columns holding a value another table's identifier type already brands, by table and column, as
+ * that table and its type: a Batch's Input file is named as a job's is, so a name is branded once.
+ */
+const SHARED_IDENTIFIER_COLUMNS = {
+  batchInputFile: { name: { table: "InputFile", type: "InputFileName" } },
+};
+
+/**
  * Types a JSON column with the contract's type for it, importing it from the contract package,
- * and a copied ID column with the ID type of the table it copies, as Kanel types a referencing
- * column.
+ * a copied ID column with the ID type of the table it copies, as Kanel types a referencing
+ * column, and a column of `SHARED_IDENTIFIER_COLUMNS` with the type it shares.
  */
 function getPropertyMetadata(property, details, generateFor, builtinMetadata) {
   const jsonType = JSON_COLUMN_TYPES[details.name]?.[property.name];
@@ -51,6 +63,17 @@ function getPropertyMetadata(property, details, generateFor, builtinMetadata) {
       importAsType: true,
     };
     return { ...builtinMetadata, typeOverride: { name: `${table}Id`, typeImports: [typeImport] } };
+  }
+  const shared = SHARED_IDENTIFIER_COLUMNS[details.name]?.[property.name];
+  if (shared) {
+    const typeImport = {
+      name: shared.type,
+      path: `${OUTPUT_PATH}/${details.schemaName}/${shared.table}`,
+      isAbsolute: false,
+      isDefault: false,
+      importAsType: true,
+    };
+    return { ...builtinMetadata, typeOverride: { name: shared.type, typeImports: [typeImport] } };
   }
   return builtinMetadata;
 }

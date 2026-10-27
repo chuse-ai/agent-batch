@@ -55,22 +55,22 @@ From nothing to a finished job on one machine with Docker Engine 25 or later and
 
    Another model goes in `RUNNER_MODEL_ID` the same way, such as `anthropic/claude-haiku-5.5` or `openai/gpt-6-luna` for real work.
 
-4. **Submit a job**: a prompt, Input files the agent finds in its Workspace's `inputs/` folder, a Result contract its result must match, and an idempotency key. The job's `id` goes into `ID` for the steps that follow.
+4. **Submit a job**: the agent it runs, with the Result contract its result must match, the input it works on, Input files the agent finds in its Workspace's `inputs/` folder, and a custom ID. The job's `id` goes into `ID` for the steps that follow.
 
    ```sh
    cat > job.json <<'EOF'
    {
-     "prompt": "Count the lines of inputs/notes.txt and submit the count.",
-     "inputFiles": { "notes.txt": { "content": "one\ntwo\nthree\n" } },
-     "resultContract": { "schema": { "type": "integer" } },
-     "idempotencyKey": "quickstart-1"
+     "customId": "quickstart-1",
+     "agent": { "resultContract": { "schema": { "type": "integer" } } },
+     "input": "Count the lines of inputs/notes.txt and submit the count.",
+     "inputFiles": { "notes.txt": { "content": "one\ntwo\nthree\n" } }
    }
    EOF
    export AGENT_BATCH_URL=http://localhost:8787
    ID=$(npx --yes agent-batch jobs submit --input job.json | jq -er .id)
    ```
 
-   Submitting again with the same idempotency key returns the same job, so the command retries a submission whose answer did not arrive.
+   The command makes the job a Batch of one. Submitting again with the same custom ID returns the same job, so the command retries a submission whose answer did not arrive. Many jobs that run one agent go into one Batch, created with `batches create` and added to with `batches add-jobs`, 100 at a time: its first jobs, its Canary, run before the rest, and it pauses itself when too many of its jobs fail.
 
 5. **Wait for it.** The command prints the job once it ends, and exits with 1 unless it succeeded.
 

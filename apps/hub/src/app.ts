@@ -39,7 +39,16 @@ import {
   requireKey,
 } from "./auth/auth.ts";
 import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
-import { ApikeyId, EventId, InputFileName, JobId, RunnerId, UploadChunkIndex } from "./db/types.ts";
+import { addJobs, cancelBatch, createBatch, getBatch, controlBatch } from "./batches.ts";
+import {
+  ApikeyId,
+  BatchId,
+  EventId,
+  InputFileName,
+  JobId,
+  RunnerId,
+  UploadChunkIndex,
+} from "./db/types.ts";
 import { readInputFileChunk } from "./input-files.ts";
 import {
   type Control,
@@ -48,9 +57,8 @@ import {
   getJob,
   type GivenLimits,
   limitProblems,
-  resultContractProblems,
+  listJobs,
   readJobEvents,
-  submitJob,
   submitterOf,
 } from "./jobs.ts";
 import { generateOpenAPIDocument, sessionCookieName } from "./openapi.ts";
@@ -127,7 +135,7 @@ function controlJobAndHint(jobId: JobId, control: Control, given?: GivenLimits) 
 function invalidInput<E>(
   errors: { BAD_REQUEST: (options: { cause: ValidationError }) => E },
   input: unknown,
-  problems: { message: string; path: string[] }[],
+  problems: readonly { message: string; path: readonly (string | number)[] }[],
 ) {
   const cause = new ValidationError({
     message: "Input validation failed",
@@ -203,21 +211,58 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
         );
       }),
     },
-    jobs: {
-      submit: os.jobs.submit.effect(function* ({ input, context, errors }) {
+    batches: {
+      create: os.batches.create.effect(function* ({ input, context, errors }) {
         const key = yield* callerKey(context.caller);
-        const settings = yield* JobLimitSettings;
-        const problems = [
-          ...resultContractProblems(input.resultContract.schema).map((message) => ({
-            message,
-            path: ["resultContract", "schema"],
-          })),
-          ...limitProblems(input, settings),
-        ];
-        if (problems.length > 0) return yield* Effect.fail(invalidInput(errors, input, problems));
-        const job = yield* submitJob(input, submitterOf(key), settings);
-        yield* hintRunners("live");
-        return job;
+        return yield* createBatch(input, submitterOf(key), yield* JobLimitSettings).pipe(
+          Effect.catchTag("InvalidInput", ({ problems }) =>
+            Effect.fail(invalidInput(errors, input, problems)),
+          ),
+        );
+      }),
+      addJobs: os.batches.addJobs.effect(function* ({ input, context, errors }) {
+        const key = yield* callerKey(context.caller);
+        // The ID enters the hub here.
+        const added = yield* addJobs(BatchId(input.id), input.jobs, submitterOf(key)).pipe(
+          Effect.catchTag("InvalidInput", ({ problems }) =>
+            Effect.fail(invalidInput(errors, input, problems)),
+          ),
+        );
+        if (added.jobs.some(({ created }) => created)) yield* hintRunners("live");
+        return added;
+      }),
+      get: os.batches.get.effect(function* ({ input }) {
+        // The ID enters the hub here.
+        return yield* getBatch(BatchId(input.id));
+      }),
+      pause: os.batches.pause.effect(function* ({ input }) {
+        // The ID enters the hub here.
+        return (yield* controlBatch(BatchId(input.id), "pause")).batch;
+      }),
+      resume: os.batches.resume.effect(function* ({ input }) {
+        // The ID enters the hub here.
+        const { batch, hints } = yield* controlBatch(BatchId(input.id), "resume");
+        yield* Effect.forEach(hints, hintRunners, { discard: true });
+        return batch;
+      }),
+      cancel: os.batches.cancel.effect(function* ({ input }) {
+        // The ID enters the hub here.
+        const { batch, hints } = yield* cancelBatch(BatchId(input.id));
+        yield* Effect.forEach(hints, hintRunners, { discard: true });
+        return batch;
+      }),
+    },
+    jobs: {
+      list: os.jobs.list.effect(function* ({ input }) {
+        // The IDs enter the hub here.
+        return yield* listJobs({
+          statuses: input.status ?? [],
+          labels: input.labels,
+          batchId: input.batchId === undefined ? undefined : BatchId(input.batchId),
+          customId: input.customId,
+          after: input.after === undefined ? undefined : JobId(input.after),
+          limit: input.limit,
+        });
       }),
       get: os.jobs.get.effect(function* ({ input }) {
         // The ID enters the hub here.

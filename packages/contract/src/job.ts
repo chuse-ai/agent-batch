@@ -127,5 +127,51 @@ export type ListedInputFile = z.infer<typeof listedInputFileSchema>;
 export const resultContractSchema = z.object({ schema: z.record(z.string(), z.unknown()) });
 export type ResultContract = z.infer<typeof resultContractSchema>;
 
-/** What the agent is asked to do. */
-export const promptSchema = textSchema.check(z.minLength(1));
+/** What one job gives its Batch's agent to work on: the agent's first input, after its instructions. */
+export const inputSchema = textSchema.check(z.minLength(1));
+
+/** What an agent is told beside the Runner's own instructions, before any job's input. */
+export const instructionsSchema = textSchema.check(z.minLength(1));
+
+/**
+ * A caller's own ID for a job or a Batch: adding or creating it again with the same content
+ * returns the one already accepted, and with other content is refused.
+ */
+export const customIdSchema = textSchema.check(z.minLength(1), z.maxLength(255));
+
+/**
+ * A label's key, in Kubernetes's syntax, so it reads as one parameter of a list's
+ * `labels[key]=value` filter: a name of at most 63 characters, beginning and ending with a letter or
+ * digit, with `-`, `_` and `.` between, optionally behind a DNS subdomain prefix and `/`, such as
+ * `customer` or `example.com/team`.
+ */
+export const labelKeySchema = z
+  .string()
+  .check(
+    z.regex(
+      /^(?:(?=.{1,253}\/)[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*\/)?[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?$/,
+      "Must be a name of at most 63 letters, digits, `-`, `_` and `.`, beginning and ending with a letter or digit, optionally behind a DNS subdomain and `/`",
+    ),
+  );
+
+/**
+ * A label's value: any Unicode text of at most 256 characters, which Zod counts as code points, kept
+ * exactly as given, without trimming, case folding or normalization.
+ */
+export const labelValueSchema = textSchema.check(z.maxLength(256));
+
+/** The most labels a job carries, its Batch's included. */
+export const MAX_LABELS = 64;
+
+/**
+ * A job's labels, by key: what it is for, to find it, group it and attribute its cost by. The limit
+ * is a refinement, which JSON Schema cannot carry, so `maxProperties` states it there.
+ */
+export const labelsSchema = z.record(labelKeySchema, labelValueSchema).check(
+  z.refine(
+    (labels) => Object.keys(labels).length <= MAX_LABELS,
+    `Must have at most ${MAX_LABELS} labels`,
+  ),
+  z.meta({ maxProperties: MAX_LABELS }),
+);
+export type Labels = z.infer<typeof labelsSchema>;

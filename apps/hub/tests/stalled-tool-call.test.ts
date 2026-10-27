@@ -1,10 +1,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import type { JobSubmission } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
-import { type ApiClient, startSystem, untilStatus } from "./harness.ts";
+import { type ApiClient, type OneJob, startSystem, submitJob, untilStatus } from "./harness.ts";
 import { callTool } from "./scripted-model.ts";
 
 // A job whose tool call never ends, against a real hub and Runner: its daemon never answers the
@@ -23,10 +22,10 @@ beforeAll(async () => {
 afterAll(() => system.stop());
 
 const SUBMISSION = {
-  prompt: "Submit what the pipe holds.",
+  input: "Submit what the pipe holds.",
   inputFiles: {},
   resultContract: { schema: { type: "string" } },
-} satisfies JobSubmission;
+} satisfies OneJob;
 
 /**
  * Submits a job that leaves a `sleep` running, for a duration no other process uses, and then
@@ -39,7 +38,7 @@ async function submitStalledJob(client: ApiClient, limits: { runTimeoutSeconds?:
     callTool("bash", { command: `mkfifo pipe && (nohup sleep ${seconds} >/dev/null 2>&1 &)` }),
     callTool("submit_result", { path: "pipe" }),
   ]);
-  const { id } = await client.jobs.submit({ ...SUBMISSION, ...limits });
+  const { id } = await submitJob(client, { ...SUBMISSION, ...limits });
   await expect
     .poll(async () => (await client.jobs.get({ id })).activity?.[0]?.tools, { timeout: 10_000 })
     .toMatchObject([{ name: "submit_result", status: "running" }]);

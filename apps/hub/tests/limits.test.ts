@@ -1,9 +1,8 @@
-import type { JobSubmission } from "contract";
 import { ConfigProvider } from "effect";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 import { hubSettings, readConfig } from "../src/settings.ts";
-import { startSystem, untilStatus } from "./harness.ts";
+import { type OneJob, startSystem, submitJob, untilStatus } from "./harness.ts";
 import { callTool, untilAborted } from "./scripted-model.ts";
 
 // A job's limits, against a real hub and Runner: a run timeout and a model budget, the hub's
@@ -24,22 +23,22 @@ beforeAll(async () => {
 afterAll(() => system.stop());
 
 const SUBMISSION = {
-  prompt: "Count to a million.",
+  input: "Count to a million.",
   inputFiles: {},
   resultContract: { schema: { type: "integer" } },
-} satisfies JobSubmission;
+} satisfies OneJob;
 
 test("a job without limits gets the hub's defaults, and one above its maximums is refused", async () => {
   const client = await system.clientWithNewJobsKey();
   system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
-  const job = await client.jobs.submit(SUBMISSION);
+  const job = await submitJob(client, SUBMISSION);
   expect(job).toMatchObject({ runTimeoutSeconds: 30 * 60, modelBudgetUsd: 1 });
   // Its model call is made before the next test gives the model other responses.
   await untilStatus(client, job.id, "succeeded");
   await expect(
-    client.jobs.submit({ ...SUBMISSION, runTimeoutSeconds: 2 * 60 * 60 }),
+    submitJob(client, { ...SUBMISSION, runTimeoutSeconds: 2 * 60 * 60 }),
   ).rejects.toMatchObject({ code: "BAD_REQUEST" });
-  await expect(client.jobs.submit({ ...SUBMISSION, modelBudgetUsd: 5.01 })).rejects.toMatchObject({
+  await expect(submitJob(client, { ...SUBMISSION, modelBudgetUsd: 5.01 })).rejects.toMatchObject({
     code: "BAD_REQUEST",
   });
 });
@@ -47,7 +46,7 @@ test("a job without limits gets the hub's defaults, and one above its maximums i
 test("a job whose run passes its timeout fails, and a resume with a longer one carries it on", async () => {
   const client = await system.clientWithNewJobsKey();
   system.model.setResponses([untilAborted]);
-  const { id } = await client.jobs.submit({ ...SUBMISSION, runTimeoutSeconds: 1 });
+  const { id } = await submitJob(client, { ...SUBMISSION, runTimeoutSeconds: 1 });
   await untilStatus(client, id, "failed");
   expect(await client.jobs.get({ id })).toMatchObject({
     failure: { reason: "runTimedOut" },
@@ -68,7 +67,7 @@ test("a job whose run passes its timeout fails, and a resume with a longer one c
 test("a resume repeating a running job's limits returns it, and one changing them is refused", async () => {
   const client = await system.clientWithNewJobsKey();
   system.model.setResponses([untilAborted]);
-  const { id } = await client.jobs.submit({ ...SUBMISSION, runTimeoutSeconds: 600 });
+  const { id } = await submitJob(client, { ...SUBMISSION, runTimeoutSeconds: 600 });
   expect(await client.jobs.resume({ id, runTimeoutSeconds: 600, modelBudgetUsd: 1 })).toMatchObject(
     { runTimeoutSeconds: 600, modelBudgetUsd: 1 },
   );
@@ -83,7 +82,7 @@ test("a job whose model cost reaches its budget fails, and only a higher budget 
   const client = await system.clientWithNewJobsKey();
   // The first call costs more than the budget, so the agent's next request is never made.
   system.model.setResponses([callTool("bash", { command: "true" })]);
-  const { id } = await client.jobs.submit({ ...SUBMISSION, modelBudgetUsd: 0.000001 });
+  const { id } = await submitJob(client, { ...SUBMISSION, modelBudgetUsd: 0.000001 });
   await untilStatus(client, id, "failed");
   const failed = await client.jobs.get({ id });
   expect(failed).toMatchObject({ failure: { reason: "modelBudgetExceeded" } });
