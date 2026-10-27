@@ -30,7 +30,7 @@ import { type Expression, type Kysely, sql } from "kysely";
 import { jsonArrayFrom, jsonBuildObject } from "kysely/helpers/postgres";
 import * as z from "zod/mini";
 
-import { lockBreakerBatches, recordBreakerEnds } from "./batches.ts";
+import { lockBreakerBatches, countEndsAndPauseTrippedBatches } from "./batches.ts";
 import { Db, DB_SCHEMA, jsonRows } from "./db/database.ts";
 import {
   type Database,
@@ -256,7 +256,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
           .forUpdate()
           .execute();
         const recorded = await applyReportsStatement(db, runnerId, reports, now);
-        await recordBreakerEnds(
+        await countEndsAndPauseTrippedBatches(
           db,
           recorded.map(({ id }) => id),
           batches,

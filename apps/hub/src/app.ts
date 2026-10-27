@@ -39,7 +39,7 @@ import {
   requireKey,
 } from "./auth/auth.ts";
 import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
-import { addJobs, cancelBatch, createBatch, getBatch, holdBatch } from "./batches.ts";
+import { addJobs, cancelBatch, createBatch, getBatch, controlBatch } from "./batches.ts";
 import {
   ApikeyId,
   BatchId,
@@ -237,11 +237,11 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
       }),
       pause: os.batches.pause.effect(function* ({ input }) {
         // The ID enters the hub here.
-        return (yield* holdBatch(BatchId(input.id), "pause")).batch;
+        return (yield* controlBatch(BatchId(input.id), "pause")).batch;
       }),
       resume: os.batches.resume.effect(function* ({ input }) {
         // The ID enters the hub here.
-        const { batch, hints } = yield* holdBatch(BatchId(input.id), "resume");
+        const { batch, hints } = yield* controlBatch(BatchId(input.id), "resume");
         yield* Effect.forEach(hints, hintRunners, { discard: true });
         return batch;
       }),

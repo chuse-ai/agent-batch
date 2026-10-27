@@ -615,7 +615,7 @@ async function startCanary(trx: Transaction<Database>, batchId: BatchId, canary:
  * new Canary, since whoever releases it allows a new trial. Pausing a paused Batch, or resuming one
  * not paused, changes nothing.
  */
-export function holdBatch(batchId: BatchId, control: "pause" | "resume") {
+export function controlBatch(batchId: BatchId, control: "pause" | "resume") {
   return Effect.gen(function* () {
     const database = yield* Db;
     const controlled = yield* database.query((db) =>
@@ -837,7 +837,7 @@ export async function lockBreakerBatches(trx: Transaction<Database>, jobIds: rea
  * resume, which then starts a new Canary as the breaker's would. `batches` are the Batches with a breaker that
  * `lockBreakerBatches` locked.
  */
-export async function recordBreakerEnds(
+export async function countEndsAndPauseTrippedBatches(
   trx: Transaction<Database>,
   recorded: readonly UsageRecordId[],
   batches: readonly BatchId[],
