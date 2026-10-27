@@ -223,17 +223,13 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
       addJobs: os.batches.addJobs.effect(function* ({ input, context, errors }) {
         const key = yield* callerKey(context.caller);
         // The ID enters the hub here.
-        const { result, created } = yield* addJobs(
-          BatchId(input.id),
-          input.jobs,
-          submitterOf(key),
-        ).pipe(
+        const added = yield* addJobs(BatchId(input.id), input.jobs, submitterOf(key)).pipe(
           Effect.catchTag("InvalidInput", ({ problems }) =>
             Effect.fail(invalidInput(errors, input, problems)),
           ),
         );
-        if (created) yield* hintRunners("live");
-        return result;
+        if (added.jobs.some(({ created }) => created)) yield* hintRunners("live");
+        return added;
       }),
       get: os.batches.get.effect(function* ({ input }) {
         // The ID enters the hub here.

@@ -6,19 +6,18 @@ import {
   BREAKER_DEFAULTS,
   ControlRefused,
   CustomIdReused,
-  type Job,
   type JobSubmission,
   labelsSchema,
   NotFound,
 } from "contract";
-import { Data, Effect } from "effect";
+import { Array, Data, Effect } from "effect";
 import { type Kysely, sql, type Transaction } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { v7 as uuidv7 } from "uuid";
 import * as z from "zod/mini";
 
 import { getOrganization } from "./auth/auth.ts";
-import { Db, DB_SCHEMA } from "./db/database.ts";
+import { Db, DB_SCHEMA, jsonRows } from "./db/database.ts";
 import {
   BatchId,
   type Database,
@@ -321,11 +320,11 @@ function jobProblems(
 
 /**
  * Adds `jobs` to the Batch `batchId`, all or none, and returns the Batch with each job in the order
- * given and whether this add created it, and whether any was created. A job whose custom ID the
- * Batch already has with the same content is the job already added. Fails with a 404 error for no
- * such Batch; with the problems of invalid jobs; then with a 409 error for a cancelled Batch; then
- * with a 422 error for each custom ID the Batch has for a job with other content. New jobs take the Batch's labels
- * beneath their own and its agent's limits, and the Canary's places left, in order.
+ * given and whether this add created it. A job whose custom ID the Batch already has with the same
+ * content is the job already added. Fails with a 404 error for no such Batch; with the problems of
+ * invalid jobs; then with a 409 error for a cancelled Batch; then with a 422 error for each custom
+ * ID the Batch has for a job with other content. New jobs take the Batch's labels beneath their own
+ * and its agent's limits, and the Canary's places left, in order.
  */
 export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submitter: Submitter) {
   return Effect.gen(function* () {
@@ -353,25 +352,25 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
       new Set(frozen.files.map(({ name }) => name)),
     );
     if (problems.length > 0) return yield* Effect.fail(new InvalidInput({ problems }));
-    // A job's content as a later add under the same custom ID must repeat it.
-    const hashes = jobs.map((job) =>
-      contentHashOf({ input: job.input, inputFiles: job.inputFiles, labels: job.labels }),
-    );
     const prepared = yield* prepareInputFiles(jobs.map((job) => job.inputFiles));
+    // Each job with its content as a later add under the same custom ID must repeat it, and its
+    // Input files.
+    const given = Array.zipWith(jobs, prepared, (job, files) => ({
+      job,
+      contentHash: contentHashOf({
+        input: job.input,
+        inputFiles: job.inputFiles,
+        labels: job.labels,
+      }),
+      files,
+    }));
     const added = yield* database.query((db) =>
       db.transaction().execute(async (trx) => {
         // Locked first, so the Batch's controls and other adds come before or after this one, and
         // its Canary's places are taken once.
         const locked = await trx
           .selectFrom("batch")
-          .select([
-            "organizationId",
-            "labels",
-            "runTimeoutSeconds",
-            "modelBudgetUsd",
-            "cancelledAt",
-            "canaryPlacesLeft",
-          ])
+          .select(["labels", "cancelledAt", "canaryPlacesLeft"])
           .where("id", "=", batchId)
           .forUpdate()
           .executeTakeFirstOrThrow();
@@ -388,9 +387,9 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
           .forKeyShare()
           .execute();
         const byCustomId = new Map(existing.map((row) => [row.customId, row]));
-        const reused = jobs.flatMap((job, index) => {
+        const reused = given.flatMap(({ job, contentHash }, index) => {
           const found = byCustomId.get(job.customId);
-          return found && found.contentHash !== hashes[index]
+          return found && found.contentHash !== contentHash
             ? [
                 {
                   message: "Already used in the Batch for a job with other content",
@@ -399,45 +398,35 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
               ]
             : [];
         });
-        const fresh = jobs.flatMap((job, index) =>
-          byCustomId.has(job.customId) ? [] : [{ job, index }],
-        );
         if (reused.length > 0) return { kind: "reused" as const, reused };
-        const now = new Date();
-        const rows = fresh.map(({ job, index }, order): NewJob => ({
-          id: JobId(uuidv7()),
-          organizationId: locked.organizationId,
-          batchId,
-          status: "queued",
-          input: job.input,
-          labels: { ...locked.labels, ...job.labels },
-          customId: job.customId,
-          contentHash: hashes[index] ?? "",
-          runTimeoutSeconds: locked.runTimeoutSeconds,
-          modelBudgetUsd: locked.modelBudgetUsd,
-          inCanary: order < locked.canaryPlacesLeft,
-          submitterKeyId: submitter.keyId,
-          submitterKeyName: submitter.keyName,
-          submitterMemberId: submitter.memberId,
-          createdAt: now,
-        }));
-        if (rows.length > 0) {
-          await trx.insertInto("job").values(rows).execute();
-          // Reports from each job's Runner update its row, starting from nothing stored and nothing
-          // used.
-          await trx
-            .insertInto("jobProgress")
-            .values(rows.map((row) => ({ jobId: row.id })))
-            .execute();
+        // Each job given, in order: the one the Batch already has under its custom ID, or a new
+        // one, whose ID, a UUID v7, is minted in the order given, which placement follows.
+        const entries = given.map((entry) => {
+          const found = byCustomId.get(entry.job.customId);
+          return found
+            ? { ...entry, id: found.id, created: false }
+            : { ...entry, id: JobId(uuidv7()), created: true };
+        });
+        const fresh = entries.filter(({ created }) => created);
+        if (fresh.length > 0) {
+          await insertJobs(
+            trx,
+            batchId,
+            fresh.map(({ id, job, contentHash }, order) => ({
+              id,
+              customId: job.customId,
+              input: job.input,
+              labels: { ...locked.labels, ...job.labels },
+              contentHash,
+              inCanary: order < locked.canaryPlacesLeft,
+            })),
+            submitter,
+          );
           await storeInputFiles(
             trx,
-            fresh.flatMap(({ index }, order) => {
-              const files = prepared[index];
-              const row = rows[order];
-              return files && row ? [{ jobId: row.id, prepared: files }] : [];
-            }),
+            fresh.map(({ id, files }) => ({ jobId: id, prepared: files })),
           );
-          const taken = Math.min(rows.length, locked.canaryPlacesLeft);
+          const taken = Math.min(fresh.length, locked.canaryPlacesLeft);
           if (taken > 0) {
             await trx
               .updateTable("batch")
@@ -446,19 +435,26 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
               .execute();
           }
         }
-        // Each job given, in order: the one this add created under its custom ID, or the one the
-        // Batch already had.
-        const createdIds = new Map(fresh.map(({ job }, order) => [job.customId, rows[order]?.id]));
-        const entries = jobs.map((job) => {
-          const createdId = createdIds.get(job.customId);
-          return { id: createdId ?? byCustomId.get(job.customId)?.id, created: !!createdId };
-        });
         const read = await readJobs(
           trx,
-          entries.flatMap(({ id }) => (id === undefined ? [] : [id])),
+          entries.map(({ id }) => id),
         );
+        const readById = new Map(read.map((job) => [job.id, job]));
+        // The Batch is never deleted, and every job is read in the transaction that found or
+        // created it, under its lock.
         const batch = await readBatch(trx, batchId);
-        return { kind: "added" as const, entries, read, batch, created: rows.length > 0 };
+        if (!batch) throw new Error(`The Batch ${batchId} vanished under its lock`);
+        return {
+          kind: "added" as const,
+          added: {
+            batch,
+            jobs: entries.map(({ id, created }) => {
+              const job = readById.get(id);
+              if (!job) throw new Error(`The job ${id} was not read back`);
+              return { created, job };
+            }),
+          } satisfies AddedJobs,
+        };
       }),
     );
     if (added.kind === "cancelled") {
@@ -469,19 +465,77 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
     if (added.kind === "reused") {
       return yield* Effect.fail(new CustomIdReused({ message: problemsText(added.reused) }));
     }
-    // The Batch is never deleted, and every job is read in the transaction that found or created it.
-    if (!added.batch) return yield* Effect.die(new Error(`The Batch ${batchId} vanished`));
-    const jobsById = new Map<string, Job>(added.read.map((job) => [job.id, job]));
-    const result: AddedJobs = {
-      batch: added.batch,
-      jobs: added.entries.map(({ id, created }) => {
-        const job = id === undefined ? undefined : jobsById.get(id);
-        if (!job) throw new Error(`The job ${String(id)} was not read back`);
-        return { created, job };
-      }),
-    };
-    return { result, created: added.created };
+    return added.added;
   });
+}
+
+/**
+ * Inserts the new `jobs` of the Batch `batchId`, given as one JSON parameter, in the transaction
+ * `trx`: each queued, with the Batch's limits, copied in SQL, and with the progress row its
+ * Runner's reports update, starting from nothing stored and nothing used.
+ */
+async function insertJobs(
+  trx: Transaction<Database>,
+  batchId: BatchId,
+  jobs: Pick<NewJob, "id" | "customId" | "input" | "labels" | "contentHash" | "inCanary">[],
+  submitter: Submitter,
+) {
+  const jobStatus = sql.id(DB_SCHEMA, "jobStatus");
+  const now = new Date();
+  await trx
+    .with("inserted", (qb) =>
+      qb
+        .insertInto("job")
+        .columns([
+          "id",
+          "organizationId",
+          "batchId",
+          "status",
+          "input",
+          "labels",
+          "customId",
+          "contentHash",
+          "runTimeoutSeconds",
+          "modelBudgetUsd",
+          "inCanary",
+          "submitterKeyId",
+          "submitterKeyName",
+          "submitterMemberId",
+          "createdAt",
+        ])
+        .expression(
+          qb
+            .selectFrom((eb) => jsonRows(eb, jobs))
+            .crossJoin("batch")
+            .where("batch.id", "=", batchId)
+            .select((eb) => {
+              const field = (name: "id" | "customId" | "input" | "contentHash" | "inCanary") =>
+                eb.ref("row.value", "->>").key(name);
+              return [
+                eb.cast<JobId>(field("id"), "uuid").as("id"),
+                "batch.organizationId",
+                "batch.id as batchId",
+                eb.cast<JobStatus>(eb.val("queued"), jobStatus).as("status"),
+                field("input").as("input"),
+                eb.ref("row.value", "->").key("labels").as("labels"),
+                field("customId").as("customId"),
+                field("contentHash").as("contentHash"),
+                "batch.runTimeoutSeconds",
+                "batch.modelBudgetUsd",
+                eb.cast<boolean>(field("inCanary"), "boolean").as("inCanary"),
+                eb.val(submitter.keyId).as("submitterKeyId"),
+                eb.cast<string | null>(eb.val(submitter.keyName), "text").as("submitterKeyName"),
+                eb.val(submitter.memberId).as("submitterMemberId"),
+                eb.cast<Date>(eb.val(now), "timestamptz").as("createdAt"),
+              ];
+            }),
+        )
+        .returning("id"),
+    )
+    .insertInto("jobProgress")
+    .columns(["jobId"])
+    .expression((eb) => eb.selectFrom("inserted").select("inserted.id"))
+    .execute();
 }
 
 /** What a Batch control does: nothing, a refusal saying why, or a change. */
