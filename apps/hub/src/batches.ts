@@ -874,19 +874,25 @@ export async function countEndsAndPauseTrippedBatches(
       // In parentheses, as Kysely writes a binary operation without them.
       const ends = eb.parens(eb.ref("b.countedEnds"), "+", eb.ref("c.ends"));
       const failures = eb.parens(eb.ref("b.countedFailures"), "+", eb.ref("c.failures"));
-      // The Canary is over once its jobs have ended, as it then holds back no other job. Until then
-      // the percentage waits, so that a job sent before the Canary began, still ending, does not
-      // judge the Batch in the Canary's place; its end is counted, and judged with the Canary's.
-      const canaryOver = eb.not(
-        eb.exists(
-          eb
-            .selectFrom("job as canary")
-            .select("canary.id")
-            .whereRef("canary.batchId", "=", "b.id")
-            .where("canary.inCanary", "=", true)
-            .where("canary.status", "in", UNFINISHED),
+      // The Canary is over once its places are filled and its jobs have ended. Until then the
+      // percentage waits, so that a job sent before the Canary began, still ending, does not judge
+      // the Batch in the Canary's place; its end is counted, and judged with the Canary's. The
+      // places left count too: a resume of the breaker's pause that finds fewer jobs to flag than
+      // the Canary's places leaves the rest to jobs added later, and a Canary with no jobs yet has
+      // not run.
+      const canaryOver = eb.and([
+        eb("b.canaryPlacesLeft", "=", eb.lit(0)),
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom("job as canary")
+              .select("canary.id")
+              .whereRef("canary.batchId", "=", "b.id")
+              .where("canary.inCanary", "=", true)
+              .where("canary.status", "in", UNFINISHED),
+          ),
         ),
-      );
+      ]);
       const trips = eb.and([
         eb("b.cancelledAt", "is", null),
         eb.or([

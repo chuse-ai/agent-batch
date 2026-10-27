@@ -297,43 +297,46 @@ test("a failure in the Canary pauses the Batch, and resuming it runs a new Canar
   await untilBatchStatus(client, batch.id, "cancelled");
 });
 
-test("a job sent before a new Canary began, ending during it, does not judge the Batch in the Canary's place", async () => {
-  const client = await system.clientWithNewJobsKey();
-  const batch = await client.batches.create({
-    agent: AGENT,
-    breaker: { canary: 2, maxFailurePercent: 10 },
-  });
-  const { promise: failing, resolve: fail } = Promise.withResolvers<void>();
-  // One of the first Canary's jobs fails at once; the other, later.
-  system.model.setResponses([
-    reply("I cannot."),
-    async () => {
-      await failing;
-      return reply("I cannot either.");
-    },
-  ]);
-  const { jobs } = await client.batches.addJobs({
-    id: batch.id,
-    jobs: ["1", "2", "3", "4"].map((customId) => jobNamed(customId)),
-  });
-  const [, , third, fourth] = jobs.map(({ job }) => job.id);
-  if (!third || !fourth) throw new Error("The add answered without the jobs");
-  await untilBatchStatus(client, batch.id, "paused");
+// With four jobs, the new Canary flags the third and fourth; with two, it finds none to flag, and its
+// places wait for jobs added later.
+test.each([4, 2])(
+  "a job sent before a new Canary began, ending during it, does not judge the Batch in the Canary's place (%i jobs)",
+  async (total) => {
+    const client = await system.clientWithNewJobsKey();
+    const batch = await client.batches.create({
+      agent: AGENT,
+      breaker: { canary: 2, maxFailurePercent: 10 },
+    });
+    const { promise: failing, resolve: fail } = Promise.withResolvers<void>();
+    // One of the first Canary's jobs fails at once; the other, later.
+    system.model.setResponses([
+      reply("I cannot."),
+      async () => {
+        await failing;
+        return reply("I cannot either.");
+      },
+    ]);
+    const { jobs } = await client.batches.addJobs({
+      id: batch.id,
+      jobs: Array.from({ length: total }, (_, i) => jobNamed(String(i + 1))),
+    });
+    const nextCanary = jobs.slice(2).map(({ job }) => job.id);
+    await untilBatchStatus(client, batch.id, "paused");
 
-  system.model.setResponses([untilAborted, untilAborted]);
-  await client.batches.resume({ id: batch.id });
-  await untilStatus(client, third, "running");
-  await untilStatus(client, fourth, "running");
-  fail();
-  await expect
-    .poll(async () => (await client.batches.get({ id: batch.id })).jobCounts.failed, {
-      timeout: 15_000,
-    })
-    .toBe(2);
-  expect(await client.batches.get({ id: batch.id })).toMatchObject({ status: "active" });
-  await client.batches.cancel({ id: batch.id });
-  await untilBatchStatus(client, batch.id, "cancelled");
-});
+    system.model.setResponses([untilAborted, untilAborted]);
+    await client.batches.resume({ id: batch.id });
+    for (const id of nextCanary) await untilStatus(client, id, "running");
+    fail();
+    await expect
+      .poll(async () => (await client.batches.get({ id: batch.id })).jobCounts.failed, {
+        timeout: 15_000,
+      })
+      .toBe(2);
+    expect(await client.batches.get({ id: batch.id })).toMatchObject({ status: "active" });
+    await client.batches.cancel({ id: batch.id });
+    await untilBatchStatus(client, batch.id, "cancelled");
+  },
+);
 
 test("outside a Canary, the breaker pauses the Batch when more than maxFailurePercent of its jobs ended since have failed, each job counted once", async () => {
   const client = await system.clientWithNewJobsKey();
