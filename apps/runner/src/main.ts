@@ -181,8 +181,7 @@ function runnerModels(dataDir: string, baseUrl?: { provider: string; url: URL })
   const provider = baseUrl && models.getProvider(baseUrl.provider);
   const apiKey = provider?.auth.apiKey;
   if (baseUrl && provider && apiKey) {
-    // Pi's own base URLs have no trailing slash, and it appends paths such as `/responses` to them.
-    const url = baseUrl.url.href.replace(/\/$/, "");
+    const url = baseUrl.url.href;
     const atUrl = <M extends { baseUrl: string }>(model: M): M => ({ ...model, baseUrl: url });
     models.setProvider({
       ...provider,
