@@ -46,6 +46,7 @@ async function startDev(port: number) {
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  dev.on("error", () => {});
   // Stopped before `afterAll` resets, also when an assertion fails while it runs.
   onTestFinished(async () => {
     if (dev.exitCode === null) await stopDev(dev);

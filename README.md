@@ -14,7 +14,7 @@ From nothing to a finished job on one machine with Docker Engine 25 or later and
    OPENROUTER_API_KEY=<your key> npx --yes agent-batch dev
    ```
 
-   Another model goes in `--model-provider` and `--model-id`, as Pi names them, with the provider's key in `<PROVIDER>_API_KEY`, such as `--model-provider anthropic --model-id claude-sonnet-5-5` with `ANTHROPIC_API_KEY`; `--model-key-env` names another variable, such as `GEMINI_API_KEY` for `google`. `npx agent-batch dev login` signs the Runner in to a provider's subscription instead, where Pi offers one. Stopping removes the containers and keeps their data, keys and sign-in for the next start, which remembers the model too; `npx agent-batch dev reset` deletes them.
+   Another model goes in `--model-provider` and `--model-id`, as Pi names them, with the provider's key in `<PROVIDER>_API_KEY`, such as `--model-provider anthropic --model-id claude-sonnet-5-5` with `ANTHROPIC_API_KEY`; `--model-key-env` names another variable, such as `GEMINI_API_KEY` for `google`. `npx agent-batch dev login --model-provider <provider>` signs the Runner in to a provider's subscription instead, where Pi offers one; then start it with that provider and a model. Stopping removes the containers and keeps their data, keys and sign-in for the next start, which remembers the model too; `npx agent-batch dev reset` deletes them.
 
    On its first start it creates the hub's owner and an API key for jobs. `agent-batch` commands use that hub and key while `AGENT_BATCH_URL` and `AGENT_BATCH_API_KEY` are unset, and `npx agent-batch dev env` prints both for other clients, such as `curl`.
 

@@ -47,7 +47,7 @@ services:
     # Where this machine opens the hub to callers outside Compose, as `address:port`, which `.env`
     # can set as `HUB_PUBLISH`; only Compose reads it. The Runner here reaches the hub over
     # Compose's network whatever it says.
-    # - `127.0.0.1:8787`, the default: this machine only, as the quickstart calls the hub.
+    # - `127.0.0.1:8787`, the default: this machine only, as the README calls the hub.
     # - `127.0.0.1:9000`: this machine only, on another port, when 8787 is taken here.
     # - One of this machine's addresses, such as its Tailscale address: the machines on that
     #   network. The address must exist when the hub starts.

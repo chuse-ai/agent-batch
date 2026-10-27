@@ -8,17 +8,7 @@ import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { applySetCookies } from "better-auth/cookies/utils";
 import { apiContract, createProblemDetailsLink } from "contract";
-import {
-  Config,
-  Effect,
-  FileSystem,
-  Layer,
-  Path,
-  PlatformError,
-  Predicate,
-  Schedule,
-  Stream,
-} from "effect";
+import { Config, Effect, FileSystem, Layer, Path, Schedule, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import ensureError from "ensure-error";
 import envPaths from "env-paths";
@@ -34,7 +24,7 @@ import * as z from "zod/mini";
 // user's, so the next start finds the same jobs, keys and Runner, with any sign-in the Runner holds.
 
 /**
- * The Compose project, apart from the quickstart's `agent-batch`, so neither touches the other.
+ * The Compose project, apart from the Compose deployment's `agent-batch`, so neither touches the other.
  * `AGENT_BATCH_DEV_PROJECT` names another, so the repository's tests never touch a contributor's own.
  */
 const PROJECT = process.env["AGENT_BATCH_DEV_PROJECT"] ?? "agent-batch-dev";
@@ -70,7 +60,7 @@ const stateSchema = z.object({
 });
 type State = z.infer<typeof stateSchema>;
 
-/** The quickstart's model: free, so a first job costs nothing but an OpenRouter account. */
+/** The first model: free, so a first job costs nothing but an OpenRouter account. */
 const DEFAULT_MODEL = { provider: "openrouter", id: "openrouter/free" };
 
 /**
@@ -134,7 +124,7 @@ function writeState(state: State) {
   return writeStateFile(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`);
 }
 
-/** A random secret, as `openssl rand -hex 24` makes one for the quickstart. */
+/** A random secret, as `openssl rand -hex 24` makes one. */
 function secret() {
   return randomBytes(24).toString("hex");
 }
@@ -159,9 +149,9 @@ function literal(value: string) {
 
 /**
  * The Compose file for `state`, with the images of `version`. It follows the repository's
- * `compose.yaml`, which the quickstart runs, with this command's settings in place of `.env`, the
- * hub published on this machine only, and no restart policy: containers of a run stopped
- * outright stay stopped, for the next run or `agent-batch dev stop` to remove, rather than
+ * `compose.yaml`, the Compose deployment's, with this command's settings in place of `.env`, the
+ * hub published on this machine only, and no restart policy: containers of an `agent-batch dev`
+ * stopped outright stay stopped, for the next start or `agent-batch dev stop` to remove, rather than
  * starting again with Docker.
  */
 function composeFile(state: State, version: string) {
@@ -252,7 +242,7 @@ function compose(
     const fs = yield* FileSystem.FileSystem;
     const file = (yield* fs.exists(COMPOSE_FILE)) ? ["--file", COMPOSE_FILE] : [];
     const logLevel = options.errorsOnly ? ["--log-level", "error"] : [];
-    const handle = yield* spawner.spawn(
+    const exitCode = yield* spawner.exitCode(
       ChildProcess.make(
         "docker",
         [...logLevel, "compose", "--project-name", PROJECT, ...file, ...args],
@@ -260,23 +250,23 @@ function compose(
           stdin: options.interactive ? "inherit" : "ignore",
           stdout: "inherit",
           stderr: "inherit",
-          detached: !options.interactive,
+          // The spawner's own default otherwise: a group of its own on POSIX, none on Windows.
+          detached: options.interactive ? false : undefined,
           killSignal: "SIGINT",
           forceKillAfter: "30 seconds",
         },
       ),
     );
-    const exitCode = yield* handle.exitCode;
     if (exitCode !== 0) {
       yield* Effect.fail(new Error(`docker compose ${args[0]} exited with ${exitCode}`));
     }
   }).pipe(
-    Effect.scoped,
-    Effect.mapError((error) =>
-      PlatformError.isPlatformError(error) && Predicate.isTagged(error.reason, "NotFound")
-        ? new Error("agent-batch dev runs the hub and a Runner with Docker: install Docker")
-        : ensureError(error),
+    Effect.catchReason("PlatformError", "NotFound", () =>
+      Effect.fail(
+        new Error("agent-batch dev runs the hub and a Runner with Docker: install Docker"),
+      ),
     ),
+    Effect.mapError(ensureError),
   );
 }
 
@@ -300,12 +290,13 @@ function composeOutput(args: readonly string[]) {
   }).pipe(Effect.scoped);
 }
 
-/** Removes the project's containers and network, leaving its volumes, as after a run stopped outright. */
+/** Removes the project's containers and network, leaving its volumes, as after an
+ * `agent-batch dev` stopped outright. */
 const removeContainers = compose(["down", "--remove-orphans"], { errorsOnly: true });
 
 /**
  * Holds the lock on the state while the scope is open, so a second `agent-batch dev` cannot remove
- * the first one's containers. A run killed outright leaves the lock behind; proper-lockfile takes
+ * the first one's containers. An `agent-batch dev` killed outright leaves the lock behind; proper-lockfile takes
  * it over once its holder stops refreshing it, by default after 10 seconds.
  */
 const lockState = Effect.acquireRelease(
@@ -323,10 +314,14 @@ const lockState = Effect.acquireRelease(
                 `agent-batch dev lost its lock (${error.message}), so another could start beside it\n`,
               ),
           }),
-        catch: (error) =>
-          error instanceof Error && "code" in error && error.code === "ELOCKED"
-            ? new Error("agent-batch dev is running; Ctrl-C in its terminal stops it")
-            : ensureError(error),
+        catch: (caught) => {
+          const error = ensureError(caught);
+          return "code" in error && error.code === "ELOCKED"
+            ? new Error(
+                "agent-batch dev is running, and Ctrl-C in its terminal stops it; or it was stopped outright less than 10 seconds ago, and holds its lock until then",
+              )
+            : error;
+        },
       }),
     ),
     Effect.mapError(ensureError),
@@ -370,7 +365,7 @@ function signIn(state: State) {
   });
 }
 
-/** The keys a fresh hub needs, made as the quickstart makes them: one for Runners, one for jobs. */
+/** The keys a fresh hub needs, made as the Compose deployment's users make them: one for Runners, one for jobs. */
 function createKeys(client: MemberClient) {
   return Effect.tryPromise({
     try: async () => {
@@ -401,7 +396,7 @@ function listRunnersLastSeen(client: MemberClient) {
  */
 function waitForRunner(client: MemberClient, before: Map<string, Date>) {
   return listRunnersLastSeen(client).pipe(
-    // A read the hub does not answer only waits: the hub stopping ends the run through Compose.
+    // A read the hub does not answer only waits: the hub stopping ends `agent-batch dev` through Compose.
     Effect.retry({ schedule: Schedule.spaced("1 second") }),
     Effect.repeat({
       schedule: Schedule.spaced("1 second"),
@@ -414,7 +409,7 @@ function waitForRunner(client: MemberClient, before: Map<string, Date>) {
   );
 }
 
-/** The model for this run: the flags given, else the last run's, else the quickstart's. */
+/** The model for this start: the flags given, else the last start's, else the first model. */
 function chooseModel(
   flags: { modelProvider?: string; modelId?: string; modelKeyEnv?: string },
   saved: Model | undefined,
@@ -431,8 +426,8 @@ function chooseModel(
   return { provider, id, keyEnv };
 }
 
-/** The state for a run with `flags`: an earlier run's, or new secrets, with the flags applied. */
-function saveStateForRun(flags: { port?: number } & Parameters<typeof chooseModel>[0]) {
+/** Saves and returns the state for a start with `flags`: an earlier start's, or new secrets, with the flags applied. */
+function saveStateForStart(flags: { port?: number } & Parameters<typeof chooseModel>[0]) {
   return Effect.gen(function* () {
     const saved = yield* readState();
     const model = yield* Effect.try({
@@ -495,10 +490,10 @@ const modelFlags = {
 function start(version: string, flags: { port?: number } & Parameters<typeof chooseModel>[0]) {
   return Effect.gen(function* () {
     yield* lockState;
-    let state = yield* saveStateForRun(flags);
+    let state = yield* saveStateForStart(flags);
     const images = yield* imageVersion(version);
     yield* writeComposeFile(state, images);
-    // Containers a run stopped outright left behind; the volumes stay.
+    // Containers an `agent-batch dev` stopped outright left behind; the volumes stay.
     yield* removeContainers;
     yield* Effect.addFinalizer(() =>
       say("Removing the containers; the data stays for the next start").pipe(
@@ -648,13 +643,30 @@ export function devCommands(version: string) {
         description:
           "Signs the Runner in to its model provider's subscription, where Pi offers one, instead of a key; the Runner keeps the sign-in with its data. See the Runner's README for what a sign-in allows.",
       })
-      .input(z.object(modelFlags))
+      .input(
+        z.object({
+          modelProvider: z.optional(
+            z
+              .string()
+              .check(
+                z.describe(
+                  "The provider to sign in to, as Pi names it, such as openai-codex; the one agent-batch dev last ran on by default. Start agent-batch dev with it to run jobs on the sign-in.",
+                ),
+              ),
+          ),
+        }),
+      )
       .handler(({ input }) =>
         runToEnd(
           Effect.gen(function* () {
             yield* lockState;
-            const state = yield* saveStateForRun(input);
-            yield* writeComposeFile(state, yield* imageVersion(version));
+            // The Runner's `login` reads only the provider; the model a start runs on stays as saved.
+            const state = (yield* readState()) ?? (yield* saveStateForStart({}));
+            const provider = input.modelProvider ?? state.model.provider;
+            yield* writeComposeFile(
+              { ...state, model: { ...state.model, provider } },
+              yield* imageVersion(version),
+            );
             yield* compose(
               ["run", "--rm", "--no-deps", "runner", "node", "dist/main.mjs", "login"],
               { interactive: true },
