@@ -47,7 +47,7 @@ async function connectProtocolRunner() {
   socket.addEventListener("message", (event) => {
     if (typeof event.data === "string") runner.receive(event.data);
   });
-  return { runner, api: system.client({ "x-api-key": key }), close: () => socket.close() };
+  return { runner, api: system.runnerClient({ "x-api-key": key }), close: () => socket.close() };
 }
 
 test("a sync names a job's Input files, and only the Runner the job is placed on reads them, a chunk at a time", async () => {
@@ -83,17 +83,17 @@ test("a sync names a job's Input files, and only the Runner the job is placed on
     const count = Math.ceil(Buffer.byteLength(LARGE) / chunkBytes);
     const chunks: Buffer[] = [];
     for (let index = 0; index < count; index++) {
-      const chunk = await placed.api.jobs.inputFileChunk({ id, name: "report.txt", index });
+      const chunk = await placed.api.getInputFileChunk({ id, name: "report.txt", index });
       assert(chunk instanceof Blob, "a chunk arrives as a file");
       chunks.push(zstdDecompressSync(await chunk.arrayBuffer()));
     }
     expect(chunks.slice(0, -1).every((chunk) => chunk.length === chunkBytes)).toBe(true);
     expect(Buffer.concat(chunks).toString("utf8")).toBe(LARGE);
     await expect(
-      placed.api.jobs.inputFileChunk({ id, name: "report.txt", index: count }),
+      placed.api.getInputFileChunk({ id, name: "report.txt", index: count }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(
-      other.api.jobs.inputFileChunk({ id, name: "report.txt", index: 0 }),
+      other.api.getInputFileChunk({ id, name: "report.txt", index: 0 }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   } finally {
     placed.close();

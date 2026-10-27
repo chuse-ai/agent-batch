@@ -68,6 +68,9 @@ _Avoid_: coordinator
 A process that runs many jobs' agents at once; there can be many, self-hosted on the organization's machines or in the cloud. What other systems call a worker; not a Cloudflare Worker, which the hub may run on, nor a job's agent, which it runs. A restart is a process, such as a Runner or the hub, stopping and starting again; a job is never restarted, reset, replayed or retried.
 _Avoid_: executor
 
+**Runner protocol**:
+The exchange between a Runner and the hub, over the Runner's socket and its two HTTP calls: registering, and downloading its jobs' Input files. It is versioned on its own, apart from the API.
+
 **Provider sign-in**:
 A Runner's sign-in to its model provider, used in place of the provider's key. Not a member's sign-in to the hub.
 _Avoid_: log in, OAuth token

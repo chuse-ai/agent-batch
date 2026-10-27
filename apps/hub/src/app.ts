@@ -10,13 +10,14 @@ import { OpenAPIReferenceHandlerPlugin } from "@orpc/openapi/plugins";
 import { implement, ValidationError } from "@orpc/server";
 import { ZodToJsonSchemaConverter } from "@orpc/zod";
 import {
-  contract,
+  apiContract,
   getAccess,
   NotFound,
   PROTOCOL_UNSUPPORTED,
   RUNNER_CONNECT_PATH,
   RUNNER_NOT_FOUND,
   RUNNER_PROTOCOL_VERSIONS,
+  runnerHttpContract,
   selectProtocolVersion,
 } from "contract";
 import { type Context, Effect, Struct } from "effect";
@@ -79,8 +80,14 @@ const requireDeclaredAccess = middlewareGen<ApiContext, { caller: Caller }>(func
   return yield* next({ context: { caller } });
 });
 
+/**
+ * Every call the hub serves: the API and, under `runnerProtocol`, the Runner's HTTP calls. Each
+ * declares its own path, so nesting them changes no route.
+ */
+const hubContract = { ...apiContract, runnerProtocol: runnerHttpContract };
+
 /** The handlers' builder: each runs with the `caller` the router's access check hands it. */
-const os = implement<typeof contract, ApiContext & { caller: Caller }>(contract);
+const os = implement<typeof hubContract, ApiContext & { caller: Caller }>(hubContract);
 
 /**
  * Tells the Runners a change to a job concerns to sync now: one Runner, or every live one for a job
@@ -132,15 +139,12 @@ function invalidInput<E>(
 
 // The access check is the router's alone, as oRPC's docs extend a router: applied to the handlers
 // too, it would run twice on every call.
-const router = implement<typeof contract, ApiContext>(contract)
+const router = implement<typeof hubContract, ApiContext>(hubContract)
   .use(requireDeclaredAccess)
   .router({
     runners: {
       list: os.runners.list.effect(function* () {
         return yield* listRunners;
-      }),
-      register: os.runners.register.effect(function* ({ input }) {
-        return yield* registerRunner(input.name);
       }),
       delete: os.runners.delete.effect(function* ({ input, context }) {
         // The ID enters the hub here.
@@ -244,7 +248,12 @@ const router = implement<typeof contract, ApiContext>(contract)
         // The IDs enter the hub here.
         return yield* readJobEvents(JobId(input.id), EventId(input.after), input.limit);
       }),
-      inputFileChunk: os.jobs.inputFileChunk.effect(function* ({ input, context }) {
+    },
+    runnerProtocol: {
+      register: os.runnerProtocol.register.effect(function* ({ input }) {
+        return yield* registerRunner(input.name);
+      }),
+      getInputFileChunk: os.runnerProtocol.getInputFileChunk.effect(function* ({ input, context }) {
         const key = yield* callerKey(context.caller);
         const runnerId = yield* findRunnerByKey(ApikeyId(key.id));
         // The IDs and the name enter the hub here.

@@ -6,7 +6,7 @@ import type { JobSubmission } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 import { entryKinds, lifecycleOf } from "./entries.ts";
-import { type HubClient, startSystem, untilStatus } from "./harness.ts";
+import { type ApiClient, startSystem, untilStatus } from "./harness.ts";
 import { callTool, reply, untilAborted } from "./scripted-model.ts";
 
 // The controls a caller has over a job, against a real hub and Runner. The first tests run
@@ -25,7 +25,7 @@ const SUBMISSION = {
 } satisfies JobSubmission;
 
 /** Submits a job whose agent's model call runs until the Runner cuts it off, and waits until it runs. */
-async function submitRunningJob(client: HubClient) {
+async function submitRunningJob(client: ApiClient) {
   system.model.setResponses([untilAborted]);
   const { id } = await client.jobs.submit(SUBMISSION);
   await untilStatus(client, id, "running");

@@ -1,14 +1,15 @@
 import { OpenAPIGenerator } from "@orpc/openapi";
 import { ZodToJsonSchemaConverter } from "@orpc/zod";
 import { getCookies } from "better-auth/cookies";
-import { API_KEY_SECURITY_SCHEME, contract, problemDetailsSchema } from "contract";
+import { API_KEY_SECURITY_SCHEME, apiContract, problemDetailsSchema } from "contract";
 
 import packageJson from "../package.json" with { type: "json" };
 import { Auth } from "./auth/auth.ts";
 
-// The API's OpenAPI document (ADR 0018), generated from the contract by oRPC, so every procedure
-// appears in it as it is added. The contract says who may make each call and labels its errors as
-// Problem Details (ADR 0023); the hub adds what depends on its deployment.
+// The API's OpenAPI document (ADR 0018), generated from the public contract by oRPC, so every
+// public procedure appears in it as it is added; the Runner's own calls are not in it. The contract
+// says who may make each call and labels its errors as Problem Details (ADR 0023); the hub adds what
+// depends on its deployment.
 
 const converter = new ZodToJsonSchemaConverter();
 const generator = new OpenAPIGenerator({ converters: [converter] });
@@ -20,7 +21,7 @@ export const sessionCookieName = Auth.use((auth) =>
 
 /** Generates the hub's OpenAPI document, with members' sessions in the cookie `sessionCookie`. */
 export function generateOpenAPIDocument(sessionCookie: string) {
-  return generator.generate(contract, {
+  return generator.generate(apiContract, {
     base: {
       // The hub's own version, which a release sets to the release's.
       info: { title: "agent-batch", version: packageJson.version },

@@ -8,11 +8,12 @@ import { text } from "node:stream/consumers";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import {
-  contract,
+  apiContract,
   createProblemDetailsLink,
   RUNNER_CONNECT_PATH,
   RUNNER_PROTOCOL_VERSION,
   registeredRunnerSchema,
+  runnerHttpContract,
 } from "contract";
 import getPort from "get-port";
 import { sql } from "kysely";
@@ -27,7 +28,10 @@ import { setUpOrganization } from "../src/setup.ts";
 import { scriptedModel } from "./scripted-model.ts";
 
 /** The hub's API as a caller sees it through the contract's link. */
-export type HubClient = ContractRouterClient<typeof contract>;
+export type ApiClient = ContractRouterClient<typeof apiContract>;
+
+/** The Runner's HTTP calls, as a Runner makes them. */
+export type HubHttpClient = ContractRouterClient<typeof runnerHttpContract>;
 
 /** Which hub the suite runs against: the Worker in workerd, or the Node process its image runs. */
 export type HubTarget = "workers" | "node";
@@ -60,7 +64,7 @@ const HUB_SETTINGS = {
 };
 
 /** Waits until the job `id` has `status`. */
-export async function untilStatus(client: HubClient, id: string, status: string, timeout = 10_000) {
+export async function untilStatus(client: ApiClient, id: string, status: string, timeout = 10_000) {
   await expect.poll(async () => (await client.jobs.get({ id })).status, { timeout }).toBe(status);
 }
 
@@ -137,7 +141,7 @@ export function startSystem(
 ) {
   let running: RunningHub;
   let url: URL;
-  let owner: HubClient;
+  let owner: ApiClient;
   let ownerCookie: string;
   let runner: RunnerProcess | undefined;
   let runnerDataDir: string | undefined;
@@ -158,8 +162,15 @@ export function startSystem(
   }
 
   /** A client of the hub's API sending `headers`, such as a member's session or an API key. */
-  function client(headers: Record<string, string> = {}): HubClient {
-    return createORPCClient(createProblemDetailsLink(contract, { origin: url.origin, headers }));
+  function client(headers: Record<string, string> = {}): ApiClient {
+    return createORPCClient(createProblemDetailsLink(apiContract, { origin: url.origin, headers }));
+  }
+
+  /** A client of the Runner's HTTP calls sending `headers`, such as a Runner's key. */
+  function runnerClient(headers: Record<string, string> = {}): HubHttpClient {
+    return createORPCClient(
+      createProblemDetailsLink(runnerHttpContract, { origin: url.origin, headers }),
+    );
   }
 
   /** Signs in with `credentials`, returning the session cookie a member's requests carry. */
@@ -238,6 +249,7 @@ export function startSystem(
     /** The origin the hub serves, which Better Auth requires on sign-in from Node. */
     origin: HUB_ORIGIN,
     client,
+    runnerClient,
     signIn,
     /** A client signed in as `OWNER`. */
     owner: () => owner,
@@ -306,8 +318,8 @@ export function startSystem(
      * reconnects and heartbeats.
      */
     async connectRunner() {
-      const registration = client({ "x-api-key": await createRegistrationKey() });
-      const { id: runnerId, key } = await registration.runners.register({ name: "test runner" });
+      const registration = runnerClient({ "x-api-key": await createRegistrationKey() });
+      const { id: runnerId, key } = await registration.register({ name: "test runner" });
       const socket = await openSocket(key);
       if (socket instanceof Response)
         throw new Error(`Hub refused the WebSocket: ${socket.status}`);

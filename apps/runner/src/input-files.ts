@@ -3,21 +3,17 @@ import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 
 import { ORPCError } from "@orpc/client";
-import type { ContractRouterClient } from "@orpc/contract";
-import { contract, type ListedInputFile, problemOf } from "contract";
+import { type ListedInputFile, problemOf } from "contract";
 import { Data, Duration, Effect, type FileSystem, Schedule } from "effect";
 import ensureError from "ensure-error";
 
-import { type AgentSettings, jobPaths } from "./agent.ts";
+import { type AgentSettings, type HubHttpClient, jobPaths } from "./agent.ts";
 
 // A job's Input files reach its Workspace apart from the hub's answers, which only name them: the
 // Runner downloads each a chunk at a time, one zstd frame per request, decompresses it, and checks
 // the whole file's size and SHA-256 before moving it into `inputs/`. Each request carries a whole
 // frame because Node's zstd decoder before 26.10 stops at the end of the first frame of a stream
 // that holds several, and the Runner supports Node 22. So neither side holds more than a chunk.
-
-/** The hub's API, called with the Runner's own key. */
-export type HubClient = ContractRouterClient<typeof contract>;
 
 /** A job's Input file that could not be downloaded, naming the file and why. */
 export class InputFileFailed extends Data.TaggedError("InputFileFailed")<{ message: string }> {}
@@ -48,7 +44,7 @@ const RETRIES = Schedule.min([
  * `InputFileFailed`.
  */
 export function downloadInputFiles(
-  { hub, fileSystem, jobsDir }: Pick<AgentSettings, "hub" | "fileSystem" | "jobsDir">,
+  { hubHttp, fileSystem, jobsDir }: Pick<AgentSettings, "hubHttp" | "fileSystem" | "jobsDir">,
   jobId: string,
   files: readonly ListedInputFile[],
 ): Effect.Effect<void, InputFileFailed> {
@@ -62,7 +58,7 @@ export function downloadInputFiles(
     yield* fileSystem.makeDirectory(inputs, { recursive: true });
     for (const file of files) {
       const temporary = path.join(downloads, file.name);
-      yield* downloadFile(hub, fileSystem, jobId, file, temporary).pipe(
+      yield* downloadFile(hubHttp, fileSystem, jobId, file, temporary).pipe(
         Effect.retry({ times: 1, while: (error) => error instanceof Mismatch }),
         Effect.catchTag("Mismatch", (mismatch) =>
           Effect.fail(new InputFileFailed({ message: inputFileMessage(file, mismatch.reason) })),
@@ -90,7 +86,7 @@ class Mismatch extends Data.TaggedError("Mismatch")<{ reason: string }> {}
 
 /** Downloads `file` into `temporary`, chunk by chunk, checking its size and SHA-256. */
 function downloadFile(
-  hub: HubClient,
+  hubHttp: HubHttpClient,
   fileSystem: FileSystem.FileSystem,
   jobId: string,
   file: ListedInputFile,
@@ -102,7 +98,7 @@ function downloadFile(
       const hash = createHash("sha256");
       let written = 0;
       for (let index = 0; written < file.originalSizeBytes; index++) {
-        const frame = yield* fetchChunk(hub, jobId, file.name, index).pipe(
+        const frame = yield* fetchChunk(hubHttp, jobId, file.name, index).pipe(
           Effect.catchTag("ChunkUnavailable", (unavailable) =>
             Effect.fail(
               new InputFileFailed({ message: inputFileMessage(file, unavailable.reason) }),
@@ -144,10 +140,10 @@ function downloadFile(
 const CHUNK_TIMEOUT = Duration.seconds(60);
 
 /** Chunk `index` of the job's Input file `name`, as one zstd frame, asked for again while it may come. */
-function fetchChunk(hub: HubClient, jobId: string, name: string, index: number) {
+function fetchChunk(hubHttp: HubHttpClient, jobId: string, name: string, index: number) {
   return Effect.tryPromise({
     try: async (signal) =>
-      (await hub.jobs.inputFileChunk({ id: jobId, name, index }, { signal })).bytes(),
+      (await hubHttp.getInputFileChunk({ id: jobId, name, index }, { signal })).bytes(),
     catch: (cause) => {
       // The status of an answer from the hub's side, a proxy's included, from the Problem Details
       // the contract's link keeps; an error oRPC raises itself, such as an answer the contract does

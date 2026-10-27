@@ -12,7 +12,7 @@ import {
 import { getOpenAPIMeta } from "@orpc/openapi";
 import { getDotPath } from "@standard-schema/utils";
 import {
-  contract,
+  apiContract,
   createProblemDetailsLink,
   FINAL_JOB_STATUSES,
   getAccess,
@@ -26,12 +26,12 @@ import isNetworkError from "is-network-error";
 import { createCli, os } from "trpc-cli";
 import * as z from "zod/mini";
 
-// The `agent-batch` command: one command per call of the hub's API that a person's API key can
+// The `agent-batch` command: one command per call of the hub's public API that an API key can
 // make, derived from the contract, so the commands cannot drift from the API, plus `jobs wait`. Each
 // prints the API's JSON on stdout; an error from the hub prints its Problem Details on stderr and
 // exits non-zero.
 
-type HubClient = ContractRouterClient<typeof contract>;
+type ApiClient = ContractRouterClient<typeof apiContract>;
 
 /**
  * Whether a value can go in an HTTP header as fetch sends it: fetch normalizes it through its own
@@ -56,7 +56,7 @@ const settings = Config.all({
 
 /** The link to the hub, which calls any of its procedures by path. */
 const hubLink = Effect.map(settings, ({ url, apiKey }) =>
-  createProblemDetailsLink(contract, {
+  createProblemDetailsLink(apiContract, {
     origin: url.origin,
     // The hub's path, for a hub served under one. An HTTP URL's path always starts with `/`, which
     // oRPC's type spells out.
@@ -65,7 +65,7 @@ const hubLink = Effect.map(settings, ({ url, apiKey }) =>
   }),
 );
 
-const hubClient = Effect.map(hubLink, (link): HubClient => createORPCClient(link));
+const apiClient = Effect.map(hubLink, (link): ApiClient => createORPCClient(link));
 
 /**
  * Whether `error` may leave the hub able to answer differently next time: no answer at all, which
@@ -221,10 +221,9 @@ function commandsOf(router: object, path: readonly string[] = []): Commands {
     if (typeof value !== "object" || value === null) continue;
     const at = [...path, name];
     if (value instanceof ProcedureContract) {
-      const key = getAccess(value)?.key;
-      // A call that needs a `runner` permission is the Runner's own, made with its own key; people's
-      // keys hold `job` permissions.
-      if (key && !("runner" in key)) commands[name] = command(value, at);
+      // The command line authenticates with an API key only, so a call only a member makes has no
+      // command.
+      if (getAccess(value)?.key) commands[name] = command(value, at);
     } else {
       const nested = commandsOf(value, at);
       if (Object.keys(nested).length > 0) commands[name] = nested;
@@ -245,7 +244,7 @@ function submitCommand() {
   // submission has none.
   return os
     .meta({
-      description: getOpenAPIMeta(contract.jobs.submit)?.description,
+      description: getOpenAPIMeta(apiContract.jobs.submit)?.description,
       // `--input` is read before trpc-cli parses the command line, so its help shows it only here.
       examples: [
         "agent-batch jobs submit --input job.json",
@@ -256,7 +255,7 @@ function submitCommand() {
     .handler(({ input }) =>
       runCommand(
         Effect.gen(function* () {
-          const client = yield* hubClient;
+          const client = yield* apiClient;
           const idempotencyKey = input.idempotencyKey ?? crypto.randomUUID();
           if (input.idempotencyKey === undefined) {
             // Before anything is sent, so that a command stopped or killed meanwhile has told it.
@@ -290,7 +289,7 @@ function waitCommand() {
     .handler(({ input }) =>
       runCommand(
         Effect.gen(function* () {
-          const client = yield* hubClient;
+          const client = yield* apiClient;
           // Jittered after the cap, so the reads of many callers stay spread: 20 to 30 s at most.
           const between = Schedule.min([
             Schedule.exponential("1 second"),
@@ -316,7 +315,7 @@ function waitCommand() {
 
 /** The `agent-batch` command line. */
 export function agentBatchCli(version: string) {
-  const commands = commandsOf(contract);
+  const commands = commandsOf(apiContract);
   return createCli({
     name: "agent-batch",
     version,

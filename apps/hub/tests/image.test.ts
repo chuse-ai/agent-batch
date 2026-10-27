@@ -10,7 +10,7 @@ import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import {
-  contract,
+  apiContract,
   createProblemDetailsLink,
   RUNNER_CONNECT_PATH,
   RUNNER_NOT_FOUND,
@@ -134,8 +134,8 @@ describe.skipIf(inject("hub") !== "node")("the Docker images", () => {
       headers: { "content-type": "application/json", origin: HUB_ORIGIN },
       body: JSON.stringify(OWNER),
     });
-    const owner: ContractRouterClient<typeof contract> = createORPCClient(
-      createProblemDetailsLink(contract, {
+    const owner: ContractRouterClient<typeof apiContract> = createORPCClient(
+      createProblemDetailsLink(apiContract, {
         origin: url,
         headers: { cookie: signIn.headers.getSetCookie().join("; "), origin: HUB_ORIGIN },
       }),
