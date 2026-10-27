@@ -32,7 +32,7 @@ services:
     restart: unless-stopped
 
   hub:
-    image: ghcr.io/chuse-ai/agent-batch-hub:${AGENT_BATCH_VERSION:-0.3.0} # x-release-please-version
+    image: ghcr.io/chuse-ai/agent-batch-hub:${AGENT_BATCH_VERSION:-0.4.0} # x-release-please-version
     depends_on:
       database:
         condition: service_healthy
@@ -59,7 +59,7 @@ services:
     restart: unless-stopped
 
   runner:
-    image: ghcr.io/chuse-ai/agent-batch-runner:${AGENT_BATCH_VERSION:-0.3.0} # x-release-please-version
+    image: ghcr.io/chuse-ai/agent-batch-runner:${AGENT_BATCH_VERSION:-0.4.0} # x-release-please-version
     # The hub's image checks its health: healthy once it serves requests.
     depends_on:
       hub:

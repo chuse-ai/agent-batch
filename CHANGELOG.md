@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.0](https://github.com/chuse-ai/agent-batch/compare/v0.3.0...v0.4.0) (2026-10-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* `POST /jobs` is replaced by `POST /batches` and `POST /batches/{id}/jobs`; `prompt` is now `input`, and a job's Result contract and limits come from its Batch's agent. The Runner protocol's job content carries `instructions` and `input` in place of `prompt`, so Runners and hubs must be upgraded together.
+
+### Features
+
+* run every job in a Batch that shares its agent, Canary and breaker; label and list jobs ([#33](https://github.com/chuse-ai/agent-batch/issues/33)) ([108b54f](https://github.com/chuse-ai/agent-batch/commit/108b54fb82d038a08b1d5094b7a34702330b9c1b))
+* **runner:** call the model provider at RUNNER_MODEL_BASE_URL ([#32](https://github.com/chuse-ai/agent-batch/issues/32)) ([72e83f0](https://github.com/chuse-ai/agent-batch/commit/72e83f0ca929b3925c340795443e997375291a1f))
+
+
+### Bug Fixes
+
+* **contract:** leave the Runner's own calls out of the public API ([#31](https://github.com/chuse-ai/agent-batch/issues/31)) ([af8714f](https://github.com/chuse-ai/agent-batch/commit/af8714f4f690c205936fb4ca26acd88a2a4a56dd))
+* **deps:** upgrade pi to 1.4.0, whose journals older Runners cannot open ([#39](https://github.com/chuse-ai/agent-batch/issues/39)) ([4218547](https://github.com/chuse-ai/agent-batch/commit/42185475da7da3632773229d3bddbff921ff05c4))
+* run the quickstart from the latest release's Compose file and images ([#30](https://github.com/chuse-ai/agent-batch/issues/30)) ([70cf1a4](https://github.com/chuse-ai/agent-batch/commit/70cf1a49b9eb0dfbab84726b5c78a6d5c0029753))
+
+
+### Performance Improvements
+
+* **runner:** give sandbox-runtime the shell's path, not its name ([#38](https://github.com/chuse-ai/agent-batch/issues/38)) ([823db6d](https://github.com/chuse-ai/agent-batch/commit/823db6d38da50b497573aca17aa937da970ac101))
+
 ## [0.3.0](https://github.com/chuse-ai/agent-batch/compare/v0.2.0...v0.3.0) (2026-10-26)
 
 
