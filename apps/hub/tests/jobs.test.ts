@@ -36,11 +36,11 @@ function post(key: string, path: string, body: unknown) {
   });
 }
 
-test("a Batch is created with 201 and a job added to it with 200, which reads back as queued, with a key or a member's session", async () => {
+test("a Batch is created and a job added to it, each with 200, and the job reads back as queued, with a key or a member's session", async () => {
   const { key, client } = await withKey({ job: ["create", "read"] });
 
   const created = await post(key, "/batches", { agent: AGENT });
-  expect(created.status).toBe(201);
+  expect(created.status).toBe(200);
   const batch = z.parse(z.looseObject({ id: z.string() }), await created.json());
   const response = await post(key, `/batches/${batch.id}/jobs`, { jobs: [JOB] });
   expect(response.status).toBe(200);

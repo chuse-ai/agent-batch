@@ -492,12 +492,14 @@ export const apiContract = {
     create: forOrganization
       .errors({ BAD_REQUEST: {}, [CustomIdReused.code]: CustomIdReused })
       .meta(
+        // One status, 200, whether the Batch is new or a retry's, as for an add: no caller acts on
+        // the difference, and a status per answer would make the typed client answer this one call
+        // with `{ status, body }`.
         openapi({
           method: "POST",
           path: "/batches",
-          successStatus: 201,
           description:
-            "Creates a Batch, without jobs, and answers with it: the `agent` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with `POST /batches/{id}/jobs`. The hub checks the Result contract's schema, refusing one that is invalid, describes a list or refers outside itself. A `customId` makes the creation safe to retry: the same `customId` with the same `agent`, `labels` and `breaker` answers with the Batch already created, and with any of them different is refused.",
+            "Creates a Batch, without jobs, and answers with it: the `agent` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with `POST /batches/{id}/jobs`. The hub checks the Result contract's schema, refusing one that is invalid, describes a list or refers outside itself. A `customId` makes the creation safe to retry: the same `customId` with the same `agent`, `labels` and `breaker` answers with the Batch already created, as the creation that made it did, and with any of them different is refused.",
         }),
         ...byKey({ job: ["create"] }),
       )

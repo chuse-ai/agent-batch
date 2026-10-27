@@ -23,7 +23,7 @@ test("jobs submit retries an add whose connection dropped with the custom ID it 
     const body: unknown = JSON.parse(await text(request));
     if (request.url === "/batches") {
       created.push(z.parse(z.object({ customId: z.string() }), body).customId);
-      response.writeHead(201, { "content-type": "application/json" });
+      response.writeHead(200, { "content-type": "application/json" });
       response.end(
         JSON.stringify({
           id: batchId,
