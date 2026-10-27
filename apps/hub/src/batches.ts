@@ -497,51 +497,60 @@ type BatchDecision =
  * Returns how many places are left.
  */
 async function startCanary(trx: Transaction<Database>, batchId: BatchId, canary: number) {
-  const candidates = await trx
-    .selectFrom("job")
-    .select("id")
-    .where("batchId", "=", batchId)
-    .where("status", "=", "queued")
-    .where("placedAt", "is", null)
-    .orderBy("id")
-    .limit(canary)
-    .execute();
-  const ids = candidates.map(({ id }) => id);
-  // The jobs leaving and joining, locked together in the order of their IDs, as jobs are locked
-  // among themselves (ADR 0033). A candidate sent to a Runner meanwhile no longer matches once its
-  // lock is granted, and does not join.
-  const locked = await trx
-    .selectFrom("job")
-    .select((eb) => {
-      const joins = eb.and([
-        eb("id", "=", eb.fn.any(eb.val(ids))),
-        eb("status", "=", "queued"),
-        eb("placedAt", "is", null),
-      ]);
-      return ["id", joins.as("joins")];
-    })
-    .where("batchId", "=", batchId)
-    .where((eb) =>
-      eb.or([
-        eb("inCanary", "=", true),
-        eb.and([
-          eb("id", "=", eb.fn.any(eb.val(ids))),
-          eb("status", "=", "queued"),
-          eb("placedAt", "is", null),
-        ]),
-      ]),
+  const { joined } = await trx
+    .with("candidate", (qb) =>
+      qb
+        .selectFrom("job")
+        .select("id")
+        .where("batchId", "=", batchId)
+        .where("status", "=", "queued")
+        .where("placedAt", "is", null)
+        .orderBy("id")
+        .limit(canary),
     )
-    .orderBy("id")
-    .forUpdate()
-    .execute();
-  if (locked.length === 0) return canary;
-  const joined = locked.flatMap(({ id, joins }) => (joins ? [id] : []));
-  await trx
-    .updateTable("job")
-    .set((eb) => ({ inCanary: eb("id", "=", eb.fn.any(eb.val(joined))).$castTo<boolean>() }))
-    .where("id", "=", (eb) => eb.fn.any(eb.val(locked.map(({ id }) => id))))
-    .execute();
-  return canary - joined.length;
+    // The jobs leaving and joining, locked together in the order of their IDs, as jobs are locked
+    // among themselves (ADR 0033). A candidate sent to a Runner while its lock waited no longer
+    // matches once it is granted, and does not join.
+    .with("locked", (qb) =>
+      qb
+        .selectFrom("job")
+        .select((eb) => [
+          "job.id",
+          eb
+            .and([
+              eb("job.id", "in", eb.selectFrom("candidate").select("candidate.id")),
+              eb("job.status", "=", "queued"),
+              eb("job.placedAt", "is", null),
+            ])
+            .$castTo<boolean>()
+            .as("joins"),
+        ])
+        .where("job.batchId", "=", batchId)
+        .where((eb) =>
+          eb.or([
+            eb("job.inCanary", "=", true),
+            eb.and([
+              eb("job.id", "in", eb.selectFrom("candidate").select("candidate.id")),
+              eb("job.status", "=", "queued"),
+              eb("job.placedAt", "is", null),
+            ]),
+          ]),
+        )
+        .orderBy("job.id")
+        .forUpdate(),
+    )
+    .with("flagged", (qb) =>
+      qb
+        .updateTable("job")
+        .from("locked")
+        .set((eb) => ({ inCanary: eb.ref("locked.joins") }))
+        .whereRef("job.id", "=", "locked.id")
+        .returning("locked.joins"),
+    )
+    .selectFrom("flagged")
+    .select((eb) => eb.fn.countAll<number>().filterWhere("flagged.joins", "=", true).as("joined"))
+    .executeTakeFirstOrThrow();
+  return canary - joined;
 }
 
 /**
@@ -811,22 +820,19 @@ export async function recordBreakerEnds(
       // In parentheses, as Kysely writes a binary operation without them.
       const ends = eb.parens(eb.ref("b.countedEnds"), "+", eb.ref("c.ends"));
       const failures = eb.parens(eb.ref("b.countedFailures"), "+", eb.ref("c.failures"));
-      // The Canary is over once its places are taken and its jobs have ended. Until then the
-      // percentage waits, so that a job sent before the Canary began, still ending, does not judge
-      // the Batch in the Canary's place; its end is counted, and judged with the Canary's.
-      const canaryOver = eb.and([
-        eb("b.canaryPlacesLeft", "=", 0),
-        eb.not(
-          eb.exists(
-            eb
-              .selectFrom("job as canary")
-              .select("canary.id")
-              .whereRef("canary.batchId", "=", "b.id")
-              .where("canary.inCanary", "=", true)
-              .where("canary.status", "in", UNFINISHED),
-          ),
+      // The Canary is over once its jobs have ended, as it then holds back no other job. Until then
+      // the percentage waits, so that a job sent before the Canary began, still ending, does not
+      // judge the Batch in the Canary's place; its end is counted, and judged with the Canary's.
+      const canaryOver = eb.not(
+        eb.exists(
+          eb
+            .selectFrom("job as canary")
+            .select("canary.id")
+            .whereRef("canary.batchId", "=", "b.id")
+            .where("canary.inCanary", "=", true)
+            .where("canary.status", "in", UNFINISHED),
         ),
-      ]);
+      );
       const trips = eb.and([
         eb("b.cancelledAt", "is", null),
         eb.or([

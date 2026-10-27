@@ -154,20 +154,11 @@ export const labelKeySchema = z
     ),
   );
 
-/** The most characters a label's value holds. */
-export const MAX_LABEL_VALUE_CHARACTERS = 256;
-
 /**
- * A label's value: any Unicode text of at most 256 characters, counted as code points, kept exactly
- * as given, without trimming, case folding or normalization.
+ * A label's value: any Unicode text of at most 256 characters, which Zod counts as code points, kept
+ * exactly as given, without trimming, case folding or normalization.
  */
-export const labelValueSchema = textSchema.check(
-  // With the `u` flag, each `[^]` matches one code point.
-  z.regex(
-    new RegExp(`^[^]{0,${MAX_LABEL_VALUE_CHARACTERS}}$`, "u"),
-    `Must be at most ${MAX_LABEL_VALUE_CHARACTERS} characters`,
-  ),
-);
+export const labelValueSchema = textSchema.check(z.maxLength(256));
 
 /** The most labels a job carries, its Batch's included. */
 export const MAX_LABELS = 64;
