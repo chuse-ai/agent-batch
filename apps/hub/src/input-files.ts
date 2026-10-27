@@ -36,48 +36,51 @@ import {
  */
 const CHUNK_BYTES = 1024 * 1024;
 
-/** A submission's Input files, hashed, and compressed where the hub held no blob of them. */
+/** A blob a submission's Input files need, compressed if the hub held none of it when it looked. */
+interface PreparedBlob {
+  readonly sha256: BlobSha256;
+  readonly bytes: Buffer;
+  readonly chunks?: Buffer[];
+}
+
+/** One job's Input files, hashed, each with the blob it needs. */
 export interface PreparedInputFiles {
-  readonly files: readonly { name: InputFileName; sha256: BlobSha256 }[];
-  /** Each distinct blob once, in the order of its address, compressed if it was not stored. */
-  readonly blobs: readonly { sha256: BlobSha256; bytes: Buffer; chunks?: Buffer[] }[];
+  readonly files: readonly { name: InputFileName; blob: PreparedBlob }[];
 }
 
 /**
- * Hashes the Input files `files`, and compresses those whose blob the hub did not hold when it
- * looked, before the submission's transaction, so its locks are not held while it compresses.
+ * Hashes each job's Input files in `filesOfJobs`, and compresses those whose blob the hub did not
+ * hold when it looked, before the submission's transaction, so its locks are not held while it
+ * compresses; one look for every job, and each blob compressed once however many jobs share it.
  */
-export function prepareInputFiles(files: JobSubmission["inputFiles"]) {
-  const named = Record.collect(files, (name, file) => {
-    const bytes = Buffer.from(file.content, "utf8");
-    return {
-      name: InputFileName(name),
-      bytes,
-      sha256: BlobSha256(createHash("sha256").update(bytes).digest()),
-    };
-  });
-  const distinct = new Map(named.map((file) => [file.sha256.toString("hex"), file]));
-  const blobs = [...distinct.values()].toSorted((a, b) => Buffer.compare(a.sha256, b.sha256));
+export function prepareInputFiles(filesOfJobs: readonly JobSubmission["inputFiles"][]) {
+  // Each distinct blob once, which every file with its bytes shares, compressed below if it was
+  // not stored.
+  const blobs = new Map<string, { sha256: BlobSha256; bytes: Buffer; chunks?: Buffer[] }>();
+  const prepared = filesOfJobs.map((files): PreparedInputFiles => ({
+    files: Record.collect(files, (name, file) => {
+      const bytes = Buffer.from(file.content, "utf8");
+      const sha256 = BlobSha256(createHash("sha256").update(bytes).digest());
+      const hex = sha256.toString("hex");
+      const blob = blobs.get(hex) ?? { sha256, bytes };
+      blobs.set(hex, blob);
+      return { name: InputFileName(name), blob };
+    }),
+  }));
   return Effect.gen(function* () {
-    if (blobs.length === 0) return { files: [], blobs: [] } satisfies PreparedInputFiles;
+    if (blobs.size === 0) return prepared;
     const database = yield* Db;
     // A look without a lock: a blob deleted meanwhile is stored again, and compressed then.
     const stored = yield* database.query((db) =>
       db
         .selectFrom("blob")
         .select("sha256")
-        .where("sha256", "=", (eb) => eb.fn.any(eb.val(blobs.map((blob) => blob.sha256))))
+        .where("sha256", "=", (eb) => eb.fn.any(eb.val([...blobs.values()].map((b) => b.sha256))))
         .execute(),
     );
     const known = new Set(stored.map((row) => row.sha256.toString("hex")));
-    return {
-      files: named.map(({ name, sha256 }) => ({ name, sha256 })),
-      blobs: blobs.map(({ sha256, bytes }) =>
-        known.has(sha256.toString("hex"))
-          ? { sha256, bytes }
-          : { sha256, bytes, chunks: compress(bytes) },
-      ),
-    } satisfies PreparedInputFiles;
+    for (const [hex, blob] of blobs) if (!known.has(hex)) blob.chunks = compress(blob.bytes);
+    return prepared;
   });
 }
 
@@ -94,16 +97,23 @@ function compress(bytes: Buffer): Buffer[] {
 }
 
 /**
- * Stores the job `jobId`'s Input files, `prepared`, in the transaction `trx`: the blobs the hub
- * does not hold yet, and the job's reference to each file's blob. A blob already stored is locked
- * against deletion until the transaction ends, rather than written again.
+ * Stores the Input files of each job in `jobs` in the transaction `trx`: the blobs the hub does not
+ * hold yet, each once however many of the jobs share it, and each job's reference to each of its
+ * files' blobs. A blob already stored is locked against deletion until the transaction ends, rather
+ * than written again.
  */
 export async function storeInputFiles(
   trx: Kysely<Database>,
-  jobId: JobId,
-  prepared: PreparedInputFiles,
+  jobs: readonly { jobId: JobId; prepared: PreparedInputFiles }[],
 ): Promise<void> {
-  if (prepared.blobs.length === 0) return;
+  const blobs = [
+    ...new Map(
+      jobs.flatMap(({ prepared }) =>
+        prepared.files.map(({ blob }) => [blob.sha256.toString("hex"), blob] as const),
+      ),
+    ).values(),
+  ].toSorted((a, b) => Buffer.compare(a.sha256, b.sha256));
+  if (blobs.length === 0) return;
   // One statement takes every lock on the submission's blobs, row by row in the order of their
   // address, as a deletion takes its locks, so the two never wait for each other in turn; Postgres
   // reads the rows of `values` in their order. A stored blob is locked by the update that
@@ -115,9 +125,7 @@ export async function storeInputFiles(
   // commit; Postgres 19's `on conflict do select for key share` would lock without that.
   const inserted = await trx
     .insertInto("blob")
-    .values(
-      prepared.blobs.map(({ sha256, bytes }) => ({ sha256, originalSizeBytes: bytes.length })),
-    )
+    .values(blobs.map(({ sha256, bytes }) => ({ sha256, originalSizeBytes: bytes.length })))
     .onConflict((conflict) =>
       conflict
         .column("sha256")
@@ -127,7 +135,7 @@ export async function storeInputFiles(
     .returning("sha256")
     .execute();
   const created = new Set(inserted.map((row) => row.sha256.toString("hex")));
-  for (const blob of prepared.blobs) {
+  for (const blob of blobs) {
     if (!created.has(blob.sha256.toString("hex"))) continue;
     const uploadId = UploadId(randomUUID());
     await trx
@@ -146,7 +154,11 @@ export async function storeInputFiles(
   }
   await trx
     .insertInto("inputFile")
-    .values(prepared.files.map(({ name, sha256 }) => ({ jobId, name, sha256 })))
+    .values(
+      jobs.flatMap(({ jobId, prepared }) =>
+        prepared.files.map(({ name, blob }) => ({ jobId, name, sha256: blob.sha256 })),
+      ),
+    )
     .execute();
 }
 

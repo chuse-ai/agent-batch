@@ -263,7 +263,7 @@ export function submitJob(
     const database = yield* Db;
     const organization = yield* getOrganization;
     const contentHash = contentHashOf(submission);
-    const inputFiles = yield* prepareInputFiles(submission.inputFiles);
+    const inputFiles = yield* prepareInputFiles([submission.inputFiles]);
     const job = yield* database.query((db) =>
       db.transaction().execute(async (trx) => {
         // A concurrent submission with the same key waits here for the first to commit, then
@@ -306,7 +306,10 @@ export function submitJob(
           .values({ jobId: inserted.id })
           .returning(PROGRESS_COLUMNS)
           .executeTakeFirstOrThrow();
-        await storeInputFiles(trx, inserted.id, inputFiles);
+        await storeInputFiles(
+          trx,
+          inputFiles.map((prepared) => ({ jobId: inserted.id, prepared })),
+        );
         return { ...inserted, ...progress };
       }),
     );
