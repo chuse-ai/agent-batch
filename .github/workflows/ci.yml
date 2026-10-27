@@ -27,7 +27,7 @@ jobs:
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
         with:
           cache: true
-      # The queue uses squash merges and processes one PR at a time.
+      # The queue squashes each PR, so a merge group's last commit is its own PR's.
       - run: vp exec commitlint --last --verbose
       # What the Runner's job sandbox needs on Ubuntu (ADR 0027), so tests that run jobs run them as the
       # Runner does. GitHub's image already keeps the runner user's systemd manager running (linger),
