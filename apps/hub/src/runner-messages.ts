@@ -252,7 +252,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
           const { status } = lifecycleOf(report, now);
           return status === null ? [] : [{ jobId: JobId(report.jobId), status }];
         });
-        // The Batches whose breaker the reports' ends may count in, locked before their members
+        // The Batches whose breaker the reports' ends may count in, locked before their jobs
         // (ADR 0033).
         const batches = await lockBreakerBatches(
           db,
@@ -262,7 +262,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
         );
         // The jobs whose status a report may move, locked in the order of their IDs before the
         // statement updates them in the order of the reports, as a Batch's cancel and a Runner's
-        // removal lock members in that order.
+        // removal lock jobs in that order.
         if (withStatus.length > 0) {
           await db
             .selectFrom("job")

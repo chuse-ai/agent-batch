@@ -1,6 +1,6 @@
 # Release scope and limitations
 
-The current implementation runs unattended jobs on provisioned Runners, alone or in Batches. A job supplies a prompt, inline text input files, a JSON Schema result contract and labels. The hub records events, activity, results and usage; callers can pause, resume, cancel and delete jobs, set run-time and model-spend limits, and list jobs by status, label and Batch. A Batch runs its first jobs, its Canary, before the rest, and pauses itself when too many of its jobs fail; callers can pause, resume and cancel it as one. The CLI calls the hub's HTTP API.
+The current implementation runs unattended jobs on provisioned Runners in Batches, a job submitted alone being a Batch of one. A Batch's agent supplies instructions, a JSON Schema result contract, run-time and model-spend limits and shared input files; each job supplies its input, its own inline text input files and labels. The hub records events, activity, results and usage; callers can pause, resume, cancel and delete jobs, and list jobs by status, label, Batch and custom ID. A Batch runs its first jobs, its Canary, before the rest, and pauses itself when its Canary or too many of its jobs fail; callers can pause, resume and cancel it as one. The CLI calls the hub's HTTP API.
 
 The hub runs on Cloudflare Workers with Postgres through Hyperdrive, or on Node/Docker with Postgres directly. Each Runner is a separate Node process. The hub assigns jobs to connected Runners that report available capacity. A job's journal and Workspace remain on its Runner's host.
 
