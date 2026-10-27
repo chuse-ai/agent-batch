@@ -2,7 +2,9 @@ import { type Kysely, sql } from "kysely";
 
 // A Runner's own key grants `runner:actAs`, which was `runner:connect` until it also covered the
 // Runner's HTTP calls. Better Auth stores a key's permissions as JSON text, so each stored Runner
-// key is rewritten, or it would stop working.
+// key is rewritten, or it would stop working. Where the previous hub still serves after the
+// migration, as on Workers until the deploy, a Runner reconnecting then is refused as unknown and
+// exits; it reconnects once restarted.
 
 export async function up(db: Kysely<unknown>): Promise<void> {
   await renameRunnerAction(db, "connect", "actAs");
