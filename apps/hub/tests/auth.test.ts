@@ -14,7 +14,7 @@ test("calls without a member's session or a key are refused", async () => {
     expect((await system.hub.fetch(path)).status).toBe(401);
   }
   // `defined`: the contract declares the error, so the TypeScript client's errors stay typed.
-  await expect(system.client().runners.register({ name: "host" })).rejects.toMatchObject({
+  await expect(system.runnerClient().register({ name: "host" })).rejects.toMatchObject({
     code: "UNAUTHORIZED",
     defined: true,
   });
@@ -75,12 +75,12 @@ test("a member creates and lists keys, and a revoked key is refused at once", as
   // Only the key's first characters are listed; its value is shown once, when it is created.
   expect(JSON.stringify(listed)).not.toContain(key);
 
-  const withKey = system.client({ "x-api-key": key });
-  await expect(withKey.runners.register({ name: "host" })).resolves.toMatchObject({
+  const withKey = system.runnerClient({ "x-api-key": key });
+  await expect(withKey.register({ name: "host" })).resolves.toMatchObject({
     id: expect.any(String),
   });
   await owner.apiKeys.revoke({ id });
-  await expect(withKey.runners.register({ name: "host" })).rejects.toMatchObject({
+  await expect(withKey.register({ name: "host" })).rejects.toMatchObject({
     code: "UNAUTHORIZED",
   });
 });
@@ -97,10 +97,12 @@ test("a key cannot reach member operations or permissions it was not granted", a
 
   // A shared key may register Runners but not connect as one; a Runner's own key, the reverse. Better
   // Auth refuses a key without the permission as it refuses an unknown key.
-  const { key: runnerKey } = await withRegistrationKey.runners.register({ name: "host" });
+  const { key: runnerKey } = await system
+    .runnerClient({ "x-api-key": registrationKey })
+    .register({ name: "host" });
   expect((await system.connect(registrationKey)).status).toBe(401);
   await expect(
-    system.client({ "x-api-key": runnerKey }).runners.register({ name: "host" }),
+    system.runnerClient({ "x-api-key": runnerKey }).register({ name: "host" }),
   ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
 });
 

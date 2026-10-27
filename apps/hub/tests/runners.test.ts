@@ -60,8 +60,10 @@ test("a removed runner stops when started again, and joins anew with register", 
 });
 
 test("a runner offering no protocol version the hub supports is refused, told which it supports", async () => {
-  const registration = system.client({ "x-api-key": await system.createRegistrationKey() });
-  const { key } = await registration.runners.register({ name: "old runner" });
+  const registration = system.runnerClient({
+    "x-api-key": await system.createRegistrationKey(),
+  });
+  const { key } = await registration.register({ name: "old runner" });
 
   const answer = await system.connect(key, ["agent-batch.v0"]);
 

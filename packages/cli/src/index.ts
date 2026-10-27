@@ -26,7 +26,7 @@ import isNetworkError from "is-network-error";
 import { createCli, os } from "trpc-cli";
 import * as z from "zod/mini";
 
-// The `agent-batch` command: one command per call of the hub's API that a person's API key can
+// The `agent-batch` command: one command per call of the hub's public API that an API key can
 // make, derived from the contract, so the commands cannot drift from the API, plus `jobs wait`. Each
 // prints the API's JSON on stdout; an error from the hub prints its Problem Details on stderr and
 // exits non-zero.
@@ -221,10 +221,9 @@ function commandsOf(router: object, path: readonly string[] = []): Commands {
     if (typeof value !== "object" || value === null) continue;
     const at = [...path, name];
     if (value instanceof ProcedureContract) {
-      const key = getAccess(value)?.key;
-      // A call that needs a `runner` permission is the Runner's own, made with its own key; people's
-      // keys hold `job` permissions.
-      if (key && !("runner" in key)) commands[name] = command(value, at);
+      // The command line authenticates with an API key only, so a call only a member makes has no
+      // command.
+      if (getAccess(value)?.key) commands[name] = command(value, at);
     } else {
       const nested = commandsOf(value, at);
       if (Object.keys(nested).length > 0) commands[name] = nested;

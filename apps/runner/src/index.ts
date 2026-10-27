@@ -5,13 +5,11 @@ import { text } from "node:stream/consumers";
 import type { Models } from "@earendil-works/pi-ai";
 import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
 import { createORPCClient } from "@orpc/client";
-import type { ContractRouterClient } from "@orpc/contract";
 import {
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_PING,
   HEARTBEAT_PONG,
   HEARTBEAT_TIMEOUT_MS,
-  contract,
   createProblemDetailsLink,
   createProtocolClient,
   hubNotifications,
@@ -19,6 +17,7 @@ import {
   RUNNER_CONNECT_PATH,
   RUNNER_NOT_FOUND,
   RUNNER_PROTOCOL_VERSIONS,
+  runnerContract,
   runnerMethods,
   type RegisteredRunner,
   registeredRunnerSchema,
@@ -190,7 +189,7 @@ function runRegistered(
         jobsDir: path.join(options.dataDir, "jobs"),
         fileSystem: yield* FileSystem.FileSystem,
         hub: createORPCClient<HubClient>(
-          createProblemDetailsLink(contract, {
+          createProblemDetailsLink(runnerContract, {
             origin: hubUrl.origin,
             headers: { "x-api-key": registration.key },
           }),
@@ -256,13 +255,13 @@ function loadOrRegister(hubUrl: URL, options: RunnerOptions): Effect.Effect<Regi
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const register = Effect.gen(function* () {
-      const hub: ContractRouterClient<typeof contract> = createORPCClient(
-        createProblemDetailsLink(contract, {
+      const hub: HubClient = createORPCClient(
+        createProblemDetailsLink(runnerContract, {
           origin: hubUrl.origin,
           headers: { "x-api-key": options.registrationKey },
         }),
       );
-      const registration = yield* Effect.promise(() => hub.runners.register({ name: hostname() }));
+      const registration = yield* Effect.promise(() => hub.register({ name: hostname() }));
       yield* fs.makeDirectory(options.dataDir, { recursive: true });
       // Only the operating-system user running the Runner may read its key.
       yield* fs.writeFileString(file, JSON.stringify(registration), { mode: 0o600 });

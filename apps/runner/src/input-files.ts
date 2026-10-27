@@ -4,7 +4,7 @@ import { zstdDecompressSync } from "node:zlib";
 
 import { ORPCError } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
-import { contract, type ListedInputFile, problemOf } from "contract";
+import { type ListedInputFile, problemOf, runnerContract } from "contract";
 import { Data, Duration, Effect, type FileSystem, Schedule } from "effect";
 import ensureError from "ensure-error";
 
@@ -16,8 +16,8 @@ import { type AgentSettings, jobPaths } from "./agent.ts";
 // frame because Node's zstd decoder before 26.10 stops at the end of the first frame of a stream
 // that holds several, and the Runner supports Node 22. So neither side holds more than a chunk.
 
-/** The hub's API, called with the Runner's own key. */
-export type HubClient = ContractRouterClient<typeof contract>;
+/** The hub's calls for Runners, made with the Runner's own key. */
+export type HubClient = ContractRouterClient<typeof runnerContract>;
 
 /** A job's Input file that could not be downloaded, naming the file and why. */
 export class InputFileFailed extends Data.TaggedError("InputFileFailed")<{ message: string }> {}
@@ -147,7 +147,7 @@ const CHUNK_TIMEOUT = Duration.seconds(60);
 function fetchChunk(hub: HubClient, jobId: string, name: string, index: number) {
   return Effect.tryPromise({
     try: async (signal) =>
-      (await hub.jobs.inputFileChunk({ id: jobId, name, index }, { signal })).bytes(),
+      (await hub.inputFileChunk({ id: jobId, name, index }, { signal })).bytes(),
     catch: (cause) => {
       // The status of an answer from the hub's side, a proxy's included, from the Problem Details
       // the contract's link keeps; an error oRPC raises itself, such as an answer the contract does

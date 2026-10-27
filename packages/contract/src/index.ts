@@ -339,26 +339,15 @@ const byKeyOrMember = (permissions: KeyPermissions) => calledBy({ key: permissio
 /** Calls that act for the Organization, which exists once the hub is set up. */
 const forOrganization = api.errors({ [HubNotSetUp.code]: HubNotSetUp });
 
-/** The hub's public HTTP API. Callers sign in as a member or send an API key in `x-api-key`. */
+/**
+ * The hub's public HTTP API, for people and their programs. Callers sign in as a member or send an
+ * API key in `x-api-key`. A Runner's own calls are `runnerContract`'s.
+ */
 export const contract = {
   runners: {
     list: api
       .meta(openapi({ method: "GET", path: "/runners" }), ...byMember)
       .output(z.array(runnerSchema)),
-    register: forOrganization
-      .meta(
-        openapi({
-          method: "POST",
-          path: "/runners/register",
-          description:
-            "Registers a new Runner, called with the shared key Runners start with. Returns the Runner's ID and its own key, which the Runner keeps and connects with.",
-        }),
-        ...byKey({ runner: ["register"] }),
-      )
-      .input(
-        z.object({ name: z.string().check(z.describe("The Runner's name, as the hub lists it.")) }),
-      )
-      .output(registeredRunnerSchema),
     // Removing a Runner ends the jobs it held that have not ended.
     delete: api
       .errors({ [Forbidden.code]: Forbidden, [NotFound.code]: NotFound })
@@ -550,30 +539,54 @@ export const contract = {
         }),
       )
       .output(jobEventsPageSchema),
-    inputFileChunk: api
-      .errors({ [NotFound.code]: NotFound })
-      .meta(
-        openapi({
-          method: "GET",
-          path: "/jobs/{id}/input-files/{name}/chunks/{index}",
-          // Not JSON, as every other call answers: read by its headers, which name a file.
-          responseBodyHint: undefined,
-          description:
-            "Reads one chunk of one of a job's Input files, for the Runner the job is placed on, called with that Runner's own key. Chunk `index` holds the file's original bytes from `index` times the `chunkBytes` the hub listed for the file, at most that many of them, compressed as one zstd frame (`application/zstd`); a file has as many chunks as its size needs, an empty file none. Not found when the job, the file or the chunk does not exist, or the job is not placed on the calling Runner.",
-        }),
-        ...byKey({ runner: ["connect"] }),
-      )
-      .input(
-        z.object({
-          ...jobRefSchema.shape,
-          name: fileNameSchema.check(z.describe("The Input file's name.")),
-          index: z.int32().check(z.nonnegative(), z.describe("The chunk's position, from 0.")),
-        }),
-      )
-      // A chunk is one frame of a bounded size, so it is sent whole, with its length, rather than
-      // streamed.
-      .output(z.file()),
   },
+};
+
+/**
+ * The HTTP calls only a Runner makes, beside its socket, and governed with it by the Runner
+ * protocol's version (ADR 0026), not by the public API's compatibility: registering, which a Runner
+ * does once with the shared key, and reading its jobs' Input files. They are kept out of `contract`,
+ * so the CLI, the OpenAPI document and the TypeScript client, which derive from it, leave them out;
+ * the hub serves both.
+ */
+export const runnerContract = {
+  register: forOrganization
+    .meta(
+      openapi({
+        method: "POST",
+        path: "/runners/register",
+        description:
+          "Registers a new Runner, called with the shared key Runners start with. Returns the Runner's ID and its own key, which the Runner keeps and connects with.",
+      }),
+      ...byKey({ runner: ["register"] }),
+    )
+    .input(
+      z.object({ name: z.string().check(z.describe("The Runner's name, as the hub lists it.")) }),
+    )
+    .output(registeredRunnerSchema),
+  inputFileChunk: api
+    .errors({ [NotFound.code]: NotFound })
+    .meta(
+      openapi({
+        method: "GET",
+        path: "/jobs/{id}/input-files/{name}/chunks/{index}",
+        // Not JSON, as every other call answers: read by its headers, which name a file.
+        responseBodyHint: undefined,
+        description:
+          "Reads one chunk of one of a job's Input files, for the Runner the job is placed on, called with that Runner's own key. Chunk `index` holds the file's original bytes from `index` times the `chunkBytes` the hub listed for the file, at most that many of them, compressed as one zstd frame (`application/zstd`); a file has as many chunks as its size needs, an empty file none. Not found when the job, the file or the chunk does not exist, or the job is not placed on the calling Runner.",
+      }),
+      ...byKey({ runner: ["connect"] }),
+    )
+    .input(
+      z.object({
+        ...jobRefSchema.shape,
+        name: fileNameSchema.check(z.describe("The Input file's name.")),
+        index: z.int32().check(z.nonnegative(), z.describe("The chunk's position, from 0.")),
+      }),
+    )
+    // A chunk is one frame of a bounded size, so it is sent whole, with its length, rather than
+    // streamed.
+    .output(z.file()),
 };
 
 /**

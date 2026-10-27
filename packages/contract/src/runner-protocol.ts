@@ -74,7 +74,7 @@ const positionSchema = z.int().check(z.nonnegative());
 /**
  * A job as the Runner needs it to run the job: the submission's Prompt and Result contract, and its
  * Input files by name, SHA-256, size and chunk size, never their bytes, which the Runner downloads
- * from the hub a chunk at a time (`jobs.inputFileChunk`), so an answer stays small whatever the
+ * from the hub a chunk at a time (`runnerContract.inputFileChunk`), so an answer stays small whatever the
  * files' size.
  */
 export const jobContentSchema = z.object({
