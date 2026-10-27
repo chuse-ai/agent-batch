@@ -309,6 +309,13 @@ const login = Effect.gen(function* () {
 const run = Effect.gen(function* () {
   const settings = yield* runnerSettings;
   const baseUrl = Option.getOrUndefined(settings.modelBaseUrl);
+  // Pi calls Azure OpenAI at `AZURE_OPENAI_BASE_URL`, or the URL of `AZURE_OPENAI_RESOURCE_NAME`,
+  // ahead of a model's own URL, so the setting would be passed over whenever either is set.
+  if (baseUrl && settings.provider === "azure") {
+    return yield* refuse(
+      "RUNNER_MODEL_BASE_URL is not used with Azure OpenAI: set AZURE_OPENAI_BASE_URL to call its models at another URL.",
+    );
+  }
   // A sign-in is looked for among all of the provider's auth, as the models with `baseUrl` take
   // none and would only report the provider unconfigured.
   if (
