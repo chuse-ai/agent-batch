@@ -8,9 +8,6 @@ updates:
       # Types must match the Node versions we support (engines), not the newest Node.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
-      # which 7 declares Node 22.22.2 or later, above the Runner's floor of 22.19.
-      - dependency-name: "which"
-        update-types: ["version-update:semver-major"]
     groups:
       better-auth:
         patterns:

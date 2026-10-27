@@ -34,7 +34,6 @@
     "ensure-error": "catalog:",
     "json-schema-library": "catalog:",
     "proper-lockfile": "catalog:",
-    "which": "catalog:",
     "write-file-atomic": "catalog:",
     "ws": "catalog:",
     "zod": "catalog:"
@@ -42,7 +41,6 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "@types/proper-lockfile": "catalog:",
-    "@types/which": "catalog:",
     "@types/write-file-atomic": "catalog:",
     "@types/ws": "catalog:",
     "typescript": "catalog:",
