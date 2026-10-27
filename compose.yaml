@@ -1,12 +1,10 @@
-# A hub and a Runner on one machine from the published images, as the README's quickstart starts
-# them, and the smallest deployment: a deployment's own changes go in a
-# `compose.override.yaml` beside this file, which Compose merges into it. Settings come from `.env`
-# beside this file; the Runner's registration key exists only once the hub runs, so the Runner
-# starts after the hub, and nothing here requires its settings.
+# A hub and a Runner on one machine, from the images of the release this file comes from. Settings
+# come from `.env` beside this file; set `AGENT_BATCH_VERSION` there to run other images. Put a
+# deployment's own changes in `compose.override.yaml`, which Compose merges into this file.
 #
-# Each release carries this file with its own version as the images' default, which release-please
-# writes at each release; `AGENT_BATCH_VERSION` in `.env` picks other images. On `main` it names
-# the last release, whose images may not match changes made since.
+# The Runner's registration key exists only once the hub runs, so the Runner starts after the hub
+# and nothing here requires its settings. On `main`, the images default to the last release, which
+# may lag changes made since.
 name: agent-batch
 
 services:
