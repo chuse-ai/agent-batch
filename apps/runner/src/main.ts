@@ -59,6 +59,14 @@ const DEFAULT_THINKING_LEVEL = "medium";
 /** The file in the Runner's data directory holding its sign-ins' tokens. */
 const CREDENTIALS_FILE = "auth.json";
 
+/**
+ * Why a sign-in is not used with `RUNNER_MODEL_BASE_URL`: its tokens would go to whatever serves
+ * that URL, and Pi shapes a sign-in's requests for the provider's own endpoint, such as ChatGPT's,
+ * which it recognizes by its URL.
+ */
+const SIGN_IN_WITH_BASE_URL =
+  "RUNNER_MODEL_BASE_URL works with the provider's key only, not with a sign-in, whose tokens would go to that URL. Unset it, or delete the sign-in (auth.json in the data directory) and give the provider's key in the environment.";
+
 /** The file in the Runner's data directory holding the ID a provider knows this installation by. */
 const INSTALLATION_FILE = "installation_id";
 
@@ -110,6 +118,9 @@ if (command !== undefined && command !== "register" && command !== "login") {
 /** Where the Runner keeps what must survive restarts. */
 const dataDirSetting = Config.String("RUNNER_DATA_DIR").pipe(Config.withDefault("data"));
 
+/** Where the Runner calls its provider's models instead of the provider's own URL, if anywhere. */
+const modelBaseUrlSetting = Config.URL("RUNNER_MODEL_BASE_URL").pipe(Config.option);
+
 /** The Runner's settings, read from the environment by Effect's default `Config` source. */
 const runnerSettings = Config.all({
   hubUrl: Config.URL("HUB_URL"),
@@ -118,6 +129,7 @@ const runnerSettings = Config.all({
   maxJobs: Config.Int("RUNNER_MAX_JOBS").pipe(Config.option),
   provider: Config.NonEmptyString("RUNNER_MODEL_PROVIDER"),
   modelId: Config.NonEmptyString("RUNNER_MODEL_ID"),
+  modelBaseUrl: modelBaseUrlSetting,
   thinkingLevel: Config.Literals(MODEL_THINKING_LEVELS, "RUNNER_THINKING_LEVEL").pipe(
     Config.withDefault(DEFAULT_THINKING_LEVEL),
   ),
@@ -148,9 +160,36 @@ function refuse(message: string) {
   return Effect.sync(() => console.error(message)).pipe(Effect.andThen(Effect.fail(new Refused())));
 }
 
-/** The models Pi knows, with the keys in the environment and the sign-ins in `dataDir`. */
-function runnerModels(dataDir: string) {
-  return builtinModels({ credentials: fileCredentialStore(path.join(dataDir, CREDENTIALS_FILE)) });
+/**
+ * The models Pi knows, with the keys in the environment and the sign-ins in `dataDir`. With
+ * `baseUrl`, the provider `provider`'s models are called there with its key, through the base URL
+ * Pi lets a key's resolution return, as it lets a credential name its own endpoint. Only the key's
+ * resolution returns it, so a sign-in's tokens never go there: the Runner refuses to start on one.
+ */
+function runnerModels(dataDir: string, baseUrl?: { provider: string; url: URL }) {
+  const models = builtinModels({
+    credentials: fileCredentialStore(path.join(dataDir, CREDENTIALS_FILE)),
+  });
+  const provider = baseUrl && models.getProvider(baseUrl.provider);
+  const apiKey = provider?.auth.apiKey;
+  if (baseUrl && provider && apiKey) {
+    // Pi's own base URLs have no trailing slash, and it appends paths such as `/responses` to them.
+    const url = baseUrl.url.href.replace(/\/$/, "");
+    models.setProvider({
+      ...provider,
+      auth: {
+        ...provider.auth,
+        apiKey: {
+          ...apiKey,
+          resolve: async (input) => {
+            const resolution = await apiKey.resolve(input);
+            return resolution && { ...resolution, auth: { ...resolution.auth, baseUrl: url } };
+          },
+        },
+      },
+    });
+  }
+  return models;
 }
 
 /**
@@ -221,10 +260,13 @@ const terminalInteraction: AuthInteraction = {
 
 /** Signs in to the model's provider, as `login` does, and saves the sign-in in the data directory. */
 const login = Effect.gen(function* () {
-  const { dataDir, provider } = yield* Config.all({
+  const { dataDir, provider, modelBaseUrl } = yield* Config.all({
     dataDir: dataDirSetting,
     provider: Config.NonEmptyString("RUNNER_MODEL_PROVIDER"),
+    modelBaseUrl: modelBaseUrlSetting,
   });
+  // A refusal fails the program, so nothing after it runs.
+  if (Option.isSome(modelBaseUrl)) yield* refuse(SIGN_IN_WITH_BASE_URL);
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(dataDir, { recursive: true }).pipe(Effect.orDie);
   const id = yield* loadOrCreateInstallationId(dataDir).pipe(Effect.orDie);
@@ -263,7 +305,23 @@ const login = Effect.gen(function* () {
 
 const run = Effect.gen(function* () {
   const settings = yield* runnerSettings;
-  const models = runnerModels(settings.dataDir);
+  const baseUrl = Option.getOrUndefined(settings.modelBaseUrl);
+  if (baseUrl && baseUrl.protocol !== "https:" && baseUrl.protocol !== "http:") {
+    return yield* refuse(
+      `RUNNER_MODEL_BASE_URL must be an http: or https: URL, not ${baseUrl.protocol}`,
+    );
+  }
+  const models = runnerModels(
+    settings.dataDir,
+    baseUrl && { provider: settings.provider, url: baseUrl },
+  );
+  // Before renewing a sign-in, which would otherwise be renewed for nothing.
+  if (
+    baseUrl &&
+    (yield* Effect.promise(() => models.checkAuth(settings.provider)))?.type === "oauth"
+  ) {
+    return yield* refuse(SIGN_IN_WITH_BASE_URL);
+  }
   const problem = yield* Effect.promise(() =>
     renewModelAuthProblem(models, settings.provider, settings.modelId),
   );
