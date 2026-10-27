@@ -313,9 +313,9 @@ export const batchSchema = z
     createdAt: z.date(),
     /**
      * `active` while it releases its jobs, an empty Batch and one whose jobs have all ended included,
-     * as jobs can still be added; `paused` while it is paused, whether or not any job is unfinished,
-     * as jobs added to it are held; `cancelled` once it was cancelled and every job has ended. A
-     * Batch has no status of its own for having no unfinished job: `jobCounts` tells.
+     * and while a cancel waits, as `pendingControl` shows; `paused` while it is paused, whether or not
+     * any job is unfinished, as jobs added to it are held; `cancelled` once it was cancelled and every
+     * job has ended. A Batch has no status of its own for having no unfinished job: `jobCounts` tells.
      */
     status: batchStatusSchema,
     /** Who paused the Batch, a caller or its failure breaker; null while it is not paused. */
@@ -502,7 +502,7 @@ export const apiContract = {
           method: "POST",
           path: "/batches",
           description:
-            "Creates a Batch, without jobs, and answers with it: the `agent` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with `POST /batches/{id}/jobs`. The hub checks the Result contract's schema, refusing one that is invalid, describes a list or refers outside itself. A `customId` makes the creation safe to retry: the same `customId` with the same `agent`, `labels` and `breaker` answers with the Batch already created, as the creation that made it did, and with any of them different is refused.",
+            "Creates a Batch, without jobs, and answers with it: the `agent` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with `POST /batches/{id}/jobs`. The hub checks the Result contract's schema, refusing one that is invalid, describes a list or refers outside itself. A `customId` makes the creation safe to retry: the same `customId` with the same `agent`, `labels` and `breaker` answers with the Batch already created, and with any of them different is refused.",
         }),
         ...byKey({ job: ["create"] }),
       )
@@ -664,7 +664,7 @@ export const apiContract = {
           method: "DELETE",
           path: "/jobs/{id}",
           description:
-            "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with `deletedAt` and a waiting `delete`, and then as not found. Its Usage record stays. An unfinished job is refused: cancel it first.",
+            "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with `deletedAt` and a waiting `delete`, and then as not found. Its Usage record stays, and so does its Batch, with the agent's instructions, Result contract and Input files. An unfinished job is refused: cancel it first.",
         }),
         ...byKeyOrMember({ job: ["delete"] }),
       )
