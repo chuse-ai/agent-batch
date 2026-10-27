@@ -35,7 +35,7 @@ exports[`the commands and their flags 1`] = `
             {
               "attributeName": "labels",
               "defaultValue": {},
-              "description": "Labels every job of the Batch gets, beside its own, which win where both name a key; none by default. Keys follow Kubernetes's label key syntax; values are any text of at most 256 characters, kept exactly as given.; Property names: {"type":"string","pattern":"^(?:(?=.{1,253}\\\\/)[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\\\\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*\\\\/)?[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?$"}",
+              "description": "Labels every job of the Batch gets, beside its own, which win where both name a key; none by default. Keys follow Kubernetes's label key syntax; values are any text of at most 256 characters, kept exactly as given. A job has at most 64 labels, the Batch's and its own together, so a job whose own labels take it past that is refused.; Property names: {"type":"string","pattern":"^(?:(?=.{1,253}\\\\/)[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\\\\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*\\\\/)?[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?$"}; Max properties: 64",
               "flags": "--labels [json]",
               "name": "labels",
               "negate": false,

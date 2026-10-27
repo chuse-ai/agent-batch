@@ -10,6 +10,7 @@ import {
   jobIdSchema,
   jobRefSchema,
   labelsSchema,
+  MAX_LABELS,
   modelBudgetUsdSchema,
   resultContractSchema,
   runTimeoutSecondsSchema,
@@ -236,7 +237,7 @@ export const batchCreationSchema = z
     labels: z._default(
       labelsSchema.check(
         z.describe(
-          "Labels every job of the Batch gets, beside its own, which win where both name a key; none by default. Keys follow Kubernetes's label key syntax; values are any text of at most 256 characters, kept exactly as given.",
+          `Labels every job of the Batch gets, beside its own, which win where both name a key; none by default. Keys follow Kubernetes's label key syntax; values are any text of at most 256 characters, kept exactly as given. A job has at most ${MAX_LABELS} labels, the Batch's and its own together, so a job whose own labels take it past that is refused.`,
         ),
       ),
       {},
@@ -286,7 +287,7 @@ export const jobSubmissionSchema = z
     labels: z._default(
       labelsSchema.check(
         z.describe(
-          'Labels to find the job, group it and attribute its cost by, by key, such as `{ "customer": "acme" }`, beside its Batch\'s, which they win over where both name a key; none by default. Keys follow Kubernetes\'s label key syntax; values are any text of at most 256 characters, kept exactly as given.',
+          `Labels to find the job, group it and attribute its cost by, by key, such as \`{ "customer": "acme" }\`, beside its Batch's, which they win over where both name a key; none by default. Keys follow Kubernetes's label key syntax; values are any text of at most 256 characters, kept exactly as given. At most ${MAX_LABELS}, the Batch's and the job's own together.`,
         ),
       ),
       {},

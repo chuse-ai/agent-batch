@@ -163,13 +163,15 @@ export const labelValueSchema = textSchema.check(z.maxLength(256));
 /** The most labels a job carries, its Batch's included. */
 export const MAX_LABELS = 64;
 
-/** A job's labels, by key: what it is for, to find it, group it and attribute its cost by. */
-export const labelsSchema = z
-  .record(labelKeySchema, labelValueSchema)
-  .check(
-    z.refine(
-      (labels) => Object.keys(labels).length <= MAX_LABELS,
-      `Must have at most ${MAX_LABELS} labels`,
-    ),
-  );
+/**
+ * A job's labels, by key: what it is for, to find it, group it and attribute its cost by. The limit
+ * is a refinement, which JSON Schema cannot carry, so `maxProperties` states it there.
+ */
+export const labelsSchema = z.record(labelKeySchema, labelValueSchema).check(
+  z.refine(
+    (labels) => Object.keys(labels).length <= MAX_LABELS,
+    `Must have at most ${MAX_LABELS} labels`,
+  ),
+  z.meta({ maxProperties: MAX_LABELS }),
+);
 export type Labels = z.infer<typeof labelsSchema>;
