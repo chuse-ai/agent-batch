@@ -600,12 +600,7 @@ export function controlJob(jobId: JobId, control: Control, given: GivenLimits = 
         }
         return {
           decision,
-          job: toApiJob({
-            ...changed,
-            totalTokens: job.totalTokens,
-            costUsd: job.costUsd,
-            activity: job.activity,
-          }),
+          job: toApiJob({ ...changed, ...Struct.pick(job, PROGRESS_COLUMNS) }),
         };
       }),
     );

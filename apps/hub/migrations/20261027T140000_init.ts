@@ -328,7 +328,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .createIndex("job_labels_idx")
     .on("job")
     .using("gin")
-    .expression(sql`${sql.ref("labels")} jsonb_path_ops`)
+    .column(sql`${sql.ref("labels")} jsonb_path_ops`)
     .execute();
   // A Batch's summary and its controls read its unfinished jobs; placement, its unfinished Canary.
   await schema

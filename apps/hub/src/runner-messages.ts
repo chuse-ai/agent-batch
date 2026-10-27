@@ -215,16 +215,16 @@ function lifecycleOf(
  */
 function applyReports(runnerId: RunnerId, reports: JobReport[]) {
   const now = new Date();
-  const withStatus = reports.flatMap((report) => {
-    const { status } = lifecycleOf(report, now);
-    return status === null ? [] : [{ jobId: JobId(report.jobId), status }];
-  });
+  const rows = reports.map((report) => reportRow(report, now));
+  const withStatus = rows.flatMap(({ jobId, status }) =>
+    status === null ? [] : [{ jobId, status }],
+  );
   return Db.use((database) =>
     database.query(async (outer) => {
       // Nothing ends, so the breaker has nothing to count, and the statement's own lock on the
       // Runner's row orders it against a removal of the Runner.
       if (withStatus.length === 0) {
-        await applyReportsStatement(outer, runnerId, reports, now);
+        await applyReportsStatement(outer, runnerId, rows, now);
         return;
       }
       // One transaction, so the ends a report records and the breaker's counts of them go together.
@@ -255,7 +255,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
           .orderBy("id")
           .forUpdate()
           .execute();
-        const recorded = await applyReportsStatement(db, runnerId, reports, now);
+        const recorded = await applyReportsStatement(db, runnerId, rows, now);
         await countEndsAndPauseTrippedBatches(
           db,
           recorded.map(({ id }) => id),
@@ -268,20 +268,21 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
 }
 
 /**
- * The statement that applies the Runner's reports, each to its job while the reported run is the
- * job's current one on the Runner, and returns the Usage records of the ends it recorded. A job's
- * usage applies when neither total is smaller than the stored one, as pi's totals only grow. Its
- * events, its position, its activity and its status apply only when the report's position is the
- * hub's, so a report repeated after a lost answer changes nothing, and only while the job is queued
- * or running, the statuses a report may move it from, so a page of its events that says no more
- * will come stays true, and a paused run's later reports change nothing but its usage; the answer
- * then gives the Runner the position to read after. An end clears the activity. The job's progress
- * row is locked while the statement reads it, so two reports of one job apply one after the other.
+ * The statement that applies the Runner's reports, read as `rows`, each to its job while the
+ * reported run is the job's current one on the Runner, and returns the Usage records of the ends it
+ * recorded. A job's usage applies when neither total is smaller than the stored one, as pi's totals
+ * only grow. Its events, its position, its activity and its status apply only when the report's
+ * position is the hub's, so a report repeated after a lost answer changes nothing, and only while
+ * the job is queued or running, the statuses a report may move it from, so a page of its events
+ * that says no more will come stays true, and a paused run's later reports change nothing but its
+ * usage; the answer then gives the Runner the position to read after. An end clears the activity.
+ * The job's progress row is locked while the statement reads it, so two reports of one job apply
+ * one after the other.
  */
 function applyReportsStatement(
   db: Kysely<Database>,
   runnerId: RunnerId,
-  reports: JobReport[],
+  rows: ReportRow[],
   now: Date,
 ) {
   const jobStatus = sql.id(DB_SCHEMA, "jobStatus");
@@ -290,12 +291,7 @@ function applyReportsStatement(
     db
       .with("report", (qb) =>
         qb
-          .selectFrom((eb) =>
-            jsonRows(
-              eb,
-              reports.map((report) => reportRow(report, now)),
-            ),
-          )
+          .selectFrom((eb) => jsonRows(eb, rows))
           .select((eb) => {
             const field = (name: keyof ReportRow) => eb.ref("row.value", "->>").key(name);
             const json = <Name extends "usage" | "activity" | "result">(name: Name) =>
