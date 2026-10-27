@@ -365,7 +365,7 @@ export function decideRunnerUpgrade(request: Request) {
 /** The Runner whose own key `headers` carry, or the hub's answer refusing it. */
 function authenticateRunner(headers: Headers) {
   return Effect.gen(function* () {
-    const key = yield* requireKey(headers, { runner: ["connect"] });
+    const key = yield* requireKey(headers, { runner: ["actAs"] });
     return (yield* findRunnerByKey(ApikeyId(key.id))) ?? runnerNotFound();
   }).pipe(
     // A key the hub could check and does not know; a hub that cannot reach its database tells the

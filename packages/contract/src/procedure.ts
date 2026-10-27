@@ -13,11 +13,11 @@ z.config(en());
 
 /**
  * The permissions a call can require of an API key, by resource: `register` for the shared key
- * Runners start with, `connect` for a Runner's own key, and the job calls. The hub's access control
- * holds them among its statements.
+ * Runners start with, `actAs` for a Runner's own key, acting as that Runner over the socket and its
+ * HTTP calls, and the job calls. The hub's access control holds them among its statements.
  */
 export const KEY_PERMISSIONS = {
-  runner: ["register", "connect"],
+  runner: ["register", "actAs"],
   job: ["create", "read", "pause", "resume", "cancel", "delete"],
 } as const;
 

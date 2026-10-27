@@ -39,7 +39,7 @@ export const GRANTABLE_KEY_PERMISSIONS = ac.newRole({
 });
 
 /** The permissions of a Runner's own key, which the hub creates when the Runner registers. */
-export const RUNNER_KEY_PERMISSIONS = ac.newRole({ runner: ["connect"] });
+export const RUNNER_KEY_PERMISSIONS = ac.newRole({ runner: ["actAs"] });
 
 /**
  * Better Auth's default organization roles, with key management granted to owners and admins, as in

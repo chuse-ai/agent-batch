@@ -141,7 +141,7 @@ test("a key can be created to expire, within Better Auth's limits of a day to a 
 });
 
 test("members cannot grant a key member permissions or a Runner's own permission", async () => {
-  const tooMuch: Record<string, string[]>[] = [{ apiKey: ["create"] }, { runner: ["connect"] }];
+  const tooMuch: Record<string, string[]>[] = [{ apiKey: ["create"] }, { runner: ["actAs"] }];
   for (const permissions of tooMuch) {
     await expect(
       system.owner().apiKeys.create({ name: "too much", permissions }),
