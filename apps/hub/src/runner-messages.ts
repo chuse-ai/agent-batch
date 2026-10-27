@@ -659,7 +659,18 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                 // or for its Canary. The Batch's row is read without a lock, so placement never
                 // waits on a Batch: a placement already under way when a pause commits may still
                 // send the jobs it took, as one that committed a moment before would have (ADR 0033).
-                .where((batchEb) => batchEb(blockedByOf("job"), "is", null))
+                .where((batchEb) =>
+                  batchEb(
+                    blockedByOf({
+                      status: batchEb.ref("job.status"),
+                      placedAt: batchEb.ref("job.placedAt"),
+                      batchId: batchEb.ref("job.batchId"),
+                      inCanary: batchEb.ref("job.inCanary"),
+                    }),
+                    "is",
+                    null,
+                  ),
+                )
                 // A removed Runner takes no job, though its socket is still open while it closes. Its
                 // row is locked, so a removal waits for this placement and then ends what it placed.
                 .where((runnerEb) =>

@@ -775,9 +775,9 @@ export function cancelBatch(batchId: BatchId) {
           .where((eb) => eb("pendingControl", "is distinct from", "cancel"))
           .returning("runnerId")
           .execute();
-        const hints = [
-          ...new Set(waiting.flatMap(({ runnerId }) => (runnerId === null ? [] : [runnerId]))),
-        ];
+        const hints = Array.dedupe(
+          waiting.flatMap(({ runnerId }) => (runnerId === null ? [] : [runnerId])),
+        );
         return {
           decision: { kind: "changed", hints } as const,
           batch: await readBatch(trx, batchId),
