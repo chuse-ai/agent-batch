@@ -39,7 +39,13 @@ jobs:
           sudo apt-get install -y bubblewrap socat ripgrep
           # Ubuntu 24.04 strips the capabilities from the user namespaces the sandbox creates (ADR 0027).
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - run: vp run ready
+      # `vp run ready`, with the hub's tests on the Node hub only: `node-22` runs them on the Workers
+      # hub, with its Runners on Node 22, so each hub runs the suite once.
+      - run: vp check
+      - run: vp run --filter runner --filter agent-batch test
+      - run: vp test --project node
+        working-directory: apps/hub
+      - run: vp run -r build
       # The migrations must create everything Better Auth needs.
       - run: vp run --no-cache hub#db:draft-auth-migration --check
       # The committed database types must be what the migrations produce.
