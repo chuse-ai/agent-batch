@@ -5,7 +5,7 @@ import * as z from "zod/mini";
 
 import { Db, databaseLayer } from "./db/database.ts";
 import { RunnerId } from "./db/types.ts";
-import { handleRunnerMessage, SYNC_NOW } from "./runner-protocol.ts";
+import { handleRunnerMessage, SYNC_NOW } from "./runner-messages.ts";
 import { SYNC_INTERVAL_MS } from "./runners.ts";
 import { hubSettings, readConfig } from "./settings.ts";
 

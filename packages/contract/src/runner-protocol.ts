@@ -388,7 +388,7 @@ const refusedReportSchema = z.object({ ...runRefSchema.shape, reason: z.string()
 export type RefusedReport = z.infer<typeof refusedReportSchema>;
 
 /** The requests a Runner makes of the hub. */
-export const runnerMethods = {
+export const runnerRequests = {
   /** The first request on a new socket: who the Runner is. The hub says how often to sync. */
   hello: {
     params: z.object({ name: z.string() }),
@@ -477,7 +477,7 @@ export const runnerHttpContract = {
         description:
           "Reads one chunk of one of a job's Input files, for the Runner the job is placed on, called with that Runner's own key. Chunk `index` holds the file's original bytes from `index` times the `chunkBytes` the hub listed for the file, at most that many of them, compressed as one zstd frame (`application/zstd`); a file has as many chunks as its size needs, an empty file none. Not found when the job, the file or the chunk does not exist, or the job is not placed on the calling Runner.",
       }),
-      ...byKey({ runner: ["connect"] }),
+      ...byKey({ runner: ["actAs"] }),
     )
     .input(
       z.object({

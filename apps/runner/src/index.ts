@@ -11,14 +11,14 @@ import {
   HEARTBEAT_PONG,
   HEARTBEAT_TIMEOUT_MS,
   createProblemDetailsLink,
-  createProtocolClient,
+  createJsonRpcClient,
   hubNotifications,
   PROTOCOL_UNSUPPORTED,
   RUNNER_CONNECT_PATH,
   RUNNER_NOT_FOUND,
   RUNNER_PROTOCOL_VERSIONS,
   runnerHttpContract,
-  runnerMethods,
+  runnerRequests,
   type RegisteredRunner,
   registeredRunnerSchema,
   socketRefusalSchema,
@@ -349,24 +349,24 @@ function connectAndSync(
     const reader = yield* socket.reader;
     opened.at = Date.now();
     const pong = { at: Date.now() };
-    const hub = createProtocolClient(
-      runnerMethods,
+    const hubSocket = createJsonRpcClient(
+      runnerRequests,
       hubNotifications,
       { syncNow: () => context.syncNow.openUnsafe() },
       // In the connection's scope: a write after the socket closed would otherwise wait forever.
       (message) => Effect.runSync(Effect.forkIn(writer.write(message), scope)),
     );
     yield* Effect.addFinalizer(() =>
-      Effect.sync(() => hub.rejectAllPendingRequests("The connection closed")),
+      Effect.sync(() => hubSocket.rejectAllPendingRequests("The connection closed")),
     );
 
     /** A request of the hub, dropped when not answered in time or at all. */
-    const request = <Name extends keyof typeof runnerMethods>(
+    const request = <Name extends keyof typeof runnerRequests>(
       name: Name,
-      params: Parameters<typeof hub.request<Name>>[1],
+      params: Parameters<typeof hubSocket.request<Name>>[1],
     ) =>
       Effect.tryPromise({
-        try: () => hub.request(name, params, REQUEST_TIMEOUT_MS),
+        try: () => hubSocket.request(name, params, REQUEST_TIMEOUT_MS),
         catch: (error) =>
           new Dropped({ reason: `Syncing with the hub failed: ${ensureError(error).message}` }),
       });
@@ -376,7 +376,7 @@ function connectAndSync(
       Effect.gen(function* () {
         for (const message of yield* reader.pull) {
           if (message === HEARTBEAT_PONG) pong.at = Date.now();
-          else if (typeof message === "string") hub.receive(message);
+          else if (typeof message === "string") hubSocket.receive(message);
         }
       }),
     );

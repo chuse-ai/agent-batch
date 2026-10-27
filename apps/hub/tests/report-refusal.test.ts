@@ -1,9 +1,9 @@
 import {
-  createProtocolClient,
+  createJsonRpcClient,
   hubNotifications,
   JOB_SUCCEEDED,
   type JobSubmission,
-  runnerMethods,
+  runnerRequests,
 } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 import type WebSocket from "ws";
@@ -38,7 +38,7 @@ const NESTED_RESULT = "__nested_result__";
 
 /** A Runner's side of the protocol over `socket`. */
 function protocolClient(socket: WebSocket, depth: number | undefined) {
-  const client = createProtocolClient(runnerMethods, hubNotifications, { syncNow() {} }, (text) =>
+  const client = createJsonRpcClient(runnerRequests, hubNotifications, { syncNow() {} }, (text) =>
     socket.send(
       depth === undefined
         ? text
