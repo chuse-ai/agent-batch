@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import type { JobSubmission } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
-import { type HubClient, startSystem, untilStatus } from "./harness.ts";
+import { type ApiClient, startSystem, untilStatus } from "./harness.ts";
 import { callTool } from "./scripted-model.ts";
 
 // A job whose tool call never ends, against a real hub and Runner: its daemon never answers the
@@ -33,7 +33,7 @@ const SUBMISSION = {
  * submits its result from a FIFO, which never ends; waits until that call runs. Returns the job's
  * ID and whether the `sleep` still runs, as seen from outside its sandbox.
  */
-async function submitStalledJob(client: HubClient, limits: { runTimeoutSeconds?: number } = {}) {
+async function submitStalledJob(client: ApiClient, limits: { runTimeoutSeconds?: number } = {}) {
   const seconds = String(1000 + Math.floor(Math.random() * 9000));
   system.model.setResponses([
     callTool("bash", { command: `mkfifo pipe && (nohup sleep ${seconds} >/dev/null 2>&1 &)` }),

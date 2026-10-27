@@ -4,7 +4,7 @@ import type { JobEvent, JobSubmission } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 import { entryKinds } from "./entries.ts";
-import { type HubClient, startSystem } from "./harness.ts";
+import { type ApiClient, startSystem } from "./harness.ts";
 import { callTool, untilAborted } from "./scripted-model.ts";
 
 // How callers read a job's events: in pages after the last event they have, during and after the
@@ -31,7 +31,7 @@ const SUBMISSION = {
 } satisfies JobSubmission;
 
 /** An ended job's events from the start, read `limit` at a time until a page has no more. */
-async function readAll(client: HubClient, id: string, limit: number) {
+async function readAll(client: ApiClient, id: string, limit: number) {
   const events: JobEvent[] = [];
   for (;;) {
     const page = await client.jobs.events({ id, after: events.at(-1)?.id ?? 0, limit });

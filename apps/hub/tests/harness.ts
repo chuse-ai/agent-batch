@@ -8,12 +8,12 @@ import { text } from "node:stream/consumers";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import {
-  contract,
+  apiContract,
   createProblemDetailsLink,
   RUNNER_CONNECT_PATH,
   RUNNER_PROTOCOL_VERSION,
   registeredRunnerSchema,
-  runnerContract,
+  runnerHttpContract,
 } from "contract";
 import getPort from "get-port";
 import { sql } from "kysely";
@@ -28,10 +28,10 @@ import { setUpOrganization } from "../src/setup.ts";
 import { scriptedModel } from "./scripted-model.ts";
 
 /** The hub's API as a caller sees it through the contract's link. */
-export type HubClient = ContractRouterClient<typeof contract>;
+export type ApiClient = ContractRouterClient<typeof apiContract>;
 
-/** The hub's calls for Runners, as a Runner makes them. */
-export type RunnerHubClient = ContractRouterClient<typeof runnerContract>;
+/** The Runner's HTTP calls, as a Runner makes them. */
+export type HubHttpClient = ContractRouterClient<typeof runnerHttpContract>;
 
 /** Which hub the suite runs against: the Worker in workerd, or the Node process its image runs. */
 export type HubTarget = "workers" | "node";
@@ -64,7 +64,7 @@ const HUB_SETTINGS = {
 };
 
 /** Waits until the job `id` has `status`. */
-export async function untilStatus(client: HubClient, id: string, status: string, timeout = 10_000) {
+export async function untilStatus(client: ApiClient, id: string, status: string, timeout = 10_000) {
   await expect.poll(async () => (await client.jobs.get({ id })).status, { timeout }).toBe(status);
 }
 
@@ -141,7 +141,7 @@ export function startSystem(
 ) {
   let running: RunningHub;
   let url: URL;
-  let owner: HubClient;
+  let owner: ApiClient;
   let ownerCookie: string;
   let runner: RunnerProcess | undefined;
   let runnerDataDir: string | undefined;
@@ -162,14 +162,14 @@ export function startSystem(
   }
 
   /** A client of the hub's API sending `headers`, such as a member's session or an API key. */
-  function client(headers: Record<string, string> = {}): HubClient {
-    return createORPCClient(createProblemDetailsLink(contract, { origin: url.origin, headers }));
+  function client(headers: Record<string, string> = {}): ApiClient {
+    return createORPCClient(createProblemDetailsLink(apiContract, { origin: url.origin, headers }));
   }
 
-  /** A client of the hub's calls for Runners sending `headers`, such as a Runner's key. */
-  function runnerClient(headers: Record<string, string> = {}): RunnerHubClient {
+  /** A client of the Runner's HTTP calls sending `headers`, such as a Runner's key. */
+  function runnerClient(headers: Record<string, string> = {}): HubHttpClient {
     return createORPCClient(
-      createProblemDetailsLink(runnerContract, { origin: url.origin, headers }),
+      createProblemDetailsLink(runnerHttpContract, { origin: url.origin, headers }),
     );
   }
 

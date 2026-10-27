@@ -10,14 +10,14 @@ import { OpenAPIReferenceHandlerPlugin } from "@orpc/openapi/plugins";
 import { implement, ValidationError } from "@orpc/server";
 import { ZodToJsonSchemaConverter } from "@orpc/zod";
 import {
-  contract,
+  apiContract,
   getAccess,
   NotFound,
   PROTOCOL_UNSUPPORTED,
   RUNNER_CONNECT_PATH,
   RUNNER_NOT_FOUND,
   RUNNER_PROTOCOL_VERSIONS,
-  runnerContract,
+  runnerHttpContract,
   selectProtocolVersion,
 } from "contract";
 import { type Context, Effect, Struct } from "effect";
@@ -81,10 +81,10 @@ const requireDeclaredAccess = middlewareGen<ApiContext, { caller: Caller }>(func
 });
 
 /**
- * Every call the hub serves: the public API and, under `runner`, the Runner's own calls. Each
+ * Every call the hub serves: the API and, under `runnerProtocol`, the Runner's HTTP calls. Each
  * declares its own path, so nesting them changes no route.
  */
-const hubContract = { ...contract, runner: runnerContract };
+const hubContract = { ...apiContract, runnerProtocol: runnerHttpContract };
 
 /** The handlers' builder: each runs with the `caller` the router's access check hands it. */
 const os = implement<typeof hubContract, ApiContext & { caller: Caller }>(hubContract);
@@ -249,11 +249,11 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
         return yield* readJobEvents(JobId(input.id), EventId(input.after), input.limit);
       }),
     },
-    runner: {
-      register: os.runner.register.effect(function* ({ input }) {
+    runnerProtocol: {
+      register: os.runnerProtocol.register.effect(function* ({ input }) {
         return yield* registerRunner(input.name);
       }),
-      inputFileChunk: os.runner.inputFileChunk.effect(function* ({ input, context }) {
+      getInputFileChunk: os.runnerProtocol.getInputFileChunk.effect(function* ({ input, context }) {
         const key = yield* callerKey(context.caller);
         const runnerId = yield* findRunnerByKey(ApikeyId(key.id));
         // The IDs and the name enter the hub here.

@@ -17,7 +17,7 @@ import {
   RUNNER_CONNECT_PATH,
   RUNNER_NOT_FOUND,
   RUNNER_PROTOCOL_VERSIONS,
-  runnerContract,
+  runnerHttpContract,
   runnerMethods,
   type RegisteredRunner,
   registeredRunnerSchema,
@@ -42,8 +42,7 @@ import ensureError from "ensure-error";
 import WebSocket from "ws";
 import * as z from "zod/mini";
 
-import type { AgentModel } from "./agent.ts";
-import type { HubClient } from "./input-files.ts";
+import type { AgentModel, HubHttpClient } from "./agent.ts";
 import { JobRunner } from "./jobs.ts";
 import {
   type JobEnvironments,
@@ -188,8 +187,8 @@ function runRegistered(
       const agent = {
         jobsDir: path.join(options.dataDir, "jobs"),
         fileSystem: yield* FileSystem.FileSystem,
-        hub: createORPCClient<HubClient>(
-          createProblemDetailsLink(runnerContract, {
+        hubHttp: createORPCClient<HubHttpClient>(
+          createProblemDetailsLink(runnerHttpContract, {
             origin: hubUrl.origin,
             headers: { "x-api-key": registration.key },
           }),
@@ -255,13 +254,13 @@ function loadOrRegister(hubUrl: URL, options: RunnerOptions): Effect.Effect<Regi
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const register = Effect.gen(function* () {
-      const hub: HubClient = createORPCClient(
-        createProblemDetailsLink(runnerContract, {
+      const hubHttp: HubHttpClient = createORPCClient(
+        createProblemDetailsLink(runnerHttpContract, {
           origin: hubUrl.origin,
           headers: { "x-api-key": options.registrationKey },
         }),
       );
-      const registration = yield* Effect.promise(() => hub.register({ name: hostname() }));
+      const registration = yield* Effect.promise(() => hubHttp.register({ name: hostname() }));
       yield* fs.makeDirectory(options.dataDir, { recursive: true });
       // Only the operating-system user running the Runner may read its key.
       yield* fs.writeFileString(file, JSON.stringify(registration), { mode: 0o600 });

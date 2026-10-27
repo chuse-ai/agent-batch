@@ -1,7 +1,7 @@
 import { OpenAPIGenerator } from "@orpc/openapi";
 import { ZodToJsonSchemaConverter } from "@orpc/zod";
 import { getCookies } from "better-auth/cookies";
-import { API_KEY_SECURITY_SCHEME, contract, problemDetailsSchema } from "contract";
+import { API_KEY_SECURITY_SCHEME, apiContract, problemDetailsSchema } from "contract";
 
 import packageJson from "../package.json" with { type: "json" };
 import { Auth } from "./auth/auth.ts";
@@ -21,7 +21,7 @@ export const sessionCookieName = Auth.use((auth) =>
 
 /** Generates the hub's OpenAPI document, with members' sessions in the cookie `sessionCookie`. */
 export function generateOpenAPIDocument(sessionCookie: string) {
-  return generator.generate(contract, {
+  return generator.generate(apiContract, {
     base: {
       // The hub's own version, which a release sets to the release's.
       info: { title: "agent-batch", version: packageJson.version },

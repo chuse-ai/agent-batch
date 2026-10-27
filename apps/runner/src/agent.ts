@@ -21,7 +21,15 @@ import {
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { type Failure, type Intent, type JobContent, jsonTextSchema, type Run } from "contract";
+import type { ContractRouterClient } from "@orpc/contract";
+import {
+  type Failure,
+  type Intent,
+  type JobContent,
+  jsonTextSchema,
+  type Run,
+  type runnerHttpContract,
+} from "contract";
 import {
   Duration,
   Effect,
@@ -37,7 +45,6 @@ import ensureError from "ensure-error";
 import { compileSchema } from "json-schema-library";
 import * as z from "zod/mini";
 
-import type { HubClient } from "./input-files.ts";
 import {
   appendUnderRequest,
   closingRequest,
@@ -69,14 +76,17 @@ export interface AgentModel {
   thinkingLevel: ModelThinkingLevel;
 }
 
+/** The Runner's HTTP calls to the hub; each client's link sends the key its calls need. */
+export type HubHttpClient = ContractRouterClient<typeof runnerHttpContract>;
+
 /** How the Runner runs every job's agent: where jobs keep their files, in which sandbox, and on which model. */
 export interface AgentSettings {
   /** The directory holding one directory per job: its journal, its Workspace and its temp directory. */
   jobsDir: string;
   /** The Runner's file system, where it looks for jobs' journals. */
   fileSystem: FileSystem.FileSystem;
-  /** The hub's API, called with the Runner's own key, which jobs' Input files are downloaded from. */
-  hub: HubClient;
+  /** The Runner's HTTP calls, made with its own key, which jobs' Input files are downloaded with. */
+  hubHttp: HubHttpClient;
   environments: JobEnvironments;
   models: Models;
   model: AgentModel;
