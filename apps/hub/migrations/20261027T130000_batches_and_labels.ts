@@ -182,7 +182,11 @@ export async function down(db: Kysely<unknown>): Promise<void> {
   await schema.dropIndex("job_labels_idx").execute();
   await schema.dropIndex("job_customId_idx").execute();
   await schema.alterTable("job").dropConstraint("job_batchId_customId_key").execute();
-  await schema.alterTable("job").addColumn("resultContract", "jsonb").execute();
+  await schema
+    .alterTable("job")
+    .addColumn("resultContract", "jsonb")
+    .alterColumn("customId", (col) => col.dropNotNull())
+    .execute();
   // A job takes its Batch's Result contract, and keeps its custom ID as its idempotency key where
   // that is not its own ID and no other job of the Organization has it.
   await sql`
@@ -202,7 +206,6 @@ export async function down(db: Kysely<unknown>): Promise<void> {
   await schema
     .alterTable("job")
     .alterColumn("resultContract", (col) => col.setNotNull())
-    .alterColumn("customId", (col) => col.dropNotNull())
     .dropColumn("batchId")
     .dropColumn("inCanary")
     .dropColumn("labels")

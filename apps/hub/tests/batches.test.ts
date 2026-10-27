@@ -210,10 +210,7 @@ test("a cancel is final: the Batch takes no new jobs and resumes none, even with
   expect(cancelled).toMatchObject({ status: "cancelled", jobCounts: { cancelled: 1 } });
   expect(cancelled).not.toHaveProperty("pausedBy");
   expect(cancelled).not.toHaveProperty("pendingControl");
-  // An add that creates nothing returns the job the Batch has; one that would create a job is
-  // refused.
-  const again = await client.batches.addJobs({ id: batch.id, jobs: [jobNamed("a")] });
-  expect(again.jobs.map(({ created }) => created)).toEqual([false]);
+  // Also an add of the job it has.
   await expect(
     client.batches.addJobs({ id: batch.id, jobs: [jobNamed("a"), jobNamed("b")] }),
   ).rejects.toMatchObject({ code: "CONFLICT" });
@@ -293,6 +290,44 @@ test("a failure in the Canary pauses the Batch, and resuming it runs a new Canar
   const late = await client.batches.addJobs({ id: batch.id, jobs: [jobNamed("4")] });
   expect(late.jobs[0]?.job.blockedBy).toBe("batchCanary");
 
+  await client.batches.cancel({ id: batch.id });
+  await untilBatchStatus(client, batch.id, "cancelled");
+});
+
+test("a job sent before a new Canary began, ending during it, does not judge the Batch in the Canary's place", async () => {
+  const client = await system.clientWithNewJobsKey();
+  const batch = await client.batches.create({
+    agent: AGENT,
+    breaker: { canary: 2, maxFailurePercent: 10 },
+  });
+  const { promise: failing, resolve: fail } = Promise.withResolvers<void>();
+  // One of the first Canary's jobs fails at once; the other, later.
+  system.model.setResponses([
+    reply("I cannot."),
+    async () => {
+      await failing;
+      return reply("I cannot either.");
+    },
+  ]);
+  const { jobs } = await client.batches.addJobs({
+    id: batch.id,
+    jobs: ["1", "2", "3", "4"].map((customId) => jobNamed(customId)),
+  });
+  const [, , third, fourth] = jobs.map(({ job }) => job.id);
+  if (!third || !fourth) throw new Error("The add answered without the jobs");
+  await untilBatchStatus(client, batch.id, "paused");
+
+  system.model.setResponses([untilAborted, untilAborted]);
+  await client.batches.resume({ id: batch.id });
+  await untilStatus(client, third, "running");
+  await untilStatus(client, fourth, "running");
+  fail();
+  await expect
+    .poll(async () => (await client.batches.get({ id: batch.id })).jobCounts.failed, {
+      timeout: 15_000,
+    })
+    .toBe(2);
+  expect(await client.batches.get({ id: batch.id })).toMatchObject({ status: "active" });
   await client.batches.cancel({ id: batch.id });
   await untilBatchStatus(client, batch.id, "cancelled");
 });

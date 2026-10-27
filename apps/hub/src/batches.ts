@@ -323,9 +323,8 @@ function jobProblems(
  * Adds `jobs` to the Batch `batchId`, all or none, and returns the Batch with each job in the order
  * given and whether this add created it, and whether any was created. A job whose custom ID the
  * Batch already has with the same content is the job already added. Fails with a 404 error for no
- * such Batch; with the problems of invalid jobs; with a 409 error for a cancelled Batch, when the
- * add would create a job, since runnable jobs would undo the cancel unseen; and with a 422 error for
- * each custom ID the Batch has for a job with other content. New jobs take the Batch's labels
+ * such Batch; with the problems of invalid jobs; then with a 409 error for a cancelled Batch; then
+ * with a 422 error for each custom ID the Batch has for a job with other content. New jobs take the Batch's labels
  * beneath their own and its agent's limits, and the Canary's places left, in order.
  */
 export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submitter: Submitter) {
@@ -376,11 +375,17 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
           .where("id", "=", batchId)
           .forUpdate()
           .executeTakeFirstOrThrow();
+        // A cancelled Batch takes no jobs: a runnable one would undo the cancel unseen.
+        if (locked.cancelledAt !== null) return { kind: "cancelled" as const };
+        // The jobs the Batch already has under these custom IDs, locked in the order of their IDs
+        // against their deletion, so the answer can read them back.
         const existing = await trx
           .selectFrom("job")
           .select(["id", "customId", "contentHash"])
           .where("batchId", "=", batchId)
           .where("customId", "=", (eb) => eb.fn.any(eb.val(jobs.map((job) => job.customId))))
+          .orderBy("id")
+          .forKeyShare()
           .execute();
         const byCustomId = new Map(existing.map((row) => [row.customId, row]));
         const reused = jobs.flatMap((job, index) => {
@@ -397,7 +402,6 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
         const fresh = jobs.flatMap((job, index) =>
           byCustomId.has(job.customId) ? [] : [{ job, index }],
         );
-        if (fresh.length > 0 && locked.cancelledAt !== null) return { kind: "cancelled" as const };
         if (reused.length > 0) return { kind: "reused" as const, reused };
         const now = new Date();
         const rows = fresh.map(({ job, index }, order): NewJob => ({
@@ -493,27 +497,49 @@ type BatchDecision =
  * Returns how many places are left.
  */
 async function startCanary(trx: Transaction<Database>, batchId: BatchId, canary: number) {
+  const candidates = await trx
+    .selectFrom("job")
+    .select("id")
+    .where("batchId", "=", batchId)
+    .where("status", "=", "queued")
+    .where("placedAt", "is", null)
+    .orderBy("id")
+    .limit(canary)
+    .execute();
+  const ids = candidates.map(({ id }) => id);
+  // The jobs leaving and joining, locked together in the order of their IDs, as jobs are locked
+  // among themselves (ADR 0033). A candidate sent to a Runner meanwhile no longer matches once its
+  // lock is granted, and does not join.
+  const locked = await trx
+    .selectFrom("job")
+    .select((eb) => {
+      const joins = eb.and([
+        eb("id", "=", eb.fn.any(eb.val(ids))),
+        eb("status", "=", "queued"),
+        eb("placedAt", "is", null),
+      ]);
+      return ["id", joins.as("joins")];
+    })
+    .where("batchId", "=", batchId)
+    .where((eb) =>
+      eb.or([
+        eb("inCanary", "=", true),
+        eb.and([
+          eb("id", "=", eb.fn.any(eb.val(ids))),
+          eb("status", "=", "queued"),
+          eb("placedAt", "is", null),
+        ]),
+      ]),
+    )
+    .orderBy("id")
+    .forUpdate()
+    .execute();
+  if (locked.length === 0) return canary;
+  const joined = locked.flatMap(({ id, joins }) => (joins ? [id] : []));
   await trx
     .updateTable("job")
-    .set({ inCanary: false })
-    .where("batchId", "=", batchId)
-    .where("inCanary", "=", true)
-    .execute();
-  if (canary === 0) return 0;
-  const joined = await trx
-    .updateTable("job")
-    .set({ inCanary: true })
-    .where("id", "in", (eb) =>
-      eb
-        .selectFrom("job")
-        .select("id")
-        .where("batchId", "=", batchId)
-        .where("status", "=", "queued")
-        .where("placedAt", "is", null)
-        .orderBy("id")
-        .limit(canary),
-    )
-    .returning("id")
+    .set((eb) => ({ inCanary: eb("id", "=", eb.fn.any(eb.val(joined))).$castTo<boolean>() }))
+    .where("id", "=", (eb) => eb.fn.any(eb.val(locked.map(({ id }) => id))))
     .execute();
   return canary - joined.length;
 }
@@ -742,10 +768,10 @@ export async function lockBreakerBatches(trx: Transaction<Database>, jobIds: rea
  * `runnerRemoved` failures say nothing about the content either. A job counts once, by its latest
  * end: a resume withdraws a failure counted since the Canary began (`controlJob`).
  *
- * A Batch trips when one of its Canary's jobs failed, or when more than `maxFailurePercent` of the
- * jobs counted since the Canary began failed, those of the Canary included. A Batch a caller
- * paused keeps counting without pausing, and records the trip for the caller's resume, which then
- * starts a new Canary as the breaker's would. `batches` are the Batches with a breaker that
+ * A Batch trips when one of its Canary's jobs failed, or, once the Canary is over, when more than
+ * `maxFailurePercent` of the jobs counted since it began failed, those of the Canary included. A
+ * Batch a caller paused keeps counting without pausing, and records the trip for the caller's
+ * resume, which then starts a new Canary as the breaker's would. `batches` are the Batches with a breaker that
  * `lockBreakerBatches` locked.
  */
 export async function recordBreakerEnds(
@@ -785,15 +811,34 @@ export async function recordBreakerEnds(
       // In parentheses, as Kysely writes a binary operation without them.
       const ends = eb.parens(eb.ref("b.countedEnds"), "+", eb.ref("c.ends"));
       const failures = eb.parens(eb.ref("b.countedFailures"), "+", eb.ref("c.failures"));
+      // The Canary is over once its places are taken and its jobs have ended. Until then the
+      // percentage waits, so that a job sent before the Canary began, still ending, does not judge
+      // the Batch in the Canary's place; its end is counted, and judged with the Canary's.
+      const canaryOver = eb.and([
+        eb("b.canaryPlacesLeft", "=", 0),
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom("job as canary")
+              .select("canary.id")
+              .whereRef("canary.batchId", "=", "b.id")
+              .where("canary.inCanary", "=", true)
+              .where("canary.status", "in", UNFINISHED),
+          ),
+        ),
+      ]);
       const trips = eb.and([
         eb("b.cancelledAt", "is", null),
         eb.or([
           eb("c.canaryFailures", ">", eb.lit(0)),
-          eb(
-            eb(failures, "*", eb.lit(100)),
-            ">",
-            eb(eb.ref("b.maxFailurePercent").$notNull(), "*", ends),
-          ),
+          eb.and([
+            canaryOver,
+            eb(
+              eb(failures, "*", eb.lit(100)),
+              ">",
+              eb(eb.ref("b.maxFailurePercent").$notNull(), "*", ends),
+            ),
+          ]),
         ]),
       ]);
       const pauses = eb.and([trips, eb("b.pausedBy", "is", null)]);
