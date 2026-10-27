@@ -834,8 +834,8 @@ export async function lockBreakerBatches(trx: Transaction<Database>, jobIds: rea
  * A Batch trips when one of its Canary's jobs failed, or, once the Canary is over, when more than
  * `maxFailurePercent` of the jobs counted since it began failed, those of the Canary included. A
  * Batch a caller paused keeps counting without pausing, and records the trip for the caller's
- * resume, which then starts a new Canary as the breaker's would. `batches` are the Batches with a breaker that
- * `lockBreakerBatches` locked.
+ * resume, which then starts a new Canary as the breaker's would. `batches` are the Batches with a
+ * breaker that `lockBreakerBatches` locked.
  */
 export async function countEndsAndPauseTrippedBatches(
   trx: Transaction<Database>,

@@ -287,7 +287,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       ["id"],
       (constraint) => constraint.onDelete("cascade"),
     )
-    // Adding a job inserts it under this constraint, so a concurrent duplicate waits for the first.
+    // Adds to a Batch take its lock, so each finds the jobs those before it made; the constraint
+    // backs that up.
     .addUniqueConstraint("job_batchId_customId_key", ["batchId", "customId"])
     // A placement is sent to a Runner, so a job sent has one; a resumed job has its Runner, the one
     // holding its journal, before it is sent.
