@@ -156,21 +156,24 @@ export function journalExists(
 }
 
 /**
- * What the agent is told about the job, beside its input: the Runner's own text, then the
- * instructions of the job's Batch's agent, if any, which every job of the Batch shares, so a model
- * provider can cache them with the rest of the prompt's start. The sandbox's `/tmp` is the job's own
- * but held in memory, which counts against the job's memory limit.
+ * What the agent is told about the job, beside its input: the Runner's own text, the same for every
+ * job, then the instructions of the job's Batch's agent, if any, which every job of the Batch shares.
+ * Nothing that names the job, such as its Workspace's path, comes before its input, so every job of a
+ * Batch has the same system prompt, which a model provider can cache with the tools before it. The
+ * sandbox's `/tmp` is the job's own but held in memory, which counts against the job's memory limit.
  */
-function instructions(paths: { workspace: string }, job: JobContent) {
-  const own = runnerInstructions(paths);
-  return job.instructions === null ? own : `${own}\n\n${job.instructions}`;
+function instructions(job: JobContent) {
+  return job.instructions === null
+    ? RUNNER_INSTRUCTIONS
+    : `${RUNNER_INSTRUCTIONS}\n\n${job.instructions}`;
 }
 
-/** What the Runner tells every job's agent about running unattended. */
-function runnerInstructions(paths: { workspace: string }) {
-  return `You are running a job unattended; nobody will answer questions. Your Workspace, where your files are and your commands run, is ${paths.workspace}; the job's Input files, if any, are in ${path.join(paths.workspace, "inputs")}. For temporary files, use the directory in $TMPDIR, not /tmp.
+/**
+ * What the Runner tells every job's agent about running unattended. The Workspace is the current
+ * directory, where commands run and relative paths resolve, rather than its path, which names the job.
+ */
+const RUNNER_INSTRUCTIONS = `You are running a job unattended; nobody will answer questions. Your Workspace, where your files are and your commands run, is the current directory; the job's Input files, if any, are in its \`inputs\` folder. For temporary files, use the directory in $TMPDIR, not /tmp.
 When the work is complete, call submit_result once with the complete result: as \`value\`, or, for a large result or one a script produced, as the \`path\` of a JSON file in the Workspace. The result is checked against the job's Result contract; if it is rejected, correct it and submit again. A reply in prose does not complete the job.`;
-}
 
 function submitResultTool(schema: Record<string, unknown>) {
   const contract = compileSchema(schema);
@@ -352,7 +355,7 @@ export function openJob(
         agent: {
           model: { provider: options.model.provider, modelId: options.model.modelId },
           thinkingLevel: options.model.thinkingLevel,
-          instructions: instructions(paths, job),
+          instructions: instructions(job),
           cwd: paths.workspace,
         },
         // The commit that creates the job's conversation, so the start is recorded exactly once.
