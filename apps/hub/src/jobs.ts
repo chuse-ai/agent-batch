@@ -14,7 +14,7 @@ import {
   type Labels,
   jobEventSchema,
 } from "contract";
-import { Array, Effect, Order, Record, String } from "effect";
+import { Array, Effect, Order, Record, String, Struct } from "effect";
 import { compileSchema, isJsonError } from "json-schema-library";
 import {
   type AliasableExpression,
@@ -523,6 +523,7 @@ export function controlJob(jobId: JobId, control: Control, given: GivenLimits = 
           .select((eb) => [
             ...JOB_COLUMNS.map((column) => `job.${column}` as const),
             ...PROGRESS_COLUMNS,
+            blockedByOf("job").as("blockedBy"),
             "job.runnerId",
             "job.placedAt",
             // The Runner's row is locked, so a removal of the Runner waits for this control and then
@@ -582,20 +583,30 @@ export function controlJob(jobId: JobId, control: Control, given: GivenLimits = 
           .executeTakeFirst();
         if (!job) return undefined;
         const decision = decide(control, job, now, given);
-        if (decision.kind === "changed") {
-          const changed = await trx
-            .updateTable("job")
-            .set(decision.set)
-            .where("id", "=", jobId)
-            .returning("status")
-            .executeTakeFirstOrThrow();
-          if (FINAL_STATUSES.includes(changed.status)) await recordUsageOfEnd(trx, jobId);
-          if (control === "resume" && job.status === "failed") {
-            await withdrawCountedFailure(trx, job.batchId, jobId);
-          }
+        if (decision.kind !== "changed") {
+          const shown = Struct.pick(job, [...JOB_COLUMNS, ...PROGRESS_COLUMNS, "blockedBy"]);
+          return { decision, job: toApiJob(shown) };
         }
-        const [read] = await readJobs(trx, [jobId]);
-        return { decision, job: read };
+        // The job as the control left it; a control changes nothing of its progress.
+        const changed = await trx
+          .updateTable("job")
+          .set(decision.set)
+          .where("id", "=", jobId)
+          .returning([...JOB_COLUMNS, blockedByOf("job").as("blockedBy")])
+          .executeTakeFirstOrThrow();
+        if (FINAL_STATUSES.includes(changed.status)) await recordUsageOfEnd(trx, jobId);
+        if (control === "resume" && job.status === "failed") {
+          await withdrawCountedFailure(trx, job.batchId, jobId);
+        }
+        return {
+          decision,
+          job: toApiJob({
+            ...changed,
+            totalTokens: job.totalTokens,
+            costUsd: job.costUsd,
+            activity: job.activity,
+          }),
+        };
       }),
     );
     if (!controlled) {
@@ -618,8 +629,6 @@ export function controlJob(jobId: JobId, control: Control, given: GivenLimits = 
       return yield* Effect.fail(new ControlRefused({ message: decision.why }));
     }
     const hint = decision.kind === "changed" ? decision.hint : undefined;
-    // The job's row is locked until the transaction ends, so it is there to read.
-    if (!job) return yield* Effect.die(new Error(`The job ${jobId} vanished under its lock`));
     return { job, hint } satisfies { job: Job; hint?: RunnerId | "live" };
   });
 }
