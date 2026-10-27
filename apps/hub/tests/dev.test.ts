@@ -35,10 +35,6 @@ const env = {
   // The Runner starts only with a key for its provider; no job here reaches the model.
   OPENROUTER_API_KEY: "not-a-key",
 };
-afterAll(async () => {
-  await run(CLI, ["dev", "reset"], { env }).catch(() => {});
-  await rm(stateHome, { recursive: true, force: true });
-});
 
 /** Starts `agent-batch dev` and resolves once it says the hub and a Runner are ready. */
 async function startDev(port: number) {
@@ -46,7 +42,6 @@ async function startDev(port: number) {
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  dev.on("error", () => {});
   // Stopped before `afterAll` resets, also when an assertion fails while it runs.
   onTestFinished(async () => {
     if (dev.exitCode === null) await stopDev(dev);
@@ -58,6 +53,7 @@ async function startDev(port: number) {
       output += chunk.toString();
       if (output.includes("The hub is at")) resolve();
     });
+    dev.once("error", reject);
     dev.once("exit", (code) =>
       reject(new Error(`agent-batch dev exited with ${code}:\n${output}`)),
     );
@@ -95,6 +91,11 @@ async function getJob(id: string) {
 
 // The data folder follows `XDG_DATA_HOME` on Linux only; elsewhere the test would use the user's own.
 describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")("agent-batch dev", () => {
+  afterAll(async () => {
+    await run(CLI, ["dev", "reset"], { env }).catch(() => {});
+    await rm(stateHome, { recursive: true, force: true });
+  });
+
   test("runs a hub and a Runner that job commands reach, and Ctrl-C removes the containers but keeps the data and keys", async () => {
     await Promise.all(
       (["hub", "runner"] as const).map(async (target) => {
