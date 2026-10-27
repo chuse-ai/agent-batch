@@ -4,7 +4,6 @@ import { Brand } from "effect";
 
 import type { ApikeyId as ApikeyIdType } from "./generated/agent_batch/Apikey.ts";
 import type { BatchId as BatchIdType } from "./generated/agent_batch/Batch.ts";
-import type { BatchInputFileName as BatchInputFileNameType } from "./generated/agent_batch/BatchInputFile.ts";
 import type { BlobSha256 as BlobSha256Type } from "./generated/agent_batch/Blob.ts";
 import type { InputFileName as InputFileNameType } from "./generated/agent_batch/InputFile.ts";
 import type { JobId as JobIdType } from "./generated/agent_batch/Job.ts";
@@ -43,8 +42,6 @@ export type MemberId = MemberIdType;
 export const MemberId = Brand.nominal<MemberId>();
 export type InputFileName = InputFileNameType;
 export const InputFileName = Brand.nominal<InputFileName>();
-export type BatchInputFileName = BatchInputFileNameType;
-export const BatchInputFileName = Brand.nominal<BatchInputFileName>();
 /** An event's ID in its job's journal, which a stored row of events is keyed by its last of. */
 export type EventId = JobEventChunkLastId;
 export const EventId = Brand.nominal<EventId>();

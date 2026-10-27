@@ -772,19 +772,12 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                           .selectFrom((files) =>
                             files
                               .selectFrom("batchInputFile")
-                              // A name, whichever table holds it.
-                              .select((name) => [
-                                name.ref("batchInputFile.name").$castTo<string>().as("name"),
-                                "batchInputFile.sha256",
-                              ])
+                              .select(["batchInputFile.name", "batchInputFile.sha256"])
                               .whereRef("batchInputFile.batchId", "=", "wanted.batchId")
                               .unionAll(
                                 files
                                   .selectFrom("inputFile")
-                                  .select((name) => [
-                                    name.ref("inputFile.name").$castTo<string>().as("name"),
-                                    "inputFile.sha256",
-                                  ])
+                                  .select(["inputFile.name", "inputFile.sha256"])
                                   .whereRef("inputFile.jobId", "=", "wanted.id"),
                               )
                               .as("file"),

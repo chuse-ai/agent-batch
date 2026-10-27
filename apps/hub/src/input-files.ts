@@ -9,7 +9,6 @@ import type { Kysely } from "kysely";
 import { Db } from "./db/database.ts";
 import {
   type BatchId,
-  BatchInputFileName,
   BlobSha256,
   type Database,
   InputFileName,
@@ -129,11 +128,7 @@ export async function storeBatchInputFiles(
   prepared: PreparedInputFiles,
 ): Promise<void> {
   await storeBlobs(trx, [prepared]);
-  const rows = prepared.files.map(({ name, blob }) => ({
-    batchId,
-    name: BatchInputFileName(name),
-    sha256: blob.sha256,
-  }));
+  const rows = prepared.files.map(({ name, blob }) => ({ batchId, name, sha256: blob.sha256 }));
   if (rows.length > 0) await trx.insertInto("batchInputFile").values(rows).execute();
 }
 
@@ -275,7 +270,7 @@ export function readInputFileChunk(
                   .selectFrom("batchInputFile")
                   .select("batchInputFile.sha256")
                   .whereRef("batchInputFile.batchId", "=", "job.batchId")
-                  .where("batchInputFile.name", "=", BatchInputFileName(name)),
+                  .where("batchInputFile.name", "=", name),
               )
               .as("file"),
           (join) => join.onTrue(),
