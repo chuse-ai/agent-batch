@@ -1,12 +1,12 @@
 # Release scope and limitations
 
-The current implementation runs unattended jobs on provisioned Runners in Batches, a job submitted alone being a Batch of one. A Batch's agent supplies instructions, a JSON Schema result contract, run-time and model-spend limits and shared input files; each job supplies its input, its own inline text input files and labels. The hub records events, activity, results and usage; callers can pause, resume, cancel and delete jobs, and list jobs by status, label, Batch and custom ID. A Batch runs its first jobs, its Canary, before the rest, and pauses itself when its Canary or too many of its jobs fail; callers can pause, resume and cancel it as one. The CLI calls the hub's HTTP API.
+The current implementation runs unattended jobs on provisioned Runners in Batches, a job submitted alone being a Batch of one. A Batch's agent supplies instructions, a JSON Schema result contract, run-time and model-spend limits and shared input files; each job supplies its input, its own inline text input files and labels. The hub records events, activity, results and usage; callers can pause, resume, cancel and delete jobs, and list jobs by status, label, Batch and custom ID. A Batch runs its first jobs, its Canary, before the rest, and pauses itself when its Canary or too many of its jobs fail; callers can pause, resume and cancel it as one. The CLI calls the hub's HTTP API, and `agent-batch dev` runs a hub, a Runner and Postgres on one machine with Docker.
 
 The hub runs on Cloudflare Workers with Postgres through Hyperdrive, or on Node/Docker with Postgres directly. Each Runner is a separate Node process. The hub assigns jobs to connected Runners that report available capacity. A job's journal and Workspace remain on its Runner's host.
 
 ## Planned capabilities
 
-Automatic cloud overflow, moving jobs between hosts, per-job model selection and governance, secret injection and network egress, richer file upload/download flows, validation scripts, incremental result submission, a dashboard, SSO, and CLI login/local orchestration are planned.
+Automatic cloud overflow, moving jobs between hosts, per-job model selection and governance, secret injection and network egress, richer file upload/download flows, validation scripts, incremental result submission, a dashboard, SSO, and CLI login are planned.
 
 A Batch's breaker counts every failure a Runner reports alike, including jobs that fail because their host ran out of memory, so a host that keeps running out of memory can pause the Batches whose jobs it runs. Only jobs failed by their Runner's removal are not counted.
 

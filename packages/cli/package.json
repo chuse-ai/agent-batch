@@ -46,20 +46,26 @@
     "@orpc/openapi": "catalog:",
     "@standard-schema/utils": "catalog:",
     "@types/node": "catalog:",
+    "@types/proper-lockfile": "catalog:",
+    "@types/write-file-atomic": "catalog:",
     "contract": "workspace:*",
     "effect": "catalog:",
     "ensure-error": "catalog:",
+    "env-paths": "catalog:",
     "is-network-error": "catalog:",
+    "proper-lockfile": "catalog:",
     "rollup-plugin-license": "catalog:",
     "trpc-cli": "catalog:",
     "typescript": "^7.0.2",
     "vite-plus": "catalog:",
+    "write-file-atomic": "catalog:",
     "zod": "catalog:"
   },
   "engines": {
     "node": ">=22.19.0"
   },
   "inlinedDependencies": {
+    "@effect/platform-node-shared": "4.0.5",
     "@orpc/client": "2.0.0-beta.44",
     "@orpc/contract": "2.0.0-beta.44",
     "@orpc/json-schema": "2.0.0-beta.44",
@@ -75,11 +81,21 @@
     "content-type": "3.1.1",
     "effect": "4.0.5",
     "ensure-error": "5.0.0",
+    "env-paths": "4.0.0",
     "filename-reserved-regex": "4.1.0",
+    "graceful-fs": "4.2.11",
     "is-network-error": "1.3.2",
+    "is-safe-filename": "0.1.1",
     "json-rpc-2.0": "1.8.1",
+    "proper-lockfile": "4.1.2",
+    "retry": "0.12.0",
+    "signal-exit": [
+      "3.0.7",
+      "4.1.0"
+    ],
     "trpc-cli": "0.17.1",
     "valid-filename": "5.0.0",
+    "write-file-atomic": "7.0.1",
     "zod": "4.6.7"
   }
 }

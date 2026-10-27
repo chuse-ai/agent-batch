@@ -9,6 +9,8 @@ Run one-off agent jobs unattended on your own machines, each with a validated re
 - `AGENT_BATCH_URL`: the hub's URL.
 - `AGENT_BATCH_API_KEY`: an API key holding the permissions the calls need, such as `job: ["create", "read"]`.
 
+Without either, the commands call the hub `agent-batch dev` runs with the key it made, and say so on stderr.
+
 ```sh
 agent-batch jobs submit --input job.json
 agent-batch jobs wait --id <job ID>
@@ -22,6 +24,15 @@ Each command takes its input as one flag per field, or whole as JSON: from a fil
 - `jobs wait` reads the job until it ends, waiting longer between reads, up to half a minute; a read that got no answer or a server error is retried as a submission is, and an error that remains ends the wait. It prints the job and exits with 1 unless it succeeded. A paused job keeps it waiting, as its work is still owed, until the job is resumed and ends or is cancelled. Stopping it leaves the job running.
 
 Calls only a signed-in member can make, such as creating API keys, are not commands.
+
+## A hub and a Runner on this machine
+
+`agent-batch dev` runs a hub, a Runner and the hub's Postgres with Docker, from the images released with this version of the command, until Ctrl-C, which removes the containers. Their data, the keys the first start made and any sign-in the Runner holds stay for the next start; `agent-batch dev reset` deletes them, and `agent-batch dev stop` removes the containers of a run that was killed. The Runner runs every job on the model `--model-provider` and `--model-id` name, as Pi names them (`openrouter` and `openrouter/free` at first, then the last ones given), with the key in the provider's variable, `<PROVIDER>_API_KEY` or the one `--model-key-env` names, or on the sign-in `agent-batch dev login` saves. `--port` sets where the hub listens on this machine, 8787 at first. `agent-batch dev env` prints the hub's address and key as shell exports. `AGENT_BATCH_VERSION` runs the images of another version.
+
+```sh
+OPENROUTER_API_KEY=<your key> agent-batch dev
+agent-batch dev --model-provider anthropic --model-id claude-sonnet-5-5
+```
 
 ## Development
 

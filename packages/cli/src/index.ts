@@ -22,11 +22,13 @@ import {
   jobSubmissionSchema,
   problemOf,
 } from "contract";
-import { Config, Effect, Redacted, Schedule, Schema, SchemaIssue } from "effect";
+import { Config, Effect, Option, Redacted, Schedule, Schema, SchemaIssue } from "effect";
 import ensureError from "ensure-error";
 import isNetworkError from "is-network-error";
 import { createCli, os } from "trpc-cli";
 import * as z from "zod/mini";
+
+import { devCommands, savedHub } from "./dev.ts";
 
 // The `agent-batch` command: one command per call of the hub's public API that an API key can
 // make, derived from the contract, so the commands cannot drift from the API, plus `jobs submit` and
@@ -50,10 +52,32 @@ const isHeaderValue = Schema.makeFilter<string>((value) => {
   }
 });
 
-/** Where the hub is and the API key to call it with, read when a command runs, not for `--help`. */
-const settings = Config.all({
+/** Where the hub is and the API key to call it with, from the environment. */
+const settingsFromEnv = Config.all({
   url: Config.URL("AGENT_BATCH_URL"),
   apiKey: Config.schema(Schema.Redacted(Schema.String.check(isHeaderValue)), "AGENT_BATCH_API_KEY"),
+});
+
+/**
+ * Where the hub is and the API key to call it with, read when a command runs, not for `--help`:
+ * from the environment, or, when neither is set there, the hub `agent-batch dev` runs and the key it
+ * made, together, so a key never goes to a hub it was not made for.
+ */
+const settings = Effect.gen(function* () {
+  const url = yield* Config.option(Config.String("AGENT_BATCH_URL"));
+  const apiKey = yield* Config.option(Config.String("AGENT_BATCH_API_KEY"));
+  if (Option.isNone(url) && Option.isNone(apiKey)) {
+    const saved = yield* savedHub();
+    if (saved !== undefined) {
+      yield* Effect.sync(() =>
+        process.stderr.write(
+          `Calling the hub agent-batch dev runs at ${saved.url.origin}, as AGENT_BATCH_URL and AGENT_BATCH_API_KEY are unset\n`,
+        ),
+      );
+      return { url: saved.url, apiKey: Redacted.make(saved.apiKey) };
+    }
+  }
+  return yield* settingsFromEnv;
 });
 
 /** The link to the hub, which calls any of its procedures by path. */
@@ -386,6 +410,7 @@ export function agentBatchCli(version: string) {
       ...commands,
       batches: { ...commands["batches"], create: createBatchCommand() },
       jobs: { submit: submitCommand(), ...commands["jobs"], wait: waitCommand() },
+      dev: devCommands(version),
     }),
   });
 }

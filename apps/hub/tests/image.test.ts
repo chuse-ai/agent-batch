@@ -1,10 +1,7 @@
 /**
  * @module-tag container
  */
-import { execFile } from "node:child_process";
-import path from "node:path";
 import { text } from "node:stream/consumers";
-import { promisify } from "node:util";
 
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
@@ -20,6 +17,7 @@ import { GenericContainer, Network, Wait } from "testcontainers";
 import { describe, expect, inject, test } from "vite-plus/test";
 import WebSocket from "ws";
 
+import { buildRepositoryImage } from "./docker-images.ts";
 import { OWNER } from "./harness.ts";
 
 // The hub's and a Runner's Docker images as an operator runs them: built from the repository, the hub
@@ -28,20 +26,10 @@ import { OWNER } from "./harness.ts";
 // are tagged and the default run skips them (ADR 0003).
 
 const HUB_ORIGIN = "http://hub.test";
-const run = promisify(execFile);
 
-// Build through Buildx as the release workflow does, including its context handling and Dockerfile
-// frontend. Testcontainers starts and manages the resulting images.
-// TODO: Recheck Testcontainers builds when the WSL2 build-context issue is resolved upstream:
-// https://github.com/testcontainers/testcontainers-node/issues/1361
+/** The image of `target`, built from the repository, for Testcontainers to start. */
 async function buildImage(target: "hub" | "runner") {
-  const name = `agent-batch-${target}:test`;
-  await run("docker", ["buildx", "build", "--load", "--target", target, "--tag", name, "."], {
-    cwd: path.join(import.meta.dirname, "../../.."),
-    timeout: 540_000,
-    maxBuffer: 10 * 1024 * 1024,
-  });
-  return new GenericContainer(name);
+  return new GenericContainer(await buildRepositoryImage(target));
 }
 
 /**
