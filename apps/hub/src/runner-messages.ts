@@ -27,19 +27,13 @@ import {
   type Load,
 } from "contract";
 import { Array, type Context, Effect, Result } from "effect";
-import { type Expression, type ExpressionBuilder, sql } from "kysely";
+import { type Expression, sql } from "kysely";
 import { jsonArrayFrom, jsonBuildObject } from "kysely/helpers/postgres";
 import * as z from "zod/mini";
 
 import { lockBreakerBatches, recordBreakerEnds } from "./batches.ts";
-import { Db, DB_SCHEMA } from "./db/database.ts";
-import {
-  type Database,
-  JobId,
-  type JobFailureReason,
-  type JobStatus,
-  type RunnerId,
-} from "./db/types.ts";
+import { Db, DB_SCHEMA, jsonRows } from "./db/database.ts";
+import { JobId, type JobFailureReason, type JobStatus, type RunnerId } from "./db/types.ts";
 import {
   FINAL_STATUSES,
   insertUsageRecords,
@@ -206,18 +200,6 @@ function lifecycleOf(
       record.kind === JOB_STARTED || record.kind === JOB_RECOVERED || record.kind === JOB_RESUMED,
   );
   return { ...base, status: opened ? "running" : null };
-}
-
-/**
- * A set of rows from the caller, as one JSON parameter the statement expands: each row's scalar
- * fields are read with `->>` and cast to their types where the clause selects them, and its JSON
- * values are read with `->`. `->` gives SQL null only for a key the row leaves out, so a JSON value
- * that is absent is left out rather than null.
- */
-function jsonRows<Row extends object>(eb: ExpressionBuilder<Database, never>, rows: Row[]) {
-  return eb
-    .fn<{ value: Row }>("jsonb_array_elements", [eb.cast(eb.val(JSON.stringify(rows)), "jsonb")])
-    .as("row");
 }
 
 /**

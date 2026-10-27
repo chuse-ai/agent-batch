@@ -6,7 +6,7 @@ import type { JobSubmission } from "contract";
 import { Effect, Record } from "effect";
 import type { Kysely } from "kysely";
 
-import { Db } from "./db/database.ts";
+import { Db, jsonRows } from "./db/database.ts";
 import {
   type BatchId,
   BlobSha256,
@@ -113,9 +113,24 @@ export async function storeInputFiles(
     jobs.map(({ prepared }) => prepared),
   );
   const rows = jobs.flatMap(({ jobId, prepared }) =>
-    prepared.files.map(({ name, blob }) => ({ jobId, name, sha256: blob.sha256 })),
+    prepared.files.map(({ name, blob }) => ({ jobId, name, sha256: blob.sha256.toString("hex") })),
   );
-  if (rows.length > 0) await trx.insertInto("inputFile").values(rows).execute();
+  if (rows.length === 0) return;
+  await trx
+    .insertInto("inputFile")
+    .columns(["jobId", "name", "sha256"])
+    .expression(
+      trx
+        .selectFrom((eb) => jsonRows(eb, rows))
+        .select((eb) => [
+          eb.cast<JobId>(eb.ref("row.value", "->>").key("jobId"), "uuid").as("jobId"),
+          eb.ref("row.value", "->>").key("name").as("name"),
+          eb
+            .fn<BlobSha256>("decode", [eb.ref("row.value", "->>").key("sha256"), eb.val("hex")])
+            .as("sha256"),
+        ]),
+    )
+    .execute();
 }
 
 /**
@@ -128,8 +143,26 @@ export async function storeBatchInputFiles(
   prepared: PreparedInputFiles,
 ): Promise<void> {
   await storeBlobs(trx, [prepared]);
-  const rows = prepared.files.map(({ name, blob }) => ({ batchId, name, sha256: blob.sha256 }));
-  if (rows.length > 0) await trx.insertInto("batchInputFile").values(rows).execute();
+  const rows = prepared.files.map(({ name, blob }) => ({
+    name,
+    sha256: blob.sha256.toString("hex"),
+  }));
+  if (rows.length === 0) return;
+  await trx
+    .insertInto("batchInputFile")
+    .columns(["batchId", "name", "sha256"])
+    .expression(
+      trx
+        .selectFrom((eb) => jsonRows(eb, rows))
+        .select((eb) => [
+          eb.cast<BatchId>(eb.val(batchId), "uuid").as("batchId"),
+          eb.ref("row.value", "->>").key("name").as("name"),
+          eb
+            .fn<BlobSha256>("decode", [eb.ref("row.value", "->>").key("sha256"), eb.val("hex")])
+            .as("sha256"),
+        ]),
+    )
+    .execute();
 }
 
 /**
@@ -143,21 +176,35 @@ async function storeBlobs(trx: Kysely<Database>, prepared: readonly PreparedInpu
       prepared.flatMap(({ files }) =>
         files.map(({ blob }) => [blob.sha256.toString("hex"), blob] as const),
       ),
-    ).values(),
-  ].toSorted((a, b) => Buffer.compare(a.sha256, b.sha256));
+    ),
+  ];
   if (blobs.length === 0) return;
   // One statement takes every lock on the submission's blobs, row by row in the order of their
-  // address, as a deletion takes its locks, so the two never wait for each other in turn; Postgres
-  // reads the rows of `values` in their order. A stored blob is locked by the update that
-  // `where false` keeps from happening: an update's lock on a column no key holds, which a
+  // address, as a deletion takes its locks, so the two never wait for each other in turn; it
+  // inserts the rows in the order its `select` sorts them. A stored blob is locked by the update
+  // that `where false` keeps from happening: an update's lock on a column no key holds, which a
   // deletion's `for update` waits for, without writing a new version of the row, which
   // `set ... returning (xmax = 0)` would for each reuse. So only blobs it inserted come back. A
   // blob whose deletion it waited for is gone once that commits, and is inserted afresh. The lock
   // also conflicts with itself, so submissions that share a stored blob wait for each other to
   // commit; Postgres 19's `on conflict do select for key share` would lock without that.
+  const rows = blobs.map(([hex, { bytes }]) => ({ sha256: hex, originalSizeBytes: bytes.length }));
   const inserted = await trx
     .insertInto("blob")
-    .values(blobs.map(({ sha256, bytes }) => ({ sha256, originalSizeBytes: bytes.length })))
+    .columns(["sha256", "originalSizeBytes"])
+    .expression(
+      trx
+        .selectFrom((eb) => jsonRows(eb, rows))
+        .select((eb) => [
+          eb
+            .fn<BlobSha256>("decode", [eb.ref("row.value", "->>").key("sha256"), eb.val("hex")])
+            .as("sha256"),
+          eb
+            .cast<number>(eb.ref("row.value", "->>").key("originalSizeBytes"), "bigint")
+            .as("originalSizeBytes"),
+        ])
+        .orderBy("sha256"),
+    )
     .onConflict((conflict) =>
       conflict
         .column("sha256")
@@ -167,8 +214,8 @@ async function storeBlobs(trx: Kysely<Database>, prepared: readonly PreparedInpu
     .returning("sha256")
     .execute();
   const created = new Set(inserted.map((row) => row.sha256.toString("hex")));
-  for (const blob of blobs) {
-    if (!created.has(blob.sha256.toString("hex"))) continue;
+  for (const [hex, blob] of blobs) {
+    if (!created.has(hex)) continue;
     const uploadId = UploadId(randomUUID());
     await trx
       .insertInto("upload")

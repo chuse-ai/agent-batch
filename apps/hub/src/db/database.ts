@@ -1,6 +1,6 @@
 import { type Cause, Context, Effect, Layer } from "effect";
 import ensureError from "ensure-error";
-import { Kysely, PostgresDialect } from "kysely";
+import { type ExpressionBuilder, Kysely, PostgresDialect } from "kysely";
 import { Pool, TypeOverrides, types } from "pg";
 
 import type { Database } from "./types.ts";
@@ -11,6 +11,18 @@ import type { Database } from "./types.ts";
  * each transaction.
  */
 export const DB_SCHEMA = "agent_batch";
+
+/**
+ * A set of rows from the caller, as one JSON parameter the statement expands, however many rows
+ * there are: each row's scalar fields are read with `->>` and cast to their types where the clause
+ * selects them, and its JSON values are read with `->`. `->` gives SQL null only for a key the row
+ * leaves out, so a JSON value that is absent is left out rather than null.
+ */
+export function jsonRows<Row extends object>(eb: ExpressionBuilder<Database, never>, rows: Row[]) {
+  return eb
+    .fn<{ value: Row }>("jsonb_array_elements", [eb.cast(eb.val(JSON.stringify(rows)), "jsonb")])
+    .as("row");
+}
 
 /** The hub's database. */
 export class Db extends Context.Service<
