@@ -19,11 +19,11 @@ A named, revocable credential owned by the organization that a service uses to c
 One self-contained piece of agent work: its Batch's agent working on the job's own input and Input files. It succeeds at most once, unattended, possibly over several runs; a caller may pause, resume or cancel it. Its agent works in conversations, pi's records within the job.
 
 **Job status**:
-Where a job is in its life: queued, running, paused, succeeded, failed or cancelled. Succeeded, failed and cancelled are final; a paused, failed or cancelled job that started can be resumed while its journal exists. A running job whose Runner restarts stays running: it is recovered from its journal and carries on where it left off; it is not resumed. Where a status has more than one cause, the job's failure says which. Status is the one word for where a piece of work is in its life, so a job and each of its tool calls have one.
+Where a job is in its life: queued, running, paused, succeeded, failed or cancelled. Succeeded, failed and cancelled are final; a paused, failed or cancelled job that started can be resumed while its journal exists, unless its Batch was cancelled. A running job whose Runner restarts stays running: it is recovered from its journal and carries on where it left off; it is not resumed. Where a status has more than one cause, the job's failure says which. Status is the one word for where a piece of work is in its life, so a job and each of its tool calls have one.
 _Avoid_: phase
 
 **Control**:
-What a caller asks of a job besides submitting and reading it: to pause, resume, cancel or delete it. A pause holds a job whose work is still owed, so its Batch and a caller's wait stay open; a cancel withdraws it, though a cancelled job that started can still be resumed. One its Runner must carry out waits for it, shown beside the job's status until the Runner confirms it or the job ends first.
+What a caller asks of a job besides submitting and reading it: to pause, resume, cancel or delete it. A pause holds a job whose work is still owed, so a caller's wait stays open; a cancel withdraws it, though a cancelled job that started can still be resumed unless its Batch was cancelled. One its Runner must carry out waits for it, shown beside the job's status until the Runner confirms it or the job ends first.
 
 **Journal**:
 A job's durable record on its Runner, one file per job: the agent's entries and conversation records, which are copied to the hub as the job's events, and pi's own task records, documents and submissions. The job is recovered from it after a restart, and it is deleted with the job's files.

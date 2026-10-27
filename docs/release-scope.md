@@ -8,7 +8,7 @@ The hub runs on Cloudflare Workers with Postgres through Hyperdrive, or on Node/
 
 Automatic cloud overflow, moving jobs between hosts, per-job model selection and governance, secret injection and network egress, richer file upload/download flows, validation scripts, incremental result submission, a dashboard, SSO, and CLI login/local orchestration are planned.
 
-A Batch's breaker counts every failed job alike, including jobs that fail because their host ran out of memory, so a host that keeps running out of memory can pause the Batches whose jobs it runs.
+A Batch's breaker counts every failure a Runner reports alike, including jobs that fail because their host ran out of memory, so a host that keeps running out of memory can pause the Batches whose jobs it runs. Only jobs failed by their Runner's removal are not counted.
 
 Events currently remain in Postgres. Object storage, event compaction and retention policies are planned. Deployments must account for database growth. The Docker hub runs as one process; multiple replicas do not yet coordinate Runner connections.
 
@@ -18,7 +18,7 @@ Events currently remain in Postgres. Object storage, event compaction and retent
 - Restart recovery assumes an intact journal and Workspace on the same host. Deleting a journal or restoring an older copy can repeat work and model spend. This differs from an ordinary process restart and is not yet detected reliably.
 - A job whose Runner stops communicating can continue to display `running` with stale activity and usage. That status does not prove the host is reachable. Pause and cancel requests for that host wait for it to reconnect.
 - Restoring the hub's database or failing over to a replica that lost acknowledged writes can lose placement decisions. Run IDs fence ordinary stale reports, but do not provide complete reconciliation after a database rollback. A job can be interrupted or placed again. Do not assume exactly-once external effects.
-- Deleting a job removes its content at the hub and asks its Runner to purge local files. A silent host cannot confirm that purge. Removing the Runner does not erase files on its host; operators remain responsible for that disk.
+- Deleting a job removes its content at the hub and asks its Runner to purge local files. Its Batch, with the agent's instructions, Result contract and Input files, stays: a Batch cannot yet be deleted. A silent host cannot confirm that purge. Removing the Runner does not erase files on its host; operators remain responsible for that disk.
 - Job commands have no network access in the default sandbox. Model-provider credentials stay in the Runner, outside job sandboxes. This is a single-organization deployment, not a hostile multi-tenant service.
 - Per-job memory caps require a suitable Linux user systemd manager. macOS and Docker without that manager have no individual job cap; a Docker memory limit covers the Runner and all its jobs together.
 - Linux sandbox support depends on host policy. The Runner's Docker image needs explicit security options, and some Ubuntu/AppArmor combinations are unsupported. Follow the [Runner requirements](../apps/runner/README.md#what-a-host-needs); disabling the sandbox changes the trust boundary.
