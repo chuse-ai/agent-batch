@@ -2,11 +2,10 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import type { JobSubmission } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 import { entryKinds, lifecycleOf } from "./entries.ts";
-import { type ApiClient, startSystem, untilStatus } from "./harness.ts";
+import { type ApiClient, type OneJob, startSystem, submitJob, untilStatus } from "./harness.ts";
 import { callTool, reply, untilAborted } from "./scripted-model.ts";
 
 // The controls a caller has over a job, against a real hub and Runner. The first tests run
@@ -19,22 +18,22 @@ beforeAll(() => system.start());
 afterAll(() => system.stop());
 
 const SUBMISSION = {
-  prompt: "Count to a million.",
+  input: "Count to a million.",
   inputFiles: {},
   resultContract: { schema: { type: "integer" } },
-} satisfies JobSubmission;
+} satisfies OneJob;
 
 /** Submits a job whose agent's model call runs until the Runner cuts it off, and waits until it runs. */
 async function submitRunningJob(client: ApiClient) {
   system.model.setResponses([untilAborted]);
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
   await untilStatus(client, id, "running");
   return id;
 }
 
 test("cancelling a job no Runner was sent ends it at once, and deleting it then removes it at once", async () => {
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
 
   const job = await client.jobs.cancel({ id });
 
@@ -54,7 +53,7 @@ test("cancelling a job no Runner was sent ends it at once, and deleting it then 
 
 test("pausing a job no Runner was sent holds it, and resuming it lets it start", async () => {
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
 
   expect(await client.jobs.pause({ id })).toMatchObject({ status: "paused" });
   expect(await client.jobs.resume({ id })).toMatchObject({ status: "queued" });
@@ -67,7 +66,7 @@ test("pausing a job no Runner was sent holds it, and resuming it lets it start",
 test("cancelling a running job stops its work at once and ends it cancelled, with the work it cut off in its events", async () => {
   system.model.setResponses([callTool("bash", { command: "sleep 600" })]);
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
   await expect
     .poll(async () => (await client.jobs.get({ id })).activity?.[0]?.tools, { timeout: 10_000 })
     .toMatchObject([{ name: "bash", status: "running" }]);
@@ -104,7 +103,7 @@ test("a cancel that reaches the Runner after the job's result was accepted leave
     ),
   ]);
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
   await expect
     .poll(
       async () =>
@@ -125,7 +124,7 @@ test("a cancel that reaches the Runner after the job's result was accepted leave
 test("a job that succeeded is left as it is by a cancel, and refuses a pause and a resume", async () => {
   system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
   await untilStatus(client, id, "succeeded");
 
   const job = await client.jobs.cancel({ id });
@@ -168,7 +167,7 @@ test("pausing a running job stops it with its work kept, and resuming it carries
   ]);
   // The agent carries on its conversation: the pause settled the model call it cut off, so the
   // agent is asked to carry on after the job's Prompt.
-  expect(told).toEqual([SUBMISSION.prompt, expect.stringContaining("Carry on")]);
+  expect(told).toEqual([SUBMISSION.input, expect.stringContaining("Carry on")]);
 });
 
 test("a cancelled job resumes from where it stopped", async () => {
@@ -193,7 +192,7 @@ test("a cancelled job resumes from where it stopped", async () => {
 test("a failed job resumes with a note asking its agent to carry on", async () => {
   system.model.setResponses([reply("Counting is tedious.")]);
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
   await untilStatus(client, id, "failed");
 
   let told = "";
@@ -266,7 +265,7 @@ test("pausing a running job frees its slot for the next queued job", async () =>
   const client = await system.clientWithNewJobsKey();
   const id = await submitRunningJob(client);
   system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
-  const next = await client.jobs.submit(SUBMISSION);
+  const next = await submitJob(client, SUBMISSION);
 
   await client.jobs.pause({ id });
 
@@ -292,7 +291,7 @@ test("deleting an unfinished job is refused", async () => {
 test("deleting a finished job removes its content at once and its files from its host once its Runner confirms", async () => {
   system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
   await untilStatus(client, id, "succeeded");
   const jobDir = path.dirname(system.workspace(id));
   await access(jobDir);
@@ -316,7 +315,7 @@ test("deleting a finished job removes its content at once and its files from its
 test("a job deleted while its Runner is away reads as deleted, and a repeated delete returns it, until the Runner is back", async () => {
   system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
   await untilStatus(client, id, "succeeded");
   await system.stopRunner();
 
@@ -337,13 +336,13 @@ test("removing a Runner ends the jobs it held, and leaves its finished jobs no w
   const tedious = reply("Counting is tedious.");
   system.model.setResponses([tedious, tedious, tedious]);
   const client = await system.clientWithNewJobsKey();
-  const { id: finished } = await client.jobs.submit(SUBMISSION);
-  const { id: resumed } = await client.jobs.submit(SUBMISSION);
-  const { id: deleting } = await client.jobs.submit(SUBMISSION);
+  const { id: finished } = await submitJob(client, SUBMISSION);
+  const { id: resumed } = await submitJob(client, SUBMISSION);
+  const { id: deleting } = await submitJob(client, SUBMISSION);
   for (const id of [finished, resumed, deleting]) await untilStatus(client, id, "failed");
   system.model.setResponses([untilAborted, untilAborted]);
-  const { id: running } = await client.jobs.submit(SUBMISSION);
-  const { id: cancelling } = await client.jobs.submit(SUBMISSION);
+  const { id: running } = await submitJob(client, SUBMISSION);
+  const { id: cancelling } = await submitJob(client, SUBMISSION);
   await untilStatus(client, running, "running");
   await untilStatus(client, cancelling, "running");
   await system.stopRunner();

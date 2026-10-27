@@ -46,7 +46,7 @@ test("the hub serves its OpenAPI document saying who may call and how errors rea
           },
         },
       },
-      "/jobs": {
+      "/batches/{id}/jobs": {
         post: {
           security: [{ apiKey: ["job:create"] }],
           responses: {

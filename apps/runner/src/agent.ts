@@ -156,10 +156,18 @@ export function journalExists(
 }
 
 /**
- * What the agent is told about the job, beside its Prompt. The sandbox's `/tmp` is the job's own
+ * What the agent is told about the job, beside its input: the Runner's own text, then the
+ * instructions of the job's Batch's agent, if any, which every job of the Batch shares, so a model
+ * provider can cache them with the rest of the prompt's start. The sandbox's `/tmp` is the job's own
  * but held in memory, which counts against the job's memory limit.
  */
-function instructions(paths: { workspace: string }) {
+function instructions(paths: { workspace: string }, job: JobContent) {
+  const own = runnerInstructions(paths);
+  return job.instructions === undefined ? own : `${own}\n\n${job.instructions}`;
+}
+
+/** What the Runner tells every job's agent about running unattended. */
+function runnerInstructions(paths: { workspace: string }) {
   return `You are running a job unattended; nobody will answer questions. Your Workspace, where your files are and your commands run, is ${paths.workspace}; the job's Input files, if any, are in ${path.join(paths.workspace, "inputs")}. For temporary files, use the directory in $TMPDIR, not /tmp.
 When the work is complete, call submit_result once with the complete result: as \`value\`, or, for a large result or one a script produced, as the \`path\` of a JSON file in the Workspace. The result is checked against the job's Result contract; if it is rejected, correct it and submit again. A reply in prose does not complete the job.`;
 }
@@ -344,7 +352,7 @@ export function openJob(
         agent: {
           model: { provider: options.model.provider, modelId: options.model.modelId },
           thinkingLevel: options.model.thinkingLevel,
-          instructions: instructions(paths),
+          instructions: instructions(paths, job),
           cwd: paths.workspace,
         },
         // The commit that creates the job's conversation, so the start is recorded exactly once.
@@ -389,7 +397,7 @@ export function openJob(
      * The input this run answers, the same each time the run opens, as when a restarted
      * Runner opens the journal again: the continuation note it submitted, if any; else an input
      * still waiting for its answer, which it carries on, as one a failed run left; else the
-     * job's Prompt, which it submits if the journal has none and which is its own when it entered the
+     * job's own input, which it submits if the journal has none and which is its own when it entered the
      * conversation after the run's opening; else, on a resume, a short note asking the agent
      * to carry on, as a pi user types the next message after Esc, since the job's pause or
      * cancel or pi's failure settled its work. Each is submitted once under its request ID. Work a
@@ -397,14 +405,14 @@ export function openJob(
      * call is made again, and a cut-off tool call gets an `interrupted` result.
      */
     const submitInput = async (): Promise<Submission> => {
-      const promptRequest = `job:${jobId}`;
+      const jobInputRequest = `job:${jobId}`;
       const noteRequest = `job:${jobId}:resume:${options.runId}`;
       const submit = (content: string, requestId: string) =>
         root.submit({ type: "input", content, requestId }, context);
-      const { note, prompt, opened } = await root.commit(
+      const { note, jobInput, opened } = await root.commit(
         async (tx) => ({
           note: await tx.submissionByRequest(root.id, noteRequest),
-          prompt: await tx.submissionByRequest(root.id, promptRequest),
+          jobInput: await tx.submissionByRequest(root.id, jobInputRequest),
           opened: await tx.submissionByRequest(root.id, openingRequest(options.runId)),
         }),
         context,
@@ -416,11 +424,13 @@ export function openJob(
       );
       const carried = waiting && (await harness.submission(waiting.id, context));
       if (carried) return carried;
-      const promptIsOwn =
-        !prompt ||
-        (prompt.entry !== undefined && opened?.entry !== undefined && prompt.entry > opened.entry);
-      return promptIsOwn
-        ? submit(job.prompt, promptRequest)
+      const jobInputIsOwn =
+        !jobInput ||
+        (jobInput.entry !== undefined &&
+          opened?.entry !== undefined &&
+          jobInput.entry > opened.entry);
+      return jobInputIsOwn
+        ? submit(job.input, jobInputRequest)
         : submit(CONTINUATION_NOTE, noteRequest);
     };
     const runAgent = Effect.gen(function* () {

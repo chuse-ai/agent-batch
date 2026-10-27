@@ -10,23 +10,32 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Creates a Batch, and submits its first \`jobs\` into it, as \`POST /batches/{id}/jobs\` does. Answers with the Batch and what became of each job.",
+          "description": "Creates a Batch, without jobs, and answers with it: the \`agent\` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with \`POST /batches/{id}/jobs\`. The hub checks the Result contract's schema, refusing one that is invalid, describes a list or refers outside itself. A \`customId\` makes the creation safe to retry: the same \`customId\` with the same \`agent\`, \`labels\` and \`breaker\` answers with the Batch already created, and with any of them different is refused.",
           "name": "create",
           "options": [
             {
-              "attributeName": "idempotencyKey",
-              "description": "Makes creating safe to retry: creating again with the same key and the same \`labels\` and \`failFast\` returns the Batch already created, and submits its \`jobs\` into it as any submission does; with a different \`labels\` or \`failFast\` it is refused.; Min length: 1; Max length: 255",
-              "flags": "--idempotency-key [string]",
-              "name": "idempotency-key",
+              "attributeName": "customId",
+              "description": "Your own ID for the Batch, unique in the Organization; none by default. Creating a Batch again with the same \`customId\` and the same \`agent\`, \`labels\` and \`breaker\` returns the Batch already created, so a creation can be retried safely; with any of them different it is refused. A new Batch needs a new ID.; Min length: 1; Max length: 255",
+              "flags": "--custom-id [string]",
+              "name": "custom-id",
               "negate": false,
               "optional": true,
               "required": false,
               "variadic": false,
             },
             {
+              "attributeName": "agent",
+              "flags": "--agent <json>",
+              "name": "agent",
+              "negate": false,
+              "optional": false,
+              "required": true,
+              "variadic": false,
+            },
+            {
               "attributeName": "labels",
               "defaultValue": {},
-              "description": "Labels every job of the Batch gets, beside its own, which win where both name a key; none by default.; Property names: {"type":"string","pattern":"^(?:(?=.{1,253}\\\\/)[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\\\\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*\\\\/)?[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?$"}",
+              "description": "Labels every job of the Batch gets, beside its own, which win where both name a key; none by default. Keys follow Kubernetes's label key syntax; values are any text of at most 256 characters, kept exactly as given.; Property names: {"type":"string","pattern":"^(?:(?=.{1,253}\\\\/)[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\\\\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*\\\\/)?[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?$"}",
               "flags": "--labels [json]",
               "name": "labels",
               "negate": false,
@@ -35,26 +44,15 @@ exports[`the commands and their flags 1`] = `
               "variadic": false,
             },
             {
-              "attributeName": "failFast",
+              "attributeName": "breaker",
               "defaultValue": true,
-              "description": "The failure breaker, which catches a flaw every job shares after a few jobs instead of after all of them. The Batch's first \`canary\` jobs (5 by default), its Canary, run before the rest are released, and the Batch pauses once at least two of its finished jobs failed and their share among them is above \`tolerance\` percent (25 by default). A job that a limit stopped counts as failed; a cancelled job, or one its Runner's removal ended, does not count. \`true\` by default; \`false\` turns it off.; Any of: [{"type":"boolean"},{"type":"object","properties":{"canary":{"type":"integer","exclusiveMinimum":0,"maximum":2147483647},"tolerance":{"type":"number","minimum":0,"exclusiveMaximum":100}}}]",
-              "flags": "--fail-fast [value]",
-              "name": "fail-fast",
+              "description": "The failure breaker, which pauses the Batch when a flaw its jobs share shows, after a few jobs instead of after all of them. The Batch's first \`canary\` jobs (5 by default), its Canary, run before the rest are released, and any of them failing pauses the Batch. After that, it pauses when more than \`maxFailurePercent\` (10 by default) of the jobs ended since the Canary began have failed. A job counts once, by its latest end; a job that a limit stopped counts as failed, while a cancelled job, or one its Runner's removal ended, does not count. Resuming a pause the breaker made starts a new Canary of the next \`canary\` jobs, those added later included. \`canary: 0\` releases every job at once, and the percentage then judges from the first job to end, so one early failure still pauses the Batch; \`maxFailurePercent: 100\` keeps the Canary alone. \`true\` by default, for the defaults; \`false\` turns the breaker off.; Any of: [{"type":"boolean"},{"type":"object","properties":{"canary":{"type":"integer","minimum":0,"maximum":2147483647},"maxFailurePercent":{"type":"number","minimum":0,"maximum":100}}}]",
+              "flags": "--breaker [value]",
+              "name": "breaker",
               "negate": false,
               "optional": true,
               "required": false,
               "variadic": false,
-            },
-            {
-              "attributeName": "jobs",
-              "defaultValue": [],
-              "description": "The jobs to submit into the Batch, at most 100 per request; a larger Batch is submitted over several.; Max items: 100 array",
-              "flags": "--jobs [values...]",
-              "name": "jobs",
-              "negate": false,
-              "optional": true,
-              "required": false,
-              "variadic": true,
             },
             {
               "attributeName": "json",
@@ -72,8 +70,8 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Submits jobs into a Batch and answers with the Batch and what became of each job, in the order given. Each job is accepted or refused on its own: a job the hub refuses is reported with its problems while the rest are accepted, and a job whose key the Batch already has returns that job when its content is the same and is refused otherwise, so a whole Batch can be submitted again to add only the jobs it lacks. Jobs submitted into a paused Batch are held; into a cancelled one, new jobs are refused. A request whose shape is invalid is refused whole.",
-          "name": "submit",
+          "description": "Adds jobs to a Batch, at most 100 per request, each running the Batch's agent on its own \`input\` and files, and answers with the Batch and each job in the order given, with whether this add created it. An add is all or nothing: any problem refuses the whole request, naming every problem with its path, such as \`jobs[17].input\`: 400 when any job is invalid, then 409 when the Batch is cancelled and the add would create a job, then 422 for each \`customId\` the Batch already has for a job with other content. A job whose \`customId\` the Batch already has with the same content is returned as it is, with \`created: false\`, so an add can be retried safely, and a whole Batch added again to add only the jobs it lacks; a new job needs a new \`customId\`. Jobs added to a paused Batch wait for it.",
+          "name": "add-jobs",
           "options": [
             {
               "attributeName": "id",
@@ -88,7 +86,7 @@ exports[`the commands and their flags 1`] = `
             {
               "attributeName": "jobs",
               "defaultValue": [],
-              "description": "The jobs to submit into the Batch, at most 100 per request; a larger Batch is submitted over several.; Max items: 100 array",
+              "description": "The jobs to add, 1 to 100 per request; a larger Batch is added over several.; Min items: 1; Max items: 100 array",
               "flags": "--jobs [values...]",
               "name": "jobs",
               "negate": false,
@@ -141,7 +139,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Pauses a Batch and answers with it: its members not yet sent to a Runner, and those submitted later, are held, \`queued\` with \`waitingFor: batchPaused\`, while those already sent carry on to their own ends. Pausing a paused Batch changes nothing; a cancelled one is refused.",
+          "description": "Pauses a Batch and answers with it. Its jobs not yet sent to a Runner, and those added later, are blocked: they stay \`queued\`, with \`blockedBy: batchPausedByCaller\`. Jobs already being sent or running carry on to their own ends, so a pause stops only the jobs not already being sent. A pause changes no job's status. Pausing a paused Batch changes nothing; a cancelled one is refused.",
           "name": "pause",
           "options": [
             {
@@ -170,7 +168,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Resumes a paused Batch and answers with it: its held members are released, behind its Canary while that still runs. Resuming a Batch its failure breaker paused starts the breaker's count afresh; resuming one a caller paused, while the breaker's count would have paused it, leaves it paused by the breaker. A member a caller paused stays paused. Resuming a Batch that is not paused changes nothing; a cancelled one is refused.",
+          "description": "Resumes a paused Batch and answers with it: its blocked jobs are released, behind its Canary while one runs. Resuming a pause its failure breaker made, or a caller's pause during which the breaker's rule tripped, restarts the breaker's counts and starts a new Canary of the next \`canary\` jobs, those added later included. A job paused by its own control stays paused. Resuming a Batch that is not paused changes nothing; a cancelled one is refused.",
           "name": "resume",
           "options": [
             {
@@ -199,7 +197,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Cancels a Batch and answers with it: each unfinished member is cancelled as a job's cancel does, at once where no Runner may be running it and otherwise once its Runner stops it, shown meanwhile as the Batch's \`pendingControl\`. The Batch is \`cancelled\` once every member has ended, and new jobs submitted into it are refused. Cancelling a Batch whose members have all ended, and was not paused, changes nothing.",
+          "description": "Cancels a Batch and answers with it: each unfinished job is cancelled as a job's cancel does, at once where no Runner may be running it and otherwise once its Runner stops it, shown meanwhile as the Batch's \`pendingControl\`. The Batch is \`cancelled\` once every job has ended. A cancel is final, also for a Batch whose jobs have all ended: the Batch takes no new jobs, and none of its jobs can be resumed. Cancelling a cancelled Batch changes nothing.",
           "name": "cancel",
           "options": [
             {
@@ -226,7 +224,7 @@ exports[`the commands and their flags 1`] = `
           "usage": "[options]",
         },
       ],
-      "description": "Available subcommands: create, submit, get, pause, resume, cancel",
+      "description": "Available subcommands: create, add-jobs, get, pause, resume, cancel",
       "name": "batches",
       "options": [],
       "usage": "[options] [command]",
@@ -237,83 +235,12 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Submits a job. The hub checks the Result contract's schema, refusing one that is invalid, describes a list or refers outside itself.",
+          "description": "Submits one job and prints it: creates a Batch of one for it, running \`agent\`, without a failure breaker, and adds the job. Retrying with the same \`customId\` returns the Batch and job already created, so a command that cannot tell whether the job was accepted can be run again to find out.",
           "name": "submit",
           "options": [
             {
-              "attributeName": "prompt",
-              "description": "What the agent is asked to do.; Min length: 1",
-              "flags": "--prompt <string>",
-              "name": "prompt",
-              "negate": false,
-              "optional": false,
-              "required": true,
-              "variadic": false,
-            },
-            {
-              "attributeName": "inputFiles",
-              "defaultValue": {},
-              "description": "Files the agent finds in its Workspace's \`inputs/\` folder, by name; none by default.; Property names: {"type":"string"}",
-              "flags": "--input-files [json]",
-              "name": "input-files",
-              "negate": false,
-              "optional": true,
-              "required": false,
-              "variadic": false,
-            },
-            {
-              "attributeName": "resultContract",
-              "description": "What the job's result must be: \`schema\`, a JSON Schema the result must match.; Object (json formatted); Required: ["schema"]",
-              "flags": "--result-contract [json]",
-              "name": "result-contract",
-              "negate": false,
-              "optional": true,
-              "required": false,
-              "variadic": false,
-            },
-            {
-              "attributeName": "idempotencyKey",
-              "description": "Makes submitting safe to retry: submitting again with the same key and the same job returns the job already accepted, and with a different job is refused.; Min length: 1; Max length: 255",
-              "flags": "--idempotency-key [string]",
-              "name": "idempotency-key",
-              "negate": false,
-              "optional": true,
-              "required": false,
-              "variadic": false,
-            },
-            {
-              "attributeName": "runTimeoutSeconds",
-              "description": "How long each run of the job on a Runner may work, in seconds; the hub's default when left out, and refused above its maximum.; Exclusive minimum: 0; Maximum: 2147483647",
-              "flags": "--run-timeout-seconds [integer]",
-              "name": "run-timeout-seconds",
-              "negate": false,
-              "optional": true,
-              "required": false,
-              "variadic": false,
-            },
-            {
-              "attributeName": "modelBudgetUsd",
-              "description": "The most the job's model calls may cost over its whole life, in US dollars; the hub's default when left out, and refused above its maximum.; positive",
-              "flags": "--model-budget-usd [number]",
-              "name": "model-budget-usd",
-              "negate": false,
-              "optional": true,
-              "required": false,
-              "variadic": false,
-            },
-            {
-              "attributeName": "labels",
-              "description": "Labels to find the job, group it and attribute its cost by, by key, such as \`{ "customer": "acme" }\`; none by default. Keys and values follow Kubernetes's label syntax.; Property names: {"type":"string","pattern":"^(?:(?=.{1,253}\\\\/)[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\\\\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*\\\\/)?[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?$"}",
-              "flags": "--labels [json]",
-              "name": "labels",
-              "negate": false,
-              "optional": true,
-              "required": false,
-              "variadic": false,
-            },
-            {
               "attributeName": "json",
-              "description": "Provide the complete procedure input as JSON - other flags and positional arguments are unavailable when using this option",
+              "description": "Input formatted as JSON",
               "flags": "--json <json>",
               "name": "json",
               "negate": false,
@@ -385,7 +312,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Resumes a stopped job and answers with the job. A paused, failed or cancelled job goes back to \`queued\` and carries on from where it stopped, on the Runner that holds its work; one paused before it started simply starts. Resuming a job that is queued or running changes nothing, and one that gives it other limits than its own is refused: its run keeps them. A job whose pause its Runner has not yet confirmed, whose cancel waits, that succeeded, or that never started before it ended, is refused. A resume that changes the job may give it a new \`runTimeoutSeconds\` and \`modelBudgetUsd\`, and is refused when the job's model calls have cost its \`modelBudgetUsd\` or more, as for a job that failed with \`modelBudgetExceeded\`.",
+          "description": "Resumes a stopped job and answers with the job. A paused, failed or cancelled job goes back to \`queued\` and carries on from where it stopped, on the Runner that holds its work; one paused before it started simply starts. Resuming a job that is queued or running changes nothing, and one that gives it other limits than its own is refused: its run keeps them. A job whose pause its Runner has not yet confirmed, whose cancel waits, that succeeded, that never started before it ended, or whose Batch is cancelled, is refused. A job resumed while its Batch is paused is \`queued\` and waits for the Batch. A resume that changes the job may give it a new \`runTimeoutSeconds\` and \`modelBudgetUsd\`, and is refused when the job's model calls have cost its \`modelBudgetUsd\` or more, as for a job that failed with \`modelBudgetExceeded\`.",
           "name": "resume",
           "options": [
             {
@@ -542,7 +469,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Lists jobs, newest first, in pages of at most \`limit\`, each job without its content. Filters combine: a job is listed when it has one of the \`status\` values given, every label in \`labels\`, and the \`batchId\` and \`key\` given. Read the next page with the same filters and \`after\` set to the last job's \`id\`, while the page says \`hasMore\`.",
+          "description": "Lists jobs, newest first, in pages of at most \`limit\`. Filters combine: a job is listed when it has one of the \`status\` values given, every label in \`labels\`, and the \`batchId\` and \`customId\` given. Read the next page with the same filters and \`after\` set to the last job's \`id\`, while the page says \`hasMore\`. A listed job has no \`result\`, failure \`message\` or \`activity\`: read the job for those.",
           "name": "list",
           "options": [
             {
@@ -584,10 +511,10 @@ exports[`the commands and their flags 1`] = `
               "variadic": false,
             },
             {
-              "attributeName": "key",
-              "description": "The key the job was submitted with: its idempotency key, or a member's key in the Batch \`batchId\` names.",
-              "flags": "--key [string]",
-              "name": "key",
+              "attributeName": "customId",
+              "description": "The job's own \`customId\`, which is unique in its Batch, so without \`batchId\` it may match a job in each of several Batches.",
+              "flags": "--custom-id [string]",
+              "name": "custom-id",
               "negate": false,
               "optional": true,
               "required": false,

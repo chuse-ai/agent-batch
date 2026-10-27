@@ -1,9 +1,8 @@
-import type { BatchJobSubmission } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 import * as z from "zod/mini";
 
-import { type ApiClient, startSystem, untilStatus } from "./harness.ts";
-import { callTool, providerError, untilAborted } from "./scripted-model.ts";
+import { type ApiClient, type JobInput, startSystem, submitJob, untilStatus } from "./harness.ts";
+import { callTool, reply, untilAborted } from "./scripted-model.ts";
 
 // Batches, labels and the job list, against a real hub. The first tests run before any Runner has
 // started, so no job is sent to one, and each cancels what it leaves unfinished; the rest share the
@@ -14,15 +13,16 @@ const system = startSystem();
 beforeAll(() => system.start());
 afterAll(() => system.stop());
 
-/** A Batch's job named `key`. */
-function job(key: string, extra: Partial<BatchJobSubmission> = {}): BatchJobSubmission {
-  return {
-    key,
-    prompt: `Answer for ${key}.`,
-    inputFiles: {},
-    resultContract: { schema: { type: "integer" } },
-    ...extra,
-  };
+const AGENT = { resultContract: { schema: { type: "integer" } } };
+
+/** A job with the custom ID `customId`. */
+function jobNamed(customId: string, extra: Partial<JobInput> = {}): JobInput {
+  return { customId, input: `Answer for ${customId}.`, ...extra };
+}
+
+/** What blocks each job an add answered with, or "none". */
+function blockedBy(added: Awaited<ReturnType<ApiClient["batches"]["addJobs"]>>) {
+  return added.jobs.map(({ job }) => job.blockedBy ?? "none");
 }
 
 /** Waits until the Batch `id` has `status`. */
@@ -32,94 +32,135 @@ async function untilBatchStatus(client: ApiClient, id: string, status: string) {
     .toBe(status);
 }
 
-test("a Batch's jobs are accepted or refused one by one, and submitting it again adds only the jobs it lacks", async () => {
+/** Posts `body` as raw JSON to `path` with a new key, as any HTTP client would. */
+async function post(path: string, body: unknown) {
+  return system.hub.fetch(path, {
+    method: "POST",
+    headers: { "x-api-key": await system.newJobsKey(), "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+test("a custom ID used again with the same content returns what it named, and with other content is refused", async () => {
   const client = await system.clientWithNewJobsKey();
-  const invalid = job("d", { resultContract: { schema: { type: "array" } } });
-
-  const first = await client.batches.create({
-    idempotencyKey: "invoices-2026-10",
-    failFast: false,
-    jobs: [job("a"), job("b"), invalid, job("c")],
+  const creation = { customId: "invoices-2026-10", agent: AGENT, breaker: false } as const;
+  const batch = await client.batches.create(creation);
+  expect(batch).toMatchObject({ customId: "invoices-2026-10", status: "active", breaker: false });
+  // The script runs again, from the start: the same Batch.
+  expect((await client.batches.create(creation)).id).toBe(batch.id);
+  await expect(client.batches.create({ ...creation, breaker: true })).rejects.toMatchObject({
+    code: "UNPROCESSABLE_CONTENT",
   });
 
-  expect(first.jobs.map(({ key, outcome }) => [key, outcome])).toEqual([
-    ["a", "created"],
-    ["b", "created"],
-    ["d", "rejected"],
-    ["c", "created"],
+  const first = await client.batches.addJobs({
+    id: batch.id,
+    jobs: [jobNamed("a"), jobNamed("b")],
+  });
+  expect(first.jobs.map(({ created, job }) => [job.customId, created])).toEqual([
+    ["a", true],
+    ["b", true],
   ]);
-  expect(first.jobs[2]).toMatchObject({
-    reason: "invalid",
-    problems: [{ path: ["resultContract", "schema"] }],
+  // Again, with a job the Batch lacks: the jobs it has are returned, and only the one it lacks added.
+  const again = await client.batches.addJobs({
+    id: batch.id,
+    jobs: [jobNamed("a"), jobNamed("c"), jobNamed("b")],
   });
-  expect(first.batch.jobCounts).toMatchObject({ queued: 3 });
-
-  // The script runs again, from the start: the same Batch, the jobs it has, and the one it lacks.
-  const again = await client.batches.create({
-    idempotencyKey: "invoices-2026-10",
-    failFast: false,
-    jobs: [job("a"), job("b", { prompt: "Something else." }), job("c"), job("e")],
-  });
-
-  expect(again.batch.id).toBe(first.batch.id);
-  expect(again.jobs.map(({ key, outcome }) => [key, outcome])).toEqual([
-    ["a", "existing"],
-    ["b", "rejected"],
-    ["c", "existing"],
-    ["e", "created"],
+  expect(again.jobs.map(({ created, job }) => [job.customId, created])).toEqual([
+    ["a", false],
+    ["c", true],
+    ["b", false],
   ]);
-  expect(again.jobs[1]).toMatchObject({ reason: "keyReused" });
-  const [a] = first.jobs;
-  const [againA] = again.jobs;
-  expect(againA && "job" in againA && againA.job.id).toBe(a && "job" in a && a.job.id);
-  expect(again.batch.jobCounts).toMatchObject({ queued: 4 });
+  expect(again.jobs[0]?.job.id).toBe(first.jobs[0]?.job.id);
+  expect(again.batch.jobCounts).toMatchObject({ queued: 3 });
 
-  await expect(
-    client.batches.create({ idempotencyKey: "invoices-2026-10", failFast: true }),
-  ).rejects.toMatchObject({ code: "UNPROCESSABLE_CONTENT" });
-  await client.batches.cancel({ id: first.batch.id });
+  // A custom ID used for a job with other content refuses the whole add, naming each such job.
+  const response = await post(`/batches/${batch.id}/jobs`, {
+    jobs: [jobNamed("d"), jobNamed("b", { input: "Something else." })],
+  });
+  expect(response.status).toBe(422);
+  expect(await response.json()).toMatchObject({
+    detail: expect.stringContaining("jobs[1].customId"),
+  });
+  expect((await client.batches.get({ id: batch.id })).jobCounts).toMatchObject({ queued: 3 });
+  await client.batches.cancel({ id: batch.id });
 });
 
-test("a Batch created without jobs is in progress until its jobs come and end", async () => {
+test("an add with an invalid job adds none, and its answer names every problem with its path", async () => {
   const client = await system.clientWithNewJobsKey();
-  const { batch } = await client.batches.create({ failFast: false });
-  expect(batch).toMatchObject({ status: "inProgress", jobCounts: { queued: 0 } });
-  expect(await client.batches.cancel({ id: batch.id })).toMatchObject({ status: "cancelled" });
+  const batch = await client.batches.create({
+    agent: { ...AGENT, inputFiles: { "rates.csv": { content: "1.1" } } },
+    labels: { team: "billing" },
+    breaker: false,
+  });
+  const many = Object.fromEntries(Array.from({ length: 64 }, (_, index) => [`l${index}`, "x"]));
+
+  // Problems only the hub sees, with the Batch: a custom ID given twice, a file named like one of
+  // the agent's, and labels over the limit with the Batch's.
+  const refused = await post(`/batches/${batch.id}/jobs`, {
+    jobs: [
+      jobNamed("a"),
+      jobNamed("a"),
+      jobNamed("b", { inputFiles: { "rates.csv": { content: "2.2" } } }),
+      jobNamed("c", { labels: many }),
+    ],
+  });
+  expect(refused.status).toBe(400);
+  const { detail } = z.parse(z.object({ detail: z.string() }), await refused.json());
+  for (const path of ["jobs[1].customId", 'jobs[2].inputFiles["rates.csv"]', "jobs[3].labels"]) {
+    expect(detail).toContain(path);
+  }
+
+  // A label value holds any text of at most 256 characters, but no NUL.
+  const invalid = await post(`/batches/${batch.id}/jobs`, {
+    jobs: [
+      jobNamed("d", { labels: { note: "é".repeat(256) } }),
+      jobNamed("e", { labels: { note: "\0" } }),
+    ],
+  });
+  expect(invalid.status).toBe(400);
+  expect(await invalid.json()).toMatchObject({ detail: expect.stringContaining("jobs[1].labels") });
+  expect((await client.batches.get({ id: batch.id })).jobCounts).toMatchObject({ queued: 0 });
+  await client.batches.cancel({ id: batch.id });
 });
 
-test("jobs are listed by label, status and Batch, newest first, with a Batch's labels beneath their own", async () => {
+test("jobs are listed by label, status, Batch and custom ID, newest first, with a Batch's labels beneath their own", async () => {
   const client = await system.clientWithNewJobsKey();
-  const { batch } = await client.batches.create({
+  const batch = await client.batches.create({
+    agent: AGENT,
     labels: { customer: "acme", team: "billing" },
-    failFast: false,
-    jobs: [job("x", { labels: { team: "support" } }), job("y")],
+    breaker: false,
   });
-  const alone = await client.jobs.submit({
-    prompt: "Alone.",
-    inputFiles: {},
-    resultContract: { schema: { type: "integer" } },
+  await client.batches.addJobs({
+    id: batch.id,
+    jobs: [jobNamed("x", { labels: { team: "support" } }), jobNamed("y")],
+  });
+  const alone = await submitJob(client, {
+    ...AGENT,
+    customId: "alone",
+    input: "Alone.",
     labels: { customer: "acme" },
   });
   await client.jobs.cancel({ id: alone.id });
 
-  const members = await client.jobs.list({ batchId: batch.id });
-  expect(members.jobs.map((listed) => [listed.key, listed.labels])).toEqual([
+  const jobs = await client.jobs.list({ batchId: batch.id });
+  expect(jobs.jobs.map((listed) => [listed.customId, listed.labels])).toEqual([
     ["y", { customer: "acme", team: "billing" }],
     ["x", { customer: "acme", team: "support" }],
   ]);
 
   const acme = await client.jobs.list({ labels: { customer: "acme" }, limit: 2 });
-  expect(acme.jobs.map((listed) => listed.id)).toEqual([alone.id, members.jobs[0]?.id]);
+  expect(acme.jobs.map((listed) => listed.customId)).toEqual(["alone", "y"]);
   expect(acme.hasMore).toBe(true);
   const next = await client.jobs.list({ labels: { customer: "acme" }, after: alone.id, limit: 2 });
-  expect(next.jobs.map((listed) => listed.key)).toEqual(["y", "x"]);
+  expect(next.jobs.map((listed) => listed.customId)).toEqual(["y", "x"]);
+  expect(next.hasMore).toBe(false);
 
   const support = await client.jobs.list({ labels: { customer: "acme", team: "support" } });
-  expect(support.jobs.map((listed) => listed.key)).toEqual(["x"]);
-
+  expect(support.jobs.map((listed) => listed.customId)).toEqual(["x"]);
   const cancelled = await client.jobs.list({ labels: { customer: "acme" }, status: ["cancelled"] });
   expect(cancelled.jobs.map((listed) => listed.id)).toEqual([alone.id]);
-  expect(cancelled.jobs[0]).not.toHaveProperty("key");
+  const named = await client.jobs.list({ customId: "x", labels: { customer: "acme" } });
+  expect(named.jobs.map((listed) => listed.batchId)).toEqual([batch.id]);
 
   // The query string as a caller writes it by hand: one status, and a label in brackets.
   const response = await system.hub.fetch(
@@ -127,144 +168,259 @@ test("jobs are listed by label, status and Batch, newest first, with a Batch's l
     { headers: { "x-api-key": await system.newJobsKey() } },
   );
   const page = z.parse(
-    z.object({ jobs: z.array(z.object({ key: z.string() })) }),
+    z.object({ jobs: z.array(z.object({ customId: z.string() })) }),
     await response.json(),
   );
-  expect(page.jobs.map((listed) => listed.key)).toEqual(["y"]);
+  expect(page.jobs.map((listed) => listed.customId)).toEqual(["y"]);
   await client.batches.cancel({ id: batch.id });
 });
 
-test("a paused Batch holds its jobs and those submitted into it, and a cancelled one refuses new jobs", async () => {
+test("a paused Batch blocks the jobs not yet sent and those added later, without changing their status", async () => {
   const client = await system.clientWithNewJobsKey();
-  const { batch } = await client.batches.create({ failFast: false, jobs: [job("a")] });
+  const batch = await client.batches.create({ agent: AGENT, breaker: false });
+  const [first] = (await client.batches.addJobs({ id: batch.id, jobs: [jobNamed("a")] })).jobs;
+  if (!first) throw new Error("The add answered without the job");
 
   expect(await client.batches.pause({ id: batch.id })).toMatchObject({
     status: "paused",
     pausedBy: "caller",
   });
-  const held = await client.batches.submit({ id: batch.id, jobs: [job("b")] });
-  expect(held.jobs[0]).toMatchObject({
-    outcome: "created",
-    job: { status: "queued", waitingFor: "batchPaused" },
+  const added = await client.batches.addJobs({ id: batch.id, jobs: [jobNamed("b")] });
+  expect(added.jobs[0]?.job).toMatchObject({ status: "queued", blockedBy: "batchPausedByCaller" });
+  expect(await client.jobs.get({ id: first.job.id })).toMatchObject({
+    status: "queued",
+    blockedBy: "batchPausedByCaller",
   });
 
-  expect(await client.batches.resume({ id: batch.id })).toMatchObject({ status: "inProgress" });
-  const [listed] = (await client.jobs.list({ batchId: batch.id, key: "b" })).jobs;
+  expect(await client.batches.resume({ id: batch.id })).toMatchObject({ status: "active" });
+  const [listed] = (await client.jobs.list({ batchId: batch.id, customId: "b" })).jobs;
   expect(listed).toMatchObject({ status: "queued" });
-  expect(listed).not.toHaveProperty("waitingFor");
-
-  await client.batches.pause({ id: batch.id });
-  const cancelled = await client.batches.cancel({ id: batch.id });
-  // No Runner was sent any of them, so every member ends at once.
-  expect(cancelled).toMatchObject({ status: "cancelled", jobCounts: { cancelled: 2 } });
-  expect(cancelled).not.toHaveProperty("pendingControl");
-
-  const late = await client.batches.submit({ id: batch.id, jobs: [job("a"), job("c")] });
-  expect(late.jobs.map(({ outcome }) => outcome)).toEqual(["existing", "rejected"]);
-  expect(late.jobs[1]).toMatchObject({ reason: "batchCancelled" });
-  await expect(client.batches.resume({ id: batch.id })).rejects.toMatchObject({ code: "CONFLICT" });
-});
-
-test("a Batch's first jobs, its Canary, run before the rest are released", async () => {
-  const client = await system.clientWithNewJobsKey();
-  const keys = ["1", "2", "3", "4", "5", "6", "7"];
-  const { batch, jobs } = await client.batches.create({ jobs: keys.map((key) => job(key)) });
-
-  expect(batch.failFast).toEqual({ canary: 5, tolerance: 25 });
-  expect(jobs.map((outcome) => "job" in outcome && (outcome.job.waitingFor ?? "none"))).toEqual([
-    "none",
-    "none",
-    "none",
-    "none",
-    "none",
-    "canary",
-    "canary",
-  ]);
+  expect(listed).not.toHaveProperty("blockedBy");
   await client.batches.cancel({ id: batch.id });
 });
 
-test("two failures among the Canary pause the Batch and hold the rest, and cancelling it cancels them", async () => {
-  // Every job's model call fails, as when a budget every job shares is set too low.
-  system.model.setResponses(Array.from({ length: 20 }, () => providerError("Budget too low")));
-  await system.startRunner();
+test("a cancel is final: the Batch takes no new jobs and resumes none, even with every job ended", async () => {
   const client = await system.clientWithNewJobsKey();
-  const { batch } = await client.batches.create({
-    jobs: ["1", "2", "3", "4", "5", "6", "7", "8"].map((key) => job(key)),
-  });
-
-  await untilBatchStatus(client, batch.id, "paused");
-  await expect
-    .poll(async () => (await client.batches.get({ id: batch.id })).jobCounts.running, {
-      timeout: 15_000,
-    })
-    .toBe(0);
-  const paused = await client.batches.get({ id: batch.id });
-  expect(paused).toMatchObject({ pausedBy: "failFast", jobCounts: { queued: 3 } });
-  const held = await client.jobs.list({ batchId: batch.id, status: ["queued"] });
-  expect(held.jobs.map((listed) => listed.waitingFor)).toEqual([
-    "failFast",
-    "failFast",
-    "failFast",
-  ]);
+  const batch = await client.batches.create({ agent: AGENT, breaker: false });
+  await client.batches.addJobs({ id: batch.id, jobs: [jobNamed("a")] });
+  await client.batches.pause({ id: batch.id });
 
   const cancelled = await client.batches.cancel({ id: batch.id });
-  expect(cancelled).toMatchObject({ status: "cancelled", jobCounts: { queued: 0, cancelled: 3 } });
-});
+  // No Runner was sent the job, so it ends at once.
+  expect(cancelled).toMatchObject({ status: "cancelled", jobCounts: { cancelled: 1 } });
+  expect(cancelled).not.toHaveProperty("pausedBy");
+  expect(cancelled).not.toHaveProperty("pendingControl");
+  // An add that creates nothing returns the job the Batch has; one that would create a job is
+  // refused.
+  const again = await client.batches.addJobs({ id: batch.id, jobs: [jobNamed("a")] });
+  expect(again.jobs.map(({ created }) => created)).toEqual([false]);
+  await expect(
+    client.batches.addJobs({ id: batch.id, jobs: [jobNamed("a"), jobNamed("b")] }),
+  ).rejects.toMatchObject({ code: "CONFLICT" });
+  await expect(client.batches.resume({ id: batch.id })).rejects.toMatchObject({ code: "CONFLICT" });
 
-test("a Batch without its breaker releases every job at once and never pauses itself", async () => {
-  system.model.setResponses(Array.from({ length: 4 }, () => providerError("Budget too low")));
-  const client = await system.clientWithNewJobsKey();
-  const { batch, jobs } = await client.batches.create({
-    failFast: false,
-    jobs: ["1", "2", "3", "4"].map((key) => job(key)),
+  const empty = await client.batches.create({ agent: AGENT });
+  expect(empty).toMatchObject({ status: "active", jobCounts: { queued: 0 } });
+  expect(await client.batches.cancel({ id: empty.id })).toMatchObject({ status: "cancelled" });
+  await expect(
+    client.batches.addJobs({ id: empty.id, jobs: [jobNamed("a")] }),
+  ).rejects.toMatchObject({
+    code: "CONFLICT",
   });
-  expect(jobs.every((outcome) => "job" in outcome && !outcome.job.waitingFor)).toBe(true);
-
-  await untilBatchStatus(client, batch.id, "ended");
-  expect((await client.batches.get({ id: batch.id })).jobCounts).toMatchObject({ failed: 4 });
 });
 
-test("a Batch's summary counts its members by status and adds up their cost, those deleted included", async () => {
+test("a Batch's Canary, its first jobs, those added later included, runs before the rest are released", async () => {
+  const client = await system.clientWithNewJobsKey();
+  const batch = await client.batches.create({ agent: AGENT });
+  expect(batch.breaker).toEqual({ canary: 5, maxFailurePercent: 10 });
+
+  const first = await client.batches.addJobs({
+    id: batch.id,
+    jobs: [jobNamed("1"), jobNamed("2")],
+  });
+  expect(blockedBy(first)).toEqual(["none", "none"]);
+  const rest = await client.batches.addJobs({
+    id: batch.id,
+    jobs: ["3", "4", "5", "6", "7"].map((customId) => jobNamed(customId)),
+  });
+  expect(blockedBy(rest)).toEqual(["none", "none", "none", "batchCanary", "batchCanary"]);
+  await client.batches.cancel({ id: batch.id });
+
+  // A Canary of none releases every job at once.
+  const uncautious = await client.batches.create({
+    agent: AGENT,
+    breaker: { canary: 0, maxFailurePercent: 10 },
+  });
+  const all = await client.batches.addJobs({
+    id: uncautious.id,
+    jobs: [jobNamed("1"), jobNamed("2")],
+  });
+  expect(blockedBy(all)).toEqual(["none", "none"]);
+  await client.batches.cancel({ id: uncautious.id });
+});
+
+test("a failure in the Canary pauses the Batch, and resuming it runs a new Canary of the next jobs first, those added later included", async () => {
+  await system.startRunner();
+  // Every job's model call fails, as when a budget every job shares is set too low.
+  system.model.setResponses([]);
+  const client = await system.clientWithNewJobsKey();
+  const batch = await client.batches.create({
+    agent: AGENT,
+    breaker: { canary: 1, maxFailurePercent: 100 },
+  });
+  const { jobs } = await client.batches.addJobs({
+    id: batch.id,
+    jobs: [jobNamed("1"), jobNamed("2"), jobNamed("3")],
+  });
+  const [, second, third] = jobs.map(({ job }) => job.id);
+  if (!second || !third) throw new Error("The add answered without the jobs");
+
+  await untilBatchStatus(client, batch.id, "paused");
+  expect(await client.batches.get({ id: batch.id })).toMatchObject({
+    pausedBy: "breaker",
+    jobCounts: { failed: 1, queued: 2 },
+  });
+  const held = await client.jobs.list({ batchId: batch.id, status: ["queued"] });
+  expect(held.jobs.map((listed) => listed.blockedBy)).toEqual([
+    "batchPausedByBreaker",
+    "batchPausedByBreaker",
+  ]);
+
+  system.model.setResponses([untilAborted]);
+  expect(await client.batches.resume({ id: batch.id })).toMatchObject({ status: "active" });
+  await untilStatus(client, second, "running");
+  expect(await client.jobs.get({ id: third })).toMatchObject({ blockedBy: "batchCanary" });
+  const late = await client.batches.addJobs({ id: batch.id, jobs: [jobNamed("4")] });
+  expect(late.jobs[0]?.job.blockedBy).toBe("batchCanary");
+
+  await client.batches.cancel({ id: batch.id });
+  await untilBatchStatus(client, batch.id, "cancelled");
+});
+
+test("outside a Canary, the breaker pauses the Batch when more than maxFailurePercent of its jobs ended since have failed, each job counted once", async () => {
+  const client = await system.clientWithNewJobsKey();
+  const batch = await client.batches.create({
+    agent: AGENT,
+    breaker: { canary: 0, maxFailurePercent: 50 },
+  });
+  /** Adds the job `customId`, whose agent makes `responses`, and waits for it to end `status`. */
+  async function run(
+    customId: string,
+    responses: Parameters<typeof system.model.setResponses>[0],
+    status: string,
+  ) {
+    system.model.setResponses(responses);
+    const [added] = (await client.batches.addJobs({ id: batch.id, jobs: [jobNamed(customId)] }))
+      .jobs;
+    if (!added) throw new Error("The add answered without the job");
+    await untilStatus(client, added.job.id, status);
+    return added.job.id;
+  }
+
+  await run("1", [callTool("submit_result", { value: 1 })], "succeeded");
+  // One of two failed: not more than half.
+  const failed = await run("2", [reply("I cannot.")], "failed");
+  // Its resume withdraws its failure, so failing again leaves one of two.
+  system.model.setResponses([reply("I still cannot.")]);
+  await client.jobs.resume({ id: failed });
+  await untilStatus(client, failed, "failed");
+  expect(await client.batches.get({ id: batch.id })).toMatchObject({ status: "active" });
+
+  // Two of three.
+  await run("3", [reply("I cannot either.")], "failed");
+  await untilBatchStatus(client, batch.id, "paused");
+  expect(await client.batches.get({ id: batch.id })).toMatchObject({ pausedBy: "breaker" });
+  await client.batches.cancel({ id: batch.id });
+}, 20_000);
+
+test("a caller's pause keeps the breaker counting, and the caller's resume after it tripped runs a new Canary first", async () => {
+  const client = await system.clientWithNewJobsKey();
+  const batch = await client.batches.create({
+    agent: AGENT,
+    breaker: { canary: 1, maxFailurePercent: 100 },
+  });
+  const { promise: failing, resolve: fail } = Promise.withResolvers<void>();
+  system.model.setResponses([
+    async () => {
+      await failing;
+      return reply("I cannot.");
+    },
+  ]);
+  const [first] = (await client.batches.addJobs({ id: batch.id, jobs: [jobNamed("1")] })).jobs;
+  if (!first) throw new Error("The add answered without the job");
+  await untilStatus(client, first.job.id, "running");
+
+  await client.batches.pause({ id: batch.id });
+  fail();
+  await untilStatus(client, first.job.id, "failed");
+  expect(await client.batches.get({ id: batch.id })).toMatchObject({
+    status: "paused",
+    pausedBy: "caller",
+  });
+  const { jobs } = await client.batches.addJobs({
+    id: batch.id,
+    jobs: [jobNamed("2"), jobNamed("3")],
+  });
+  const [second, third] = jobs.map(({ job }) => job.id);
+  if (!second || !third) throw new Error("The add answered without the jobs");
+
+  system.model.setResponses([untilAborted]);
+  await client.batches.resume({ id: batch.id });
+  await untilStatus(client, second, "running");
+  expect(await client.jobs.get({ id: third })).toMatchObject({ blockedBy: "batchCanary" });
+
+  await client.batches.cancel({ id: batch.id });
+  await untilBatchStatus(client, batch.id, "cancelled");
+});
+
+test("a Batch's summary counts its jobs by status and adds up their cost, those deleted left out", async () => {
   system.model.setResponses([
     callTool("submit_result", { value: 1 }),
     callTool("submit_result", { value: 2 }),
   ]);
   const client = await system.clientWithNewJobsKey();
-  const { batch, jobs } = await client.batches.create({
-    failFast: false,
-    jobs: [job("1"), job("2")],
+  const batch = await client.batches.create({ agent: AGENT, breaker: false });
+  const { jobs } = await client.batches.addJobs({
+    id: batch.id,
+    jobs: [jobNamed("1"), jobNamed("2")],
   });
-  await untilBatchStatus(client, batch.id, "ended");
-  const members = await client.jobs.list({ batchId: batch.id });
-  const costs = members.jobs.map((listed) => listed.usage.cost.totalUsd);
+  await expect
+    .poll(async () => (await client.batches.get({ id: batch.id })).jobCounts.succeeded, {
+      timeout: 15_000,
+    })
+    .toBe(2);
+  const listed = await client.jobs.list({ batchId: batch.id });
+  const costs = new Map(listed.jobs.map((each) => [each.id, each.usage.cost.totalUsd]));
   const ended = await client.batches.get({ id: batch.id });
-  expect(ended.jobCounts).toMatchObject({ succeeded: 2, deleted: 0 });
   expect(ended.usage.cost.totalUsd).toBeCloseTo(
-    costs.reduce((sum, cost) => sum + cost, 0),
+    [...costs.values()].reduce((sum, cost) => sum + cost, 0),
     10,
   );
   expect(ended.usage.cost.totalUsd).toBeGreaterThan(0);
 
-  const [first] = jobs;
-  if (!first || !("job" in first)) throw new Error("The first job was not created");
-  await client.jobs.delete({ id: first.job.id });
+  const [deleted, kept] = jobs.map(({ job }) => job.id);
+  if (!deleted || !kept) throw new Error("The add answered without the jobs");
+  await client.jobs.delete({ id: deleted });
   const afterDelete = await client.batches.get({ id: batch.id });
-  expect(afterDelete.jobCounts).toMatchObject({ succeeded: 1, deleted: 1 });
-  expect(afterDelete.usage).toEqual(ended.usage);
+  expect(afterDelete.jobCounts).toMatchObject({ succeeded: 1 });
+  expect(afterDelete.usage.cost.totalUsd).toBeCloseTo(costs.get(kept) ?? Number.NaN, 10);
 });
 
-test("cancelling a Batch waits for the Runners of its running members, shown as its pendingControl", async () => {
+test("cancelling a Batch waits for the Runners of its running jobs, shown as its pendingControl, and then resumes none of them", async () => {
   system.model.setResponses([untilAborted]);
   const client = await system.clientWithNewJobsKey();
-  const { batch, jobs } = await client.batches.create({ failFast: false, jobs: [job("1")] });
-  const [member] = jobs;
-  if (!member || !("job" in member)) throw new Error("The job was not created");
-  await untilStatus(client, member.job.id, "running");
+  const batch = await client.batches.create({ agent: AGENT, breaker: false });
+  const [added] = (await client.batches.addJobs({ id: batch.id, jobs: [jobNamed("1")] })).jobs;
+  if (!added) throw new Error("The add answered without the job");
+  await untilStatus(client, added.job.id, "running");
 
   expect(await client.batches.cancel({ id: batch.id })).toMatchObject({
-    status: "inProgress",
+    status: "active",
     pendingControl: { type: "cancel", requestedAt: expect.any(Date) },
   });
   await untilBatchStatus(client, batch.id, "cancelled");
   expect(await client.batches.get({ id: batch.id })).not.toHaveProperty("pendingControl");
+  await expect(client.jobs.resume({ id: added.job.id })).rejects.toMatchObject({
+    code: "CONFLICT",
+  });
 });

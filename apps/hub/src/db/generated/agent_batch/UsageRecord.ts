@@ -66,9 +66,9 @@ export default interface UsageRecordTable {
 
   hostDeletionOutcomeAt: ColumnType<Date | null, Date | string | null, Date | string | null>;
 
-  batchId: ColumnType<BatchId | null, BatchId | null, BatchId | null>;
+  batchId: ColumnType<BatchId, BatchId, BatchId>;
 
-  labels: ColumnType<Labels, Labels | undefined, Labels>;
+  labels: ColumnType<Labels, Labels, Labels>;
 }
 
 export type UsageRecord = Selectable<UsageRecordTable>;

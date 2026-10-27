@@ -3,17 +3,12 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 
-import {
-  createJsonRpcClient,
-  hubNotifications,
-  type JobSubmission,
-  runnerRequests,
-} from "contract";
+import { createJsonRpcClient, hubNotifications, runnerRequests } from "contract";
 import { sql } from "kysely";
 import { afterAll, assert, beforeAll, expect, inject, test } from "vite-plus/test";
 
 import { DB_SCHEMA, openDatabase } from "../src/db/database.ts";
-import { startSystem } from "./harness.ts";
+import { type OneJob, startSystem, submitJob } from "./harness.ts";
 import { callTool } from "./scripted-model.ts";
 
 // A job's Input files reach its Runner apart from the hub's answers, which name them only: the
@@ -26,10 +21,10 @@ beforeAll(() => system.start());
 afterAll(() => system.stop());
 
 const SUBMISSION = {
-  prompt: "Read the report.",
+  input: "Read the report.",
   inputFiles: {},
   resultContract: { schema: {} },
-} satisfies JobSubmission;
+} satisfies OneJob;
 
 /** Text of more than two chunks, with characters of several bytes across the chunks' boundaries. */
 const LARGE = "Grüße, 世界! ".repeat(150_000);
@@ -52,7 +47,7 @@ async function connectProtocolRunner() {
 
 test("a sync names a job's Input files, and only the Runner the job is placed on reads them, a chunk at a time", async () => {
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit({
+  const { id } = await submitJob(client, {
     ...SUBMISSION,
     inputFiles: { "report.txt": { content: LARGE }, "empty.txt": { content: "" } },
   });
@@ -104,11 +99,11 @@ test("a sync names a job's Input files, and only the Runner the job is placed on
 test("deleting a job deletes the content of its Input files that no other job uses", async () => {
   const client = await system.clientWithNewJobsKey();
   const shared = { content: "Shared between both jobs." };
-  const first = await client.jobs.submit({
+  const first = await submitJob(client, {
     ...SUBMISSION,
     inputFiles: { "shared.txt": shared, "own.txt": { content: "Only the first job's." } },
   });
-  const second = await client.jobs.submit({ ...SUBMISSION, inputFiles: { "copy.txt": shared } });
+  const second = await submitJob(client, { ...SUBMISSION, inputFiles: { "copy.txt": shared } });
   // No API shows blobs, which the hub keeps once however many jobs use them.
   const all = [sha256(shared.content), sha256("Only the first job's.")].toSorted();
   await using db = openDatabase(inject("databaseUrl"));
@@ -138,7 +133,7 @@ test("the Runner puts a job's Input files in its Workspace as they were submitte
   const client = await system.clientWithNewJobsKey();
   await system.startRunner();
   try {
-    const { id } = await client.jobs.submit({
+    const { id } = await submitJob(client, {
       ...SUBMISSION,
       inputFiles: { "report.txt": { content: LARGE }, "empty.txt": { content: "" } },
     });
@@ -156,7 +151,7 @@ test("the Runner puts a job's Input files in its Workspace as they were submitte
 
 test("a job whose Input file does not arrive as it was listed fails, naming the file", async () => {
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit({
+  const { id } = await submitJob(client, {
     ...SUBMISSION,
     inputFiles: { "broken.txt": { content: "Will not survive." } },
   });

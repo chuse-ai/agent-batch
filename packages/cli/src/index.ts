@@ -12,11 +12,12 @@ import {
 import { getOpenAPIMeta } from "@orpc/openapi";
 import { getDotPath } from "@standard-schema/utils";
 import {
+  agentSchema,
   apiContract,
+  batchCreationSchema,
   createProblemDetailsLink,
   FINAL_JOB_STATUSES,
   getAccess,
-  batchCreationSchema,
   jobRefSchema,
   jobSubmissionSchema,
   problemOf,
@@ -28,9 +29,9 @@ import { createCli, os } from "trpc-cli";
 import * as z from "zod/mini";
 
 // The `agent-batch` command: one command per call of the hub's public API that an API key can
-// make, derived from the contract, so the commands cannot drift from the API, plus `jobs wait`. Each
-// prints the API's JSON on stdout; an error from the hub prints its Problem Details on stderr and
-// exits non-zero.
+// make, derived from the contract, so the commands cannot drift from the API, plus `jobs submit` and
+// `jobs wait`. Each prints the API's JSON on stdout; an error from the hub prints its Problem
+// Details on stderr and exits non-zero.
 
 type ApiClient = ContractRouterClient<typeof apiContract>;
 
@@ -234,78 +235,104 @@ function commandsOf(router: object, path: readonly string[] = []): Commands {
 }
 
 /**
- * `jobs submit`: retried on a transient failure with one idempotency key, so a retry never creates
- * a second job: the caller's, or one made once for this run of the command, which is printed on
- * stderr before anything is sent.
+ * `jobs submit`: one job, as a Batch of one without a failure breaker, which means nothing for one
+ * job and would leave the Batch paused by its failure. The command creates the Batch and adds the
+ * job, each call retried on a transient failure under one custom ID, so a retry never creates a
+ * second Batch or job: the caller's, or one made once for this run of the command, which is printed
+ * on stderr before anything is sent. The custom ID names both the Batch and its job.
  */
 function submitCommand() {
-  // trpc-cli reads a schema registered with an id, which Zod's JSON Schema gives as a reference, as
-  // one `--json` input (mmkal/trpc-cli#233); a copy of its fields gets a flag for each. Zod's
-  // `safeExtend` would keep checks of the object itself, but its type here loses the fields'; the
-  // submission has none.
+  // Zod's `safeExtend` would keep checks of the object itself, but its type here loses the fields';
+  // the submission has none.
+  const { customId, ...job } = jobSubmissionSchema.shape;
   return os
     .meta({
-      description: getOpenAPIMeta(apiContract.jobs.submit)?.description,
+      description:
+        "Submits one job and prints it: creates a Batch of one for it, running `agent`, without a failure breaker, and adds the job. Retrying with the same `customId` returns the Batch and job already created, so a command that cannot tell whether the job was accepted can be run again to find out.",
+      // The command takes its input as JSON only: a flag per field would include the job's `--input`,
+      // which `readInput` reads as the file holding the whole input before trpc-cli sees it.
+      jsonInput: "always",
       // `--input` is read before trpc-cli parses the command line, so its help shows it only here.
       examples: [
         "agent-batch jobs submit --input job.json",
         "agent-batch jobs submit --input - < job.json",
       ],
     })
-    .input(z.object(jobSubmissionSchema.shape))
+    .input(
+      z.object({
+        customId: z.optional(
+          customId.check(
+            z.describe(
+              "Your own ID for the job and its Batch of one; one is made for you when left out. Submitting again with the same `customId` and the same job returns the job already accepted, and with a different job is refused.",
+            ),
+          ),
+        ),
+        agent: agentSchema,
+        ...job,
+      }),
+    )
     .handler(({ input }) =>
       runCommand(
         Effect.gen(function* () {
           const client = yield* apiClient;
-          const idempotencyKey = input.idempotencyKey ?? crypto.randomUUID();
-          if (input.idempotencyKey === undefined) {
+          const { agent, ...given } = input;
+          const id = input.customId ?? crypto.randomUUID();
+          if (input.customId === undefined) {
             // Before anything is sent, so that a command stopped or killed meanwhile has told it.
             yield* Effect.sync(() =>
               process.stderr.write(
-                `Submitting with idempotency key ${idempotencyKey}: if this command cannot tell whether the job was accepted, submit it again with this key, as idempotencyKey in its JSON, or as --idempotency-key when giving its fields as flags, to find out.\n`,
+                `Submitting with custom ID ${id}: if this command cannot tell whether the job was accepted, submit it again with this ID, as customId in its JSON, to find out.\n`,
               ),
             );
           }
-          const submitted = yield* hubCall(() =>
-            client.jobs.submit({ ...input, idempotencyKey }),
+          const batch = yield* hubCall(() =>
+            client.batches.create({ customId: id, agent, breaker: false }),
           ).pipe(Effect.retry(retryTransient));
-          yield* printStep(submitted);
+          const added = yield* hubCall(() =>
+            client.batches.addJobs({ id: batch.id, jobs: [{ ...given, customId: id }] }),
+          ).pipe(Effect.retry(retryTransient));
+          yield* printStep(added.jobs[0]?.job);
         }),
       ),
     );
 }
 
 /**
- * `batches create`: retried on a transient failure with one idempotency key, as `jobs submit` is,
- * so a retry never creates a second Batch, and submits the Batch's jobs again only to find them
- * there.
+ * `batches create`: the contract's call, retried on a transient failure under one custom ID, so a
+ * retry never creates a second Batch: the caller's, or one made once for this run of the command,
+ * which is printed on stderr before anything is sent.
  */
 function createBatchCommand() {
-  return os
-    .meta({
-      description: getOpenAPIMeta(apiContract.batches.create)?.description,
-      examples: ["agent-batch batches create --input batch.json"],
-    })
-    .input(z.object(batchCreationSchema.shape))
-    .handler(({ input }) =>
-      runCommand(
-        Effect.gen(function* () {
-          const client = yield* apiClient;
-          const idempotencyKey = input.idempotencyKey ?? crypto.randomUUID();
-          if (input.idempotencyKey === undefined) {
-            yield* Effect.sync(() =>
-              process.stderr.write(
-                `Creating with idempotency key ${idempotencyKey}: if this command cannot tell whether the Batch was created, create it again with this key, as idempotencyKey in its JSON, to find out.\n`,
-              ),
-            );
-          }
-          const created = yield* hubCall(() =>
-            client.batches.create({ ...input, idempotencyKey }),
-          ).pipe(Effect.retry(retryTransient));
-          yield* printStep(created);
-        }),
-      ),
-    );
+  return (
+    os
+      .meta({
+        description: getOpenAPIMeta(apiContract.batches.create)?.description,
+        examples: ["agent-batch batches create --input batch.json"],
+      })
+      // A copy of the creation's fields, each with a flag: trpc-cli reads a schema registered with an
+      // id, which Zod's JSON Schema gives as a reference, as one `--json` input (mmkal/trpc-cli#233).
+      .input(z.object(batchCreationSchema.shape))
+      .handler(({ input }) =>
+        runCommand(
+          Effect.gen(function* () {
+            const client = yield* apiClient;
+            const customId = input.customId ?? crypto.randomUUID();
+            if (input.customId === undefined) {
+              // Before anything is sent, so that a command stopped or killed meanwhile has told it.
+              yield* Effect.sync(() =>
+                process.stderr.write(
+                  `Creating with custom ID ${customId}: if this command cannot tell whether the Batch was created, create it again with this ID, as customId in its JSON, to find out.\n`,
+                ),
+              );
+            }
+            const created = yield* hubCall(() =>
+              client.batches.create({ ...input, customId }),
+            ).pipe(Effect.retry(retryTransient));
+            yield* printStep(created);
+          }),
+        ),
+      )
+  );
 }
 
 /**
@@ -360,8 +387,8 @@ export function agentBatchCli(version: string) {
     // only the hub's contract, which is oRPC 2's.
     router: os.router({
       ...commands,
-      jobs: { ...commands["jobs"], submit: submitCommand(), wait: waitCommand() },
       batches: { ...commands["batches"], create: createBatchCommand() },
+      jobs: { submit: submitCommand(), ...commands["jobs"], wait: waitCommand() },
     }),
   });
 }

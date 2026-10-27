@@ -1,14 +1,8 @@
-import {
-  createJsonRpcClient,
-  hubNotifications,
-  JOB_SUCCEEDED,
-  type JobSubmission,
-  runnerRequests,
-} from "contract";
+import { createJsonRpcClient, hubNotifications, JOB_SUCCEEDED, runnerRequests } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 import type WebSocket from "ws";
 
-import { startSystem } from "./harness.ts";
+import { type OneJob, startSystem, submitJob } from "./harness.ts";
 
 // A Runner's report carries every job it holds, so the hub reads each job's on its own: one it
 // cannot apply is refused alone, and the Runner's other jobs keep reporting. A failure the job's
@@ -21,10 +15,10 @@ beforeAll(() => system.start());
 afterAll(() => system.stop());
 
 const SUBMISSION = {
-  prompt: "Count to three.",
+  input: "Count to three.",
   inputFiles: {},
   resultContract: { schema: { type: "integer" } },
-} satisfies JobSubmission;
+} satisfies OneJob;
 
 /** A Runner's own entry, first in its job's journal. */
 function entry(kind: string, data: unknown) {
@@ -62,8 +56,8 @@ test.each([
 ])("a $problem refuses only that job's report", async ({ depth }) => {
   const client = await system.clientWithNewJobsKey();
   const result = JSON.parse('{"child":'.repeat(64) + "0" + "}".repeat(64));
-  const good = await client.jobs.submit({ ...SUBMISSION, resultContract: { schema: {} } });
-  const bad = await client.jobs.submit(SUBMISSION);
+  const good = await submitJob(client, { ...SUBMISSION, resultContract: { schema: {} } });
+  const bad = await submitJob(client, SUBMISSION);
   const { socket } = await system.connectRunner();
   const runner = protocolClient(socket, depth);
 
@@ -125,7 +119,7 @@ test.each([
 
 test("a failure the job's journal did not record fails the job with its reason and message", async () => {
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
   const { socket } = await system.connectRunner();
   const runner = protocolClient(socket, undefined);
   const { runs } = await runner.request("sync", { held: [], free: 1 }, 10_000);

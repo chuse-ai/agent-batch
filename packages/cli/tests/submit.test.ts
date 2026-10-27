@@ -8,19 +8,38 @@ import * as z from "zod/mini";
 
 import { runCommand } from "./run-command.ts";
 
-// `jobs submit` retries a submission that got no answer with the key it was first sent with, so the
-// hub accepts the job at most once; the hub's own tests check that one key makes one job.
+// `jobs submit` creates a Batch of one and adds its job under one custom ID, and retries a call that
+// got no answer with that ID, so the hub accepts the Batch and the job at most once; the hub's own
+// tests check that one custom ID makes one Batch and one job.
 
 const BIN = path.join(import.meta.dirname, "../src/bin.ts");
 
-test("jobs submit retries a submission whose connection dropped with the key it printed", async () => {
-  const keys: unknown[] = [];
-  // Reads each submission, then drops its connection without answering.
-  const hub = createServer(async (request) => {
-    keys.push(
-      z.parse(z.object({ idempotencyKey: z.string() }), JSON.parse(await text(request)))
-        .idempotencyKey,
-    );
+test("jobs submit retries an add whose connection dropped with the custom ID it printed and created the Batch with", async () => {
+  const batchId = crypto.randomUUID();
+  const created: unknown[] = [];
+  const added: unknown[] = [];
+  // Answers the Batch's creation, then reads each add and drops its connection without answering.
+  const hub = createServer(async (request, response) => {
+    const body: unknown = JSON.parse(await text(request));
+    if (request.url === "/batches") {
+      created.push(z.parse(z.object({ customId: z.string() }), body).customId);
+      response.writeHead(201, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          id: batchId,
+          createdAt: new Date().toISOString(),
+          status: "active",
+          labels: {},
+          breaker: false,
+          jobCounts: { queued: 0, running: 0, paused: 0, succeeded: 0, failed: 0, cancelled: 0 },
+          usage: { totalTokens: 0, cost: { totalUsd: 0 } },
+        }),
+      );
+      return;
+    }
+    expect(request.url).toBe(`/batches/${batchId}/jobs`);
+    const { jobs } = z.parse(z.object({ jobs: z.array(z.object({ customId: z.string() })) }), body);
+    added.push(...jobs.map((job) => job.customId));
     request.socket.destroy();
   });
   hub.on("error", () => {});
@@ -36,10 +55,11 @@ test("jobs submit retries a submission whose connection dropped with the key it 
       BIN,
       "jobs",
       "submit",
-      "--prompt",
-      "Count to ten.",
-      "--result-contract",
-      '{"schema":{"type":"integer"}}',
+      "--json",
+      JSON.stringify({
+        agent: { resultContract: { schema: { type: "integer" } } },
+        input: "Count to ten.",
+      }),
     ],
     {
       env: { AGENT_BATCH_URL: `http://127.0.0.1:${port}`, AGENT_BATCH_API_KEY: "key" },
@@ -47,8 +67,9 @@ test("jobs submit retries a submission whose connection dropped with the key it 
     },
   );
 
-  expect(keys).toHaveLength(3);
-  expect(new Set(keys).size).toBe(1);
+  expect(created).toHaveLength(1);
+  expect(added).toHaveLength(3);
+  expect(new Set([...created, ...added]).size).toBe(1);
   expect(exitCode).toBe(1);
-  expect(stderr).toContain(`Submitting with idempotency key ${String(keys[0])}`);
+  expect(stderr).toContain(`Submitting with custom ID ${String(created[0])}`);
 });

@@ -3,14 +3,15 @@ import { openapi } from "@orpc/openapi";
 import * as z from "zod/mini";
 
 import {
+  customIdSchema,
   inputFilesSchema,
+  inputSchema,
+  instructionsSchema,
   jobIdSchema,
   jobRefSchema,
-  modelBudgetUsdSchema,
   labelsSchema,
+  modelBudgetUsdSchema,
   resultContractSchema,
-  promptSchema,
-  textSchema,
   runTimeoutSecondsSchema,
 } from "./job.ts";
 import { api, byKey, byKeyOrMember, byMember, forOrganization, NotFound } from "./procedure.ts";
@@ -123,18 +124,20 @@ const jobBaseSchema = z.object({
    * without its content, and as not found once they are gone.
    */
   deletedAt: z.optional(z.date()),
+  /** The job's Batch. Absent once the job is deleted, as its content is. */
+  batchId: z.optional(z.uuid()),
+  /** The caller's own ID for the job, unique in its Batch. Absent once the job is deleted. */
+  customId: z.optional(z.string()),
   /** The job's labels, its Batch's included. Absent once the job is deleted, as its content is. */
   labels: z.optional(labelsSchema),
-  /** The job's Batch, for a member of one. Absent once the job is deleted, as its content is. */
-  batchId: z.optional(z.uuid()),
-  /** The member's key in its Batch, for a member of one. Absent once the job is deleted. */
-  key: z.optional(z.string()),
   /**
-   * Why a queued job waits beside capacity, present only while it does: its Batch is paused by a
-   * caller (`batchPaused`) or by its failure breaker (`failFast`), or its Batch's Canary still
-   * runs (`canary`). New reasons may be added.
+   * What keeps a queued job from being sent to a Runner, to start or to carry on after a resume,
+   * present only while something does: its Batch paused by a caller (`batchPausedByCaller`) or by
+   * its failure breaker (`batchPausedByBreaker`), or its Batch's Canary still running
+   * (`batchCanary`). A block changes no status: the job stays `queued`, and is sent once nothing
+   * blocks it and a Runner has room. New values may be added.
    */
-  waitingFor: z.optional(z.enum(["batchPaused", "failFast", "canary"])),
+  blockedBy: z.optional(z.enum(["batchPausedByCaller", "batchPausedByBreaker", "batchCanary"])),
 });
 
 /**
@@ -159,161 +162,166 @@ export const jobSchema = z
   .register(z.globalRegistry, { id: "Job" });
 export type Job = z.infer<typeof jobSchema>;
 
-/** A job as a caller submits it. */
-export const jobSubmissionSchema = z
+/** What keeps a queued job from being sent to a Runner (`Job["blockedBy"]`). */
+export type BlockedBy = NonNullable<Job["blockedBy"]>;
+
+/**
+ * An agent as a Batch's creation gives it: what every job of the Batch runs, each on its own input.
+ * It is set once, as the Canary tests it.
+ */
+export const agentSchema = z
   .object({
-    prompt: promptSchema.check(z.describe("What the agent is asked to do.")),
-    // Defaults to none, so a submission without them is the same job as one with an empty list.
-    inputFiles: z._default(
-      inputFilesSchema.check(
+    instructions: z.optional(
+      instructionsSchema.check(
         z.describe(
-          "Files the agent finds in its Workspace's `inputs/` folder, by name; none by default.",
+          "What the agent is told for every job, after the Runner's own instructions and before the job's `input`; none by default.",
         ),
       ),
-      {},
     ),
     resultContract: resultContractSchema.check(
-      z.describe("What the job's result must be: `schema`, a JSON Schema the result must match."),
-    ),
-    idempotencyKey: z.optional(
-      textSchema.check(
-        z.minLength(1),
-        z.maxLength(255),
-        z.describe(
-          "Makes submitting safe to retry: submitting again with the same key and the same job returns the job already accepted, and with a different job is refused.",
-        ),
-      ),
+      z.describe("What each job's result must be: `schema`, a JSON Schema the result must match."),
     ),
     runTimeoutSeconds: z.optional(
       runTimeoutSecondsSchema.check(
         z.describe(
-          "How long each run of the job on a Runner may work, in seconds; the hub's default when left out, and refused above its maximum.",
+          "How long each run of a job on a Runner may work, in seconds; the hub's default when left out, and refused above its maximum.",
         ),
       ),
     ),
     modelBudgetUsd: z.optional(
       modelBudgetUsdSchema.check(
         z.describe(
-          "The most the job's model calls may cost over its whole life, in US dollars; the hub's default when left out, and refused above its maximum.",
+          "The most each job's model calls may cost over its whole life, in US dollars; the hub's default when left out, and refused above its maximum.",
         ),
       ),
     ),
-    labels: z.optional(
-      labelsSchema.check(
+    // Defaults to none, so an agent without them is the same agent as one with an empty list.
+    inputFiles: z._default(
+      inputFilesSchema.check(
         z.describe(
-          'Labels to find the job, group it and attribute its cost by, by key, such as `{ "customer": "acme" }`; none by default. Keys and values follow Kubernetes\'s label syntax.',
+          "Files every job's agent finds in its Workspace's `inputs/` folder, by name, beside the job's own; none by default.",
         ),
       ),
+      {},
     ),
   })
-  .register(z.globalRegistry, { id: "JobSubmission" });
-export type JobSubmission = z.infer<typeof jobSubmissionSchema>;
+  .register(z.globalRegistry, { id: "Agent" });
+export type Agent = z.infer<typeof agentSchema>;
 
-/**
- * A job of a Batch as a caller submits it: a job's submission, named by a key unique in its Batch
- * rather than by an idempotency key.
- */
-export const batchJobSubmissionSchema = z
-  .extend(z.omit(jobSubmissionSchema, { idempotencyKey: true }), {
-    key: textSchema.check(
-      z.minLength(1),
-      z.maxLength(255),
-      z.describe(
-        "The job's name in its Batch, unique there: submitting it again with the same content returns the job already accepted, and with different content is refused, so a whole Batch can be submitted again to add only the jobs it lacks.",
-      ),
-    ),
-  })
-  .register(z.globalRegistry, { id: "BatchJobSubmission" });
-export type BatchJobSubmission = z.infer<typeof batchJobSubmissionSchema>;
+/** The failure breaker's defaults: a Canary of 5 jobs, then at most 10% of jobs failed. */
+export const BREAKER_DEFAULTS = { canary: 5, maxFailurePercent: 10 } as const;
 
-/** The most jobs one request submits into a Batch. */
-export const MAX_BATCH_JOBS_PER_REQUEST = 100;
+/** How many jobs each Canary holds; 0 for none. */
+const canarySchema = z.int32().check(z.nonnegative());
+/** The share of failed jobs among those ended since the Canary began, as a percentage, past which the Batch pauses. */
+const maxFailurePercentSchema = z.number().check(z.minimum(0), z.maximum(100));
 
-const batchJobsSchema = z
-  .array(batchJobSubmissionSchema)
-  .check(
-    z.maxLength(MAX_BATCH_JOBS_PER_REQUEST),
-    z.describe(
-      `The jobs to submit into the Batch, at most ${MAX_BATCH_JOBS_PER_REQUEST} per request; a larger Batch is submitted over several.`,
-    ),
-  );
-
-/** The failure breaker's defaults: a Canary of 5 jobs, and a tolerance of 25% failed. */
-export const FAIL_FAST_DEFAULTS = { canary: 5, tolerance: 25 } as const;
-
-/** A Batch's failure breaker, as the hub reports it: off, or its Canary and tolerance. */
-const failFastSchema = z.union([
+/** A Batch's failure breaker, as the hub reports it: off, or its settings. */
+const breakerSchema = z.union([
   z.literal(false),
-  z.object({
-    /** How many of the Batch's first jobs form its Canary, which runs before the rest are released. */
-    canary: z.int32().check(z.positive()),
-    /** The share of failed jobs among finished ones, as a percentage, past which the Batch pauses. */
-    tolerance: z.number().check(z.nonnegative(), z.lt(100)),
-  }),
+  z.object({ canary: canarySchema, maxFailurePercent: maxFailurePercentSchema }),
 ]);
 
 /** A Batch as a caller creates it. */
 export const batchCreationSchema = z
   .object({
-    idempotencyKey: z.optional(
-      textSchema.check(
-        z.minLength(1),
-        z.maxLength(255),
+    customId: z.optional(
+      customIdSchema.check(
         z.describe(
-          "Makes creating safe to retry: creating again with the same key and the same `labels` and `failFast` returns the Batch already created, and submits its `jobs` into it as any submission does; with a different `labels` or `failFast` it is refused.",
+          "Your own ID for the Batch, unique in the Organization; none by default. Creating a Batch again with the same `customId` and the same `agent`, `labels` and `breaker` returns the Batch already created, so a creation can be retried safely; with any of them different it is refused. A new Batch needs a new ID.",
         ),
       ),
     ),
+    agent: agentSchema,
     labels: z._default(
       labelsSchema.check(
         z.describe(
-          "Labels every job of the Batch gets, beside its own, which win where both name a key; none by default.",
+          "Labels every job of the Batch gets, beside its own, which win where both name a key; none by default. Keys follow Kubernetes's label key syntax; values are any text of at most 256 characters, kept exactly as given.",
         ),
       ),
       {},
     ),
-    failFast: z
+    breaker: z
       ._default(
         z.union([
           z.boolean(),
           z.object({
-            canary: z.optional(z.int32().check(z.positive())),
-            tolerance: z.optional(z.number().check(z.nonnegative(), z.lt(100))),
+            canary: z.optional(canarySchema),
+            maxFailurePercent: z.optional(maxFailurePercentSchema),
           }),
         ]),
         true,
       )
       .check(
         z.describe(
-          "The failure breaker, which catches a flaw every job shares after a few jobs instead of after all of them. The Batch's first `canary` jobs (5 by default), its Canary, run before the rest are released, and the Batch pauses once at least two of its finished jobs failed and their share among them is above `tolerance` percent (25 by default). A job that a limit stopped counts as failed; a cancelled job, or one its Runner's removal ended, does not count. `true` by default; `false` turns it off.",
+          "The failure breaker, which pauses the Batch when a flaw its jobs share shows, after a few jobs instead of after all of them. The Batch's first `canary` jobs (5 by default), its Canary, run before the rest are released, and any of them failing pauses the Batch. After that, it pauses when more than `maxFailurePercent` (10 by default) of the jobs ended since the Canary began have failed. A job counts once, by its latest end; a job that a limit stopped counts as failed, while a cancelled job, or one its Runner's removal ended, does not count. Resuming a pause the breaker made starts a new Canary of the next `canary` jobs, those added later included. `canary: 0` releases every job at once, and the percentage then judges from the first job to end, so one early failure still pauses the Batch; `maxFailurePercent: 100` keeps the Canary alone. `true` by default, for the defaults; `false` turns the breaker off.",
         ),
       ),
-    jobs: z._default(batchJobsSchema, []),
   })
   .register(z.globalRegistry, { id: "BatchCreation" });
 export type BatchCreation = z.infer<typeof batchCreationSchema>;
 
-/** Where a Batch is: some members unfinished, paused, every member finished, or cancelled. */
-export const batchStatusSchema = z.enum(["inProgress", "paused", "ended", "cancelled"]);
+/** A job as a caller adds it to a Batch, whose agent it runs. */
+export const jobSubmissionSchema = z
+  .object({
+    customId: customIdSchema.check(
+      z.describe(
+        "Your own ID for the job, unique in its Batch. Adding a job again with the same `customId` and the same content returns the job already added, so an add can be retried safely and a whole Batch added again to add only the jobs it lacks; with other content it is refused. A new job needs a new ID.",
+      ),
+    ),
+    input: inputSchema.check(
+      z.describe(
+        "What the job gives the Batch's agent to work on: the agent's first input, after its instructions.",
+      ),
+    ),
+    // Defaults to none, so a job without them is the same job as one with an empty list.
+    inputFiles: z._default(
+      inputFilesSchema.check(
+        z.describe(
+          "Files the job's agent finds in its Workspace's `inputs/` folder, by name, beside the agent's own; none by default. A name the agent's files already use is refused.",
+        ),
+      ),
+      {},
+    ),
+    labels: z._default(
+      labelsSchema.check(
+        z.describe(
+          'Labels to find the job, group it and attribute its cost by, by key, such as `{ "customer": "acme" }`, beside its Batch\'s, which they win over where both name a key; none by default. Keys follow Kubernetes\'s label key syntax; values are any text of at most 256 characters, kept exactly as given.',
+        ),
+      ),
+      {},
+    ),
+  })
+  .register(z.globalRegistry, { id: "JobSubmission" });
+export type JobSubmission = z.infer<typeof jobSubmissionSchema>;
+
+/** The most jobs one request adds to a Batch. */
+export const MAX_JOBS_PER_ADD = 100;
+
+/** Where a Batch is: releasing its jobs, paused, or cancelled. */
+export const batchStatusSchema = z.enum(["active", "paused", "cancelled"]);
 
 /** A Batch as the hub reports it. */
 export const batchSchema = z
   .object({
     id: z.uuid(),
+    /** The caller's own ID for the Batch, when it was created with one. */
+    customId: z.optional(z.string()),
     createdAt: z.date(),
     /**
-     * `inProgress` while any member is unfinished; `paused` while it is paused, whether or not any
-     * member is unfinished, since jobs submitted into it are held; `ended` once every member has
-     * ended; `cancelled` once it was cancelled and every member has ended.
+     * `active` while it releases its jobs, an empty Batch and one whose jobs have all ended included,
+     * as jobs can still be added; `paused` while it is paused, whether or not any job is unfinished,
+     * as jobs added to it are held; `cancelled` once it was cancelled and every job has ended. A
+     * Batch has no status of its own for having no unfinished job: `jobCounts` tells.
      */
     status: batchStatusSchema,
     /** Who paused the Batch, while it is paused: a caller, or its failure breaker. */
-    pausedBy: z.optional(z.enum(["caller", "failFast"])),
-    /** A cancel waiting for members' Runners to stop them, present only while it waits. */
+    pausedBy: z.optional(z.enum(["caller", "breaker"])),
+    /** A cancel waiting for its jobs' Runners to stop them, present only while it waits. */
     pendingControl: z.optional(z.object({ type: z.literal("cancel"), requestedAt: z.date() })),
     labels: labelsSchema,
-    failFast: failFastSchema,
-    /** How many of its members have each status, and how many were deleted. */
+    breaker: breakerSchema,
+    /** How many of its jobs have each status; a deleted job is not counted. */
     jobCounts: z.object({
       queued: z.int(),
       running: z.int(),
@@ -321,40 +329,34 @@ export const batchSchema = z
       succeeded: z.int(),
       failed: z.int(),
       cancelled: z.int(),
-      deleted: z.int(),
     }),
-    /** Its members' model usage, those deleted included, as each job reports its own. */
+    /**
+     * Its jobs' model usage, as each job reports its own; a deleted job's is not included, and stays
+     * in its Usage records.
+     */
     usage: z.object({ totalTokens: z.int(), cost: z.object({ totalUsd: z.number() }) }),
   })
   .register(z.globalRegistry, { id: "Batch" });
 export type Batch = z.infer<typeof batchSchema>;
 
-/** What became of each job a request submitted into a Batch, in the order of the request. */
-const batchJobOutcomeSchema = z.discriminatedUnion("outcome", [
-  z.object({
-    key: z.string(),
-    /** `created` for a job accepted now, `existing` for one the Batch already had with this key. */
-    outcome: z.enum(["created", "existing"]),
-    job: jobSchema,
-  }),
-  z.object({
-    key: z.string(),
-    outcome: z.literal("rejected"),
-    /**
-     * Why: `invalid` for a job the hub refuses, as it refuses a job submitted alone, with the
-     * `problems` found; `keyReused` for a key the Batch already has for a job with other content;
-     * `batchCancelled` for a new job in a Batch that was cancelled.
-     */
-    reason: z.enum(["invalid", "keyReused", "batchCancelled"]),
-    problems: z.optional(z.array(z.object({ message: z.string(), path: z.array(z.string()) }))),
-  }),
-]);
-
-/** A Batch with what became of each job a request submitted into it. */
-export const batchSubmissionResultSchema = z
-  .object({ batch: batchSchema, jobs: z.array(batchJobOutcomeSchema) })
-  .register(z.globalRegistry, { id: "BatchSubmissionResult" });
-export type BatchSubmissionResult = z.infer<typeof batchSubmissionResultSchema>;
+/** The jobs an add asked for, in its order, each with whether the add created it, and their Batch. */
+export const addedJobsSchema = z
+  .object({
+    batch: batchSchema,
+    jobs: z.array(
+      z.object({
+        /**
+         * Whether this add created the job: `false` for a job the Batch already had under its
+         * `customId`, as when an add whose answer was lost is retried, so work that must happen once
+         * per job is not to depend on `true`.
+         */
+        created: z.boolean(),
+        job: jobSchema,
+      }),
+    ),
+  })
+  .register(z.globalRegistry, { id: "AddedJobs" });
+export type AddedJobs = z.infer<typeof addedJobsSchema>;
 
 /** A Batch as a call names it. */
 export const batchRefSchema = z.object({ id: z.uuid().check(z.describe("The Batch's ID.")) });
@@ -407,14 +409,15 @@ export type JobEventsPage = z.infer<typeof jobEventsPageSchema>;
 /** A call the member's role does not allow, decided by the hub. */
 export const Forbidden = error("FORBIDDEN");
 /**
- * A control that cannot take effect on the job as it is, such as a resume of a job that succeeded;
- * its message says why.
+ * A control that cannot take effect on the job or Batch as it is, such as a resume of a job that
+ * succeeded, or jobs added to a cancelled Batch; its message says why.
  */
 export const ControlRefused = error("CONFLICT");
-/** A job submitted with an idempotency key the Organization already used for a different job. */
-export const IdempotencyKeyReused = error("UNPROCESSABLE_CONTENT", {
-  message: "The idempotency key was already used for a different job",
-});
+/**
+ * A Batch created, or jobs added, under a custom ID already used for one with other content; its
+ * message names each.
+ */
+export const CustomIdReused = error("UNPROCESSABLE_CONTENT");
 
 // Calls a member's role does not allow fail with `FORBIDDEN`, and invalid ones with `BAD_REQUEST`.
 // Where Better Auth decides, the hub passes its `FORBIDDEN` through, declared without a factory;
@@ -487,32 +490,49 @@ export const apiContract = {
   },
   batches: {
     create: forOrganization
+      .errors({ BAD_REQUEST: {}, [CustomIdReused.code]: CustomIdReused })
       .meta(
         openapi({
           method: "POST",
           path: "/batches",
           successStatus: 201,
           description:
-            "Creates a Batch, and submits its first `jobs` into it, as `POST /batches/{id}/jobs` does. Answers with the Batch and what became of each job.",
+            "Creates a Batch, without jobs, and answers with it: the `agent` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with `POST /batches/{id}/jobs`. The hub checks the Result contract's schema, refusing one that is invalid, describes a list or refers outside itself. A `customId` makes the creation safe to retry: the same `customId` with the same `agent`, `labels` and `breaker` answers with the Batch already created, and with any of them different is refused.",
         }),
         ...byKey({ job: ["create"] }),
       )
-      .errors({ [IdempotencyKeyReused.code]: IdempotencyKeyReused })
       .input(batchCreationSchema)
-      .output(batchSubmissionResultSchema),
-    submit: forOrganization
-      .errors({ [NotFound.code]: NotFound })
+      .output(batchSchema),
+    addJobs: forOrganization
+      .errors({
+        BAD_REQUEST: {},
+        [NotFound.code]: NotFound,
+        [ControlRefused.code]: ControlRefused,
+        [CustomIdReused.code]: CustomIdReused,
+      })
       .meta(
         openapi({
           method: "POST",
           path: "/batches/{id}/jobs",
-          description:
-            "Submits jobs into a Batch and answers with the Batch and what became of each job, in the order given. Each job is accepted or refused on its own: a job the hub refuses is reported with its problems while the rest are accepted, and a job whose key the Batch already has returns that job when its content is the same and is refused otherwise, so a whole Batch can be submitted again to add only the jobs it lacks. Jobs submitted into a paused Batch are held; into a cancelled one, new jobs are refused. A request whose shape is invalid is refused whole.",
+          description: `Adds jobs to a Batch, at most ${MAX_JOBS_PER_ADD} per request, each running the Batch's agent on its own \`input\` and files, and answers with the Batch and each job in the order given, with whether this add created it. An add is all or nothing: any problem refuses the whole request, naming every problem with its path, such as \`jobs[17].input\`: 400 when any job is invalid, then 409 when the Batch is cancelled and the add would create a job, then 422 for each \`customId\` the Batch already has for a job with other content. A job whose \`customId\` the Batch already has with the same content is returned as it is, with \`created: false\`, so an add can be retried safely, and a whole Batch added again to add only the jobs it lacks; a new job needs a new \`customId\`. Jobs added to a paused Batch wait for it.`,
         }),
         ...byKey({ job: ["create"] }),
       )
-      .input(z.object({ ...batchRefSchema.shape, jobs: batchJobsSchema }))
-      .output(batchSubmissionResultSchema),
+      .input(
+        z.object({
+          ...batchRefSchema.shape,
+          jobs: z
+            .array(jobSubmissionSchema)
+            .check(
+              z.minLength(1),
+              z.maxLength(MAX_JOBS_PER_ADD),
+              z.describe(
+                `The jobs to add, 1 to ${MAX_JOBS_PER_ADD} per request; a larger Batch is added over several.`,
+              ),
+            ),
+        }),
+      )
+      .output(addedJobsSchema),
     get: api
       .errors({ [NotFound.code]: NotFound })
       .meta(
@@ -528,7 +548,7 @@ export const apiContract = {
           method: "POST",
           path: "/batches/{id}/pause",
           description:
-            "Pauses a Batch and answers with it: its members not yet sent to a Runner, and those submitted later, are held, `queued` with `waitingFor: batchPaused`, while those already sent carry on to their own ends. Pausing a paused Batch changes nothing; a cancelled one is refused.",
+            "Pauses a Batch and answers with it. Its jobs not yet sent to a Runner, and those added later, are blocked: they stay `queued`, with `blockedBy: batchPausedByCaller`. Jobs already being sent or running carry on to their own ends, so a pause stops only the jobs not already being sent. A pause changes no job's status. Pausing a paused Batch changes nothing; a cancelled one is refused.",
         }),
         ...byKeyOrMember({ job: ["pause"] }),
       )
@@ -541,7 +561,7 @@ export const apiContract = {
           method: "POST",
           path: "/batches/{id}/resume",
           description:
-            "Resumes a paused Batch and answers with it: its held members are released, behind its Canary while that still runs. Resuming a Batch its failure breaker paused starts the breaker's count afresh; resuming one a caller paused, while the breaker's count would have paused it, leaves it paused by the breaker. A member a caller paused stays paused. Resuming a Batch that is not paused changes nothing; a cancelled one is refused.",
+            "Resumes a paused Batch and answers with it: its blocked jobs are released, behind its Canary while one runs. Resuming a pause its failure breaker made, or a caller's pause during which the breaker's rule tripped, restarts the breaker's counts and starts a new Canary of the next `canary` jobs, those added later included. A job paused by its own control stays paused. Resuming a Batch that is not paused changes nothing; a cancelled one is refused.",
         }),
         ...byKeyOrMember({ job: ["resume"] }),
       )
@@ -554,7 +574,7 @@ export const apiContract = {
           method: "POST",
           path: "/batches/{id}/cancel",
           description:
-            "Cancels a Batch and answers with it: each unfinished member is cancelled as a job's cancel does, at once where no Runner may be running it and otherwise once its Runner stops it, shown meanwhile as the Batch's `pendingControl`. The Batch is `cancelled` once every member has ended, and new jobs submitted into it are refused. Cancelling a Batch whose members have all ended, and was not paused, changes nothing.",
+            "Cancels a Batch and answers with it: each unfinished job is cancelled as a job's cancel does, at once where no Runner may be running it and otherwise once its Runner stops it, shown meanwhile as the Batch's `pendingControl`. The Batch is `cancelled` once every job has ended. A cancel is final, also for a Batch whose jobs have all ended: the Batch takes no new jobs, and none of its jobs can be resumed. Cancelling a cancelled Batch changes nothing.",
         }),
         ...byKeyOrMember({ job: ["cancel"] }),
       )
@@ -562,20 +582,6 @@ export const apiContract = {
       .output(batchSchema),
   },
   jobs: {
-    submit: forOrganization
-      .errors({ BAD_REQUEST: {}, [IdempotencyKeyReused.code]: IdempotencyKeyReused })
-      .meta(
-        openapi({
-          method: "POST",
-          path: "/jobs",
-          successStatus: 201,
-          description:
-            "Submits a job. The hub checks the Result contract's schema, refusing one that is invalid, describes a list or refers outside itself.",
-        }),
-        ...byKey({ job: ["create"] }),
-      )
-      .input(jobSubmissionSchema)
-      .output(jobSchema),
     get: api
       .errors({ [NotFound.code]: NotFound })
       .meta(
@@ -608,7 +614,7 @@ export const apiContract = {
           method: "POST",
           path: "/jobs/{id}/resume",
           description:
-            "Resumes a stopped job and answers with the job. A paused, failed or cancelled job goes back to `queued` and carries on from where it stopped, on the Runner that holds its work; one paused before it started simply starts. Resuming a job that is queued or running changes nothing, and one that gives it other limits than its own is refused: its run keeps them. A job whose pause its Runner has not yet confirmed, whose cancel waits, that succeeded, or that never started before it ended, is refused. A resume that changes the job may give it a new `runTimeoutSeconds` and `modelBudgetUsd`, and is refused when the job's model calls have cost its `modelBudgetUsd` or more, as for a job that failed with `modelBudgetExceeded`.",
+            "Resumes a stopped job and answers with the job. A paused, failed or cancelled job goes back to `queued` and carries on from where it stopped, on the Runner that holds its work; one paused before it started simply starts. Resuming a job that is queued or running changes nothing, and one that gives it other limits than its own is refused: its run keeps them. A job whose pause its Runner has not yet confirmed, whose cancel waits, that succeeded, that never started before it ended, or whose Batch is cancelled, is refused. A job resumed while its Batch is paused is `queued` and waits for the Batch. A resume that changes the job may give it a new `runTimeoutSeconds` and `modelBudgetUsd`, and is refused when the job's model calls have cost its `modelBudgetUsd` or more, as for a job that failed with `modelBudgetExceeded`.",
         }),
         ...byKeyOrMember({ job: ["resume"] }),
       )
@@ -703,7 +709,7 @@ export const apiContract = {
           method: "GET",
           path: "/jobs",
           description:
-            "Lists jobs, newest first, in pages of at most `limit`, each job without its content. Filters combine: a job is listed when it has one of the `status` values given, every label in `labels`, and the `batchId` and `key` given. Read the next page with the same filters and `after` set to the last job's `id`, while the page says `hasMore`.",
+            "Lists jobs, newest first, in pages of at most `limit`. Filters combine: a job is listed when it has one of the `status` values given, every label in `labels`, and the `batchId` and `customId` given. Read the next page with the same filters and `after` set to the last job's `id`, while the page says `hasMore`. A listed job has no `result`, failure `message` or `activity`: read the job for those.",
           // Repeated `status=…` parameters, a single one included, read as a list.
           queryStyles: { status: "array" },
         }),
@@ -726,12 +732,12 @@ export const apiContract = {
               ),
           ),
           batchId: z.optional(z.uuid().check(z.describe("The Batch the job belongs to."))),
-          key: z.optional(
+          customId: z.optional(
             z
               .string()
               .check(
                 z.describe(
-                  "The key the job was submitted with: its idempotency key, or a member's key in the Batch `batchId` names.",
+                  "The job's own `customId`, which is unique in its Batch, so without `batchId` it may match a job in each of several Batches.",
                 ),
               ),
           ),

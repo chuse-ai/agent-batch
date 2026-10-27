@@ -8,6 +8,8 @@ import type { Kysely } from "kysely";
 
 import { Db } from "./db/database.ts";
 import {
+  type BatchId,
+  BatchInputFileName,
   BlobSha256,
   type Database,
   InputFileName,
@@ -24,7 +26,8 @@ import {
 // a chunk at a time, so serving a file holds no more than a chunk on either side, and a sync's
 // answer names the files without their bytes.
 //
-// A blob no job uses is deleted with the last job that used it. A submission and a deletion lock
+// A blob no job uses is deleted with the last job that used it, unless a Batch's agent uses it; a
+// Batch keeps its agent's files, which no job's deletion locks or deletes. A submission and a deletion lock
 // their blobs in the same order, so whichever comes second sees what the first did: a submission
 // waits for the deletion and stores the blob again, and a deletion that waits for a submission
 // finds the blob used and keeps it.
@@ -106,10 +109,44 @@ export async function storeInputFiles(
   trx: Kysely<Database>,
   jobs: readonly { jobId: JobId; prepared: PreparedInputFiles }[],
 ): Promise<void> {
+  await storeBlobs(
+    trx,
+    jobs.map(({ prepared }) => prepared),
+  );
+  const rows = jobs.flatMap(({ jobId, prepared }) =>
+    prepared.files.map(({ name, blob }) => ({ jobId, name, sha256: blob.sha256 })),
+  );
+  if (rows.length > 0) await trx.insertInto("inputFile").values(rows).execute();
+}
+
+/**
+ * Stores the Input files of the Batch `batchId`'s agent, `prepared`, in the transaction `trx`, as
+ * `storeInputFiles` stores a job's: every job of the Batch gets them beside its own.
+ */
+export async function storeBatchInputFiles(
+  trx: Kysely<Database>,
+  batchId: BatchId,
+  prepared: PreparedInputFiles,
+): Promise<void> {
+  await storeBlobs(trx, [prepared]);
+  const rows = prepared.files.map(({ name, blob }) => ({
+    batchId,
+    name: BatchInputFileName(name),
+    sha256: blob.sha256,
+  }));
+  if (rows.length > 0) await trx.insertInto("batchInputFile").values(rows).execute();
+}
+
+/**
+ * Stores, in the transaction `trx`, the blobs the files in `prepared` need that the hub does not
+ * hold yet, each once however many files share it, and locks those it holds against deletion until
+ * the transaction ends, rather than writing them again.
+ */
+async function storeBlobs(trx: Kysely<Database>, prepared: readonly PreparedInputFiles[]) {
   const blobs = [
     ...new Map(
-      jobs.flatMap(({ prepared }) =>
-        prepared.files.map(({ blob }) => [blob.sha256.toString("hex"), blob] as const),
+      prepared.flatMap(({ files }) =>
+        files.map(({ blob }) => [blob.sha256.toString("hex"), blob] as const),
       ),
     ).values(),
   ].toSorted((a, b) => Buffer.compare(a.sha256, b.sha256));
@@ -152,14 +189,6 @@ export async function storeInputFiles(
     // Postgres as they are.
     if (chunks.length > 0) await trx.insertInto("uploadChunk").values(chunks).execute();
   }
-  await trx
-    .insertInto("inputFile")
-    .values(
-      jobs.flatMap(({ jobId, prepared }) =>
-        prepared.files.map(({ name, blob }) => ({ jobId, name, sha256: blob.sha256 })),
-      ),
-    )
-    .execute();
 }
 
 /**
@@ -184,9 +213,10 @@ export async function lockInputFileBlobs(
 }
 
 /**
- * Deletes the blobs at `addresses`, locked by `lockInputFileBlobs`, that no job's Input file uses
- * any longer, with their uploads and chunks. A statement of its own after the job's deletion: it
- * must see the job's files gone, and a statement sees only what statements before it did.
+ * Deletes the blobs at `addresses`, locked by `lockInputFileBlobs`, that no Input file of a job or
+ * of a Batch's agent uses any longer, with their uploads and chunks. A statement of its own after
+ * the job's deletion: it must see the job's files gone, and a statement sees only what statements
+ * before it did.
  */
 export async function deleteUnusedBlobs(
   trx: Kysely<Database>,
@@ -198,21 +228,29 @@ export async function deleteUnusedBlobs(
     .where("sha256", "=", (eb) => eb.fn.any(eb.val(addresses)))
     .where((eb) =>
       eb.not(
-        eb.exists(
-          eb
-            .selectFrom("inputFile")
-            .select("inputFile.jobId")
-            .whereRef("inputFile.sha256", "=", "blob.sha256"),
-        ),
+        eb.or([
+          eb.exists(
+            eb
+              .selectFrom("inputFile")
+              .select("inputFile.jobId")
+              .whereRef("inputFile.sha256", "=", "blob.sha256"),
+          ),
+          eb.exists(
+            eb
+              .selectFrom("batchInputFile")
+              .select("batchInputFile.batchId")
+              .whereRef("batchInputFile.sha256", "=", "blob.sha256"),
+          ),
+        ]),
       ),
     )
     .execute();
 }
 
 /**
- * Chunk `index` of the job `jobId`'s Input file `name`, one zstd frame, for the Runner `runnerId`
- * the job is placed on; nothing when there is no such chunk, file or job, or the job is not placed
- * on that Runner.
+ * Chunk `index` of the job `jobId`'s Input file `name`, its own or its Batch's agent's, one zstd
+ * frame, for the Runner `runnerId` the job is placed on; nothing when there is no such chunk, file
+ * or job, or the job is not placed on that Runner.
  */
 export function readInputFileChunk(
   runnerId: RunnerId,
@@ -223,16 +261,32 @@ export function readInputFileChunk(
   return Db.use((database) =>
     database.query((db) =>
       db
-        .selectFrom("inputFile")
-        .innerJoin("job", "job.id", "inputFile.jobId")
-        .innerJoin("upload", "upload.sha256", "inputFile.sha256")
+        .selectFrom("job")
+        // A job's file names and its Batch's never overlap, as adding a job refuses one that would.
+        .innerJoinLateral(
+          (eb) =>
+            eb
+              .selectFrom("inputFile")
+              .select("inputFile.sha256")
+              .whereRef("inputFile.jobId", "=", "job.id")
+              .where("inputFile.name", "=", name)
+              .unionAll(
+                eb
+                  .selectFrom("batchInputFile")
+                  .select("batchInputFile.sha256")
+                  .whereRef("batchInputFile.batchId", "=", "job.batchId")
+                  .where("batchInputFile.name", "=", BatchInputFileName(name)),
+              )
+              .as("file"),
+          (join) => join.onTrue(),
+        )
+        .innerJoin("upload", "upload.sha256", "file.sha256")
         .innerJoin("uploadChunk", "uploadChunk.uploadId", "upload.id")
         // A bytea crosses from Postgres as hex text, twice its size; base64 is a third larger.
         .select((eb) =>
           eb.fn<string>("encode", ["uploadChunk.bytes", eb.val("base64")]).as("bytes"),
         )
-        .where("inputFile.jobId", "=", jobId)
-        .where("inputFile.name", "=", name)
+        .where("job.id", "=", jobId)
         .where("job.runnerId", "=", runnerId)
         .where("uploadChunk.index", "=", index)
         .executeTakeFirst(),

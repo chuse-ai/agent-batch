@@ -19,6 +19,7 @@ import {
   notification,
   runnerRequests,
   type DesiredState,
+  type JobContent,
   type JobReport,
   type JobActivity,
   type JobUsage,
@@ -30,7 +31,7 @@ import { type Expression, type ExpressionBuilder, sql } from "kysely";
 import { jsonArrayFrom, jsonBuildObject } from "kysely/helpers/postgres";
 import * as z from "zod/mini";
 
-import { lockBreakerBatches, recordTrialEndsAndTrip } from "./batches.ts";
+import { lockBreakerBatches, recordBreakerEnds } from "./batches.ts";
 import { Db, DB_SCHEMA } from "./db/database.ts";
 import {
   type Database,
@@ -44,7 +45,7 @@ import {
   insertUsageRecords,
   QUEUED_OR_RUNNING,
   USAGE_COPIED_COLUMNS,
-  waitingForOf,
+  blockedByOf,
 } from "./jobs.ts";
 import { recordRunnerHello, recordRunnerSeen, SYNC_INTERVAL_MS } from "./runners.ts";
 
@@ -220,8 +221,9 @@ function jsonRows<Row extends object>(eb: ExpressionBuilder<Database, never>, ro
 }
 
 /**
- * Applies the Runner's reports in one statement of a transaction, each to its job while the reported run is
- * the job's current one on the Runner. A job's usage applies when neither total is
+ * Applies the Runner's reports in one statement of a transaction, each to its job while the
+ * reported run is the job's current one on the Runner, and counts the ends it records in their
+ * Batches' breakers. A job's usage applies when neither total is
  * smaller than the stored one, as pi's totals only grow. Its events, its position, its activity and
  * its status apply only when the report's position is the hub's, so a report repeated after a lost
  * answer changes nothing, and only while the job is queued or running, the statuses a report may
@@ -565,7 +567,7 @@ function applyReports(runnerId: RunnerId, reports: JobReport[]) {
         )
           .returning("id")
           .execute();
-        await recordTrialEndsAndTrip(
+        await recordBreakerEnds(
           db,
           recorded.map(({ id }) => id),
           batches,
@@ -603,12 +605,12 @@ function confirmDeletions(runnerId: RunnerId, deleted: string[]) {
   );
 }
 
-/** What a run of a job is sent from: the job, its run, its content, its control and its limits. */
+/** What a run of a job is sent from: the job, its run, its Batch, its input, its control and its limits. */
 const RUN_COLUMNS = [
   "id",
   "runId",
-  "prompt",
-  "resultContract",
+  "batchId",
+  "input",
   "pendingControl",
   "runTimeoutSeconds",
   "modelBudgetUsd",
@@ -670,12 +672,11 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                     runnerEb("runnerId", "=", runnerId),
                   ]),
                 )
-                // A member its Batch holds waits: for the Batch's pause, its breaker's, or its
-                // Canary. The Batch's row is read without a lock: a placement already under way
-                // when a pause commits may still send its members, as one that committed just
-                // before would have. Locking it here would wait on a Batch's cancel, which locks
-                // the members it ends before the Batch, while this holds members locked.
-                .where((batchEb) => batchEb(waitingForOf("job"), "is", null))
+                // A job its Batch blocks waits: for the Batch's pause, a caller's or its breaker's,
+                // or for its Canary. The Batch's row is read without a lock, so placement never
+                // waits on a Batch: a placement already under way when a pause commits may still
+                // send the jobs it took, as one that committed a moment before would have (ADR 0033).
+                .where((batchEb) => batchEb(blockedByOf("job"), "is", null))
                 // A removed Runner takes no job, though its socket is still open while it closes. Its
                 // row is locked, so a removal waits for this placement and then ends what it placed.
                 .where((runnerEb) =>
@@ -734,20 +735,21 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
             answer
               .selectFrom("wanted")
               .innerJoin("jobProgress", "jobProgress.jobId", "wanted.id")
+              .innerJoin("batch", "batch.id", "wanted.batchId")
               .select((eb) => [
-                "id",
-                "runId",
+                "wanted.id",
+                "wanted.runId",
                 eb.fn
-                  .coalesce(eb.cast<string>("pendingControl", "text"), eb.val("run"))
+                  .coalesce(eb.cast<string>("wanted.pendingControl", "text"), eb.val("run"))
                   .as("intent"),
                 "jobProgress.position",
-                "runTimeoutSeconds",
-                "modelBudgetUsd",
+                "wanted.runTimeoutSeconds",
+                "wanted.modelBudgetUsd",
                 eb
                   .case()
                   .when(
                     eb.or([
-                      eb("pendingControl", "is not", null),
+                      eb("wanted.pendingControl", "is not", null),
                       eb.exists(
                         eb
                           .selectFrom("held")
@@ -760,31 +762,50 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                   .then(eb.lit(null))
                   .else(
                     jsonBuildObject({
-                      prompt: eb.ref("prompt"),
-                      resultContract: eb.ref("resultContract"),
-                      // The files by name, SHA-256, size and chunk size, without their bytes, which
-                      // the Runner downloads a chunk at a time.
+                      instructions: eb.ref("batch.instructions"),
+                      input: eb.ref("wanted.input"),
+                      resultContract: eb.ref("batch.resultContract"),
+                      // The files, the agent's and the job's own, by name, SHA-256, size and chunk
+                      // size, without their bytes, which the Runner downloads a chunk at a time.
                       inputFiles: jsonArrayFrom(
                         eb
-                          .selectFrom("inputFile")
-                          .innerJoin("blob", "blob.sha256", "inputFile.sha256")
-                          .innerJoin("upload", "upload.sha256", "inputFile.sha256")
+                          .selectFrom((files) =>
+                            files
+                              .selectFrom("batchInputFile")
+                              // A name, whichever table holds it.
+                              .select((name) => [
+                                name.ref("batchInputFile.name").$castTo<string>().as("name"),
+                                "batchInputFile.sha256",
+                              ])
+                              .whereRef("batchInputFile.batchId", "=", "wanted.batchId")
+                              .unionAll(
+                                files
+                                  .selectFrom("inputFile")
+                                  .select((name) => [
+                                    name.ref("inputFile.name").$castTo<string>().as("name"),
+                                    "inputFile.sha256",
+                                  ])
+                                  .whereRef("inputFile.jobId", "=", "wanted.id"),
+                              )
+                              .as("file"),
+                          )
+                          .innerJoin("blob", "blob.sha256", "file.sha256")
+                          .innerJoin("upload", "upload.sha256", "file.sha256")
                           .select((fileEb) => [
-                            "inputFile.name",
+                            "file.name",
                             fileEb
                               .fn<string>("encode", ["blob.sha256", fileEb.val("hex")])
                               .as("sha256"),
                             "blob.originalSizeBytes",
                             "upload.chunkBytes",
-                          ])
-                          .whereRef("inputFile.jobId", "=", "wanted.id"),
+                          ]),
                       ),
                     }),
                   )
                   .end()
                   .as("job"),
               ])
-              .orderBy("id")
+              .orderBy("wanted.id")
               // A job sent to a Runner has its run, minted when it was placed or resumed.
               .$narrowType<{ runId: string }>(),
           ).as("runs"),
@@ -799,7 +820,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
           jobId: row.id,
           runId: row.runId,
           intent: z.parse(intentSchema, row.intent),
-          ...(row.job === null ? {} : { job: row.job }),
+          ...(row.job === null ? {} : { job: jobContentOf(row.job) }),
           position: row.position,
           runTimeoutSeconds: row.runTimeoutSeconds,
           modelBudgetUsd: row.modelBudgetUsd,
@@ -808,6 +829,12 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
       };
     }),
   );
+}
+
+/** A job's content as the protocol sends it: without `instructions` where its agent has none. */
+function jobContentOf(content: Omit<JobContent, "instructions"> & { instructions: string | null }) {
+  const { instructions, ...rest } = content;
+  return { ...rest, ...(instructions === null ? {} : { instructions }) } satisfies JobContent;
 }
 
 /** Answers a Runner's message: the text to send back, if any. */

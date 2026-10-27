@@ -10,7 +10,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 import { lifecycleOf } from "./entries.ts";
-import { startSystem } from "./harness.ts";
+import { startSystem, submitJob } from "./harness.ts";
 
 // A Runner can die without running any of its own cleanup, as when the kernel's out-of-memory
 // killer or `kill -9` stops it. Started again on the same data directory, it recovers its jobs from
@@ -65,8 +65,8 @@ test(
       const before = yield* startRunnerProcess(dataDir, registrationKey, "before");
 
       const { id } = yield* Effect.promise(() =>
-        client.jobs.submit({
-          prompt: "Mark the file once.",
+        submitJob(client, {
+          input: "Mark the file once.",
           resultContract: {
             schema: {
               type: "object",

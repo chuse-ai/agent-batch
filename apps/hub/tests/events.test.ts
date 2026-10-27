@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import type { JobEvent, JobSubmission } from "contract";
+import type { JobEvent } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 import { entryKinds } from "./entries.ts";
-import { type ApiClient, startSystem } from "./harness.ts";
+import { type ApiClient, type OneJob, startSystem, submitJob } from "./harness.ts";
 import { callTool, untilAborted } from "./scripted-model.ts";
 
 // How callers read a job's events: in pages after the last event they have, during and after the
@@ -19,7 +19,7 @@ beforeAll(async () => {
 afterAll(() => system.stop());
 
 const SUBMISSION = {
-  prompt: "Greet the reader.",
+  input: "Greet the reader.",
   inputFiles: {},
   resultContract: {
     schema: {
@@ -28,7 +28,7 @@ const SUBMISSION = {
       required: ["greeting"],
     },
   },
-} satisfies JobSubmission;
+} satisfies OneJob;
 
 /** An ended job's events from the start, read `limit` at a time until a page has no more. */
 async function readAll(client: ApiClient, id: string, limit: number) {
@@ -48,7 +48,7 @@ test("a finished job's events, read in pages, run from its start to its end with
     callTool("submit_result", { value: { greeting: "Hello" } }),
   ]);
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
   await expect
     .poll(async () => (await client.jobs.get({ id })).status, { timeout: 10_000 })
     .toBe("succeeded");
@@ -75,7 +75,7 @@ test("reading the events of a job the hub does not have fails with 404", async (
 test("a running job's pages say it is running", async () => {
   system.model.setResponses([untilAborted]);
   const client = await system.clientWithNewJobsKey();
-  const { id } = await client.jobs.submit(SUBMISSION);
+  const { id } = await submitJob(client, SUBMISSION);
   await expect
     .poll(async () => entryKinds((await client.jobs.events({ id })).events), { timeout: 10_000 })
     .toContain("agent-batch.job.started");
