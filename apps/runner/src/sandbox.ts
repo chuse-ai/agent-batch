@@ -27,6 +27,7 @@ import * as NodePath from "@effect/platform-node-shared/NodePath";
 import { Data, Effect, FileSystem, Layer, Record, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import ensureError from "ensure-error";
+import which from "which";
 
 // A job's Execution environment (ADR 0027): pi-env's daemon, started inside an OS sandbox of the
 // job's own by Anthropic's sandbox-runtime, carries out the job's file operations and runs its
@@ -130,6 +131,20 @@ function withJobOomScore(command: readonly string[]): string[] {
     : [...command];
 }
 
+/**
+ * The shell sandbox-runtime runs a job's command in: bash, its default, found in the Runner's PATH
+ * as sandbox-runtime finds it rather than at a fixed path, which Nix hosts lack. Given the name, it
+ * looks bash up on every wrap with a blocking `which` spawn, which under load took about a tenth of
+ * the Runner's thread and, past its 1 s timeout, failed wraps (anthropics/sandbox-runtime#548).
+ * Given an absolute path, it skips the spawn only with the patch in `patches/`, which applies
+ * anthropics/sandbox-runtime#551 and goes once a release includes it.
+ */
+function findJobShell(): Effect.Effect<string | undefined> {
+  return Effect.promise(() => which("bash", { nothrow: true })).pipe(
+    Effect.map((shell) => shell ?? undefined),
+  );
+}
+
 /** How the Runner runs every job's sandbox. */
 export interface SandboxSettings {
   /** Folders a job may read besides the system's, such as tools installed in a home folder. */
@@ -190,7 +205,8 @@ export function prepareJobEnvironments(
       path.dirname(daemon),
       SECCOMP_HELPERS,
     ];
-    const unsandboxedBecause = yield* setUpSandboxRuntime(daemon, readable);
+    const shell = yield* findJobShell();
+    const unsandboxedBecause = yield* setUpSandboxRuntime(daemon, readable, shell);
     if (unsandboxedBecause && !settings.runWithoutSandbox) {
       return yield* new SandboxUnavailable({
         message: `Jobs cannot run in a sandbox on this host: ${unsandboxedBecause}. Install what is missing (see the runner's README), or set RUNNER_RUN_WITHOUT_SANDBOX=true to run them without one.`,
@@ -206,6 +222,7 @@ export function prepareJobEnvironments(
           daemon,
           dirs,
           readable,
+          shell,
           sandboxed: unsandboxedBecause === undefined,
           memoryLimit: uncappedBecause === undefined ? settings.jobMemoryLimit : undefined,
         }),
@@ -252,6 +269,7 @@ function initializeSandboxRuntime(): Promise<void> {
 function setUpSandboxRuntime(
   daemon: string,
   readable: readonly string[],
+  shell: string | undefined,
 ): Effect.Effect<
   string | undefined,
   never,
@@ -275,7 +293,7 @@ function setUpSandboxRuntime(
         try: () =>
           SandboxManager.wrapWithSandbox(
             `test -x "$AGENT_BATCH_DAEMON"`,
-            undefined,
+            shell,
             jobPolicy({ workspace: scratch, temp: scratch }, readable),
           ),
         catch: ensureError,
@@ -423,6 +441,7 @@ function openJobEnvironment(options: {
   daemon: string;
   dirs: JobDirs;
   readable: readonly string[];
+  shell: string | undefined;
   sandboxed: boolean;
   memoryLimit: string | undefined;
 }): JobEnvironment {
@@ -448,7 +467,7 @@ function openJobEnvironment(options: {
       if (options.sandboxed) {
         inner = await SandboxManager.wrapWithSandbox(
           DAEMON_IN_SANDBOX,
-          undefined,
+          options.shell,
           jobPolicy(dirs, options.readable),
           closing.signal,
         );
