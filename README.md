@@ -8,7 +8,7 @@ The hub runs on Cloudflare Workers or Node/Docker; Runners execute jobs on the m
 
 From nothing to a finished job on one machine with Docker Engine 25 or later and Compose 2.20.2 or later, Node 22.19 or later, `curl`, `jq` and `openssl`: the hub and a Runner run from their published images, and jobs go through the `agent-batch` command. To make the same calls with `curl`, see [API](#api). On Ubuntu 24.04, first let the Runner's job sandboxes create user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, and a file in `/etc/sysctl.d` to keep it; on Ubuntu 25.04 and later they cannot run yet (see [the Runner's README](apps/runner/README.md)).
 
-1. **Start the hub** from the latest release's Compose file, which runs that release's images; fetching a later release's file the same way and running `docker compose up -d` upgrades them. The hub creates its owner from these settings on its first start and serves the API at `http://localhost:8787`.
+1. **Start the hub** from the latest release's Compose file, which runs that release's images; to upgrade later, run only the `curl` line again from the current README, then `docker compose up -d`. The hub creates its owner from these settings on its first start and serves the API at `http://localhost:8787`.
 
    <!-- x-release-please-start-version -->
 
