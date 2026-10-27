@@ -65,7 +65,7 @@ const CREDENTIALS_FILE = "auth.json";
  * which it recognizes by its URL.
  */
 const SIGN_IN_WITH_BASE_URL =
-  "RUNNER_MODEL_BASE_URL works with the provider's key only, not with a sign-in, whose tokens would go to that URL. Unset it, or delete the sign-in (auth.json in the data directory) and give the provider's key in the environment.";
+  "RUNNER_MODEL_BASE_URL works with the provider's key only, not with a sign-in or a subscription's token, which would go to that URL. Unset it, or delete the sign-in (auth.json in the data directory) or unset ANTHROPIC_OAUTH_TOKEN, and give the provider's key in the environment.";
 
 /** The file in the Runner's data directory holding the ID a provider knows this installation by. */
 const INSTALLATION_FILE = "installation_id";
@@ -119,7 +119,14 @@ if (command !== undefined && command !== "register" && command !== "login") {
 const dataDirSetting = Config.String("RUNNER_DATA_DIR").pipe(Config.withDefault("data"));
 
 /** Where the Runner calls its provider's models instead of the provider's own URL, if anywhere. */
-const modelBaseUrlSetting = Config.URL("RUNNER_MODEL_BASE_URL").pipe(Config.option);
+const modelBaseUrlSetting = Config.schema(
+  Schema.URL.check(
+    Schema.makeFilter((url) => url.protocol === "http:" || url.protocol === "https:", {
+      message: "Not an http: or https: URL",
+    }),
+  ),
+  "RUNNER_MODEL_BASE_URL",
+).pipe(Config.option);
 
 /** The Runner's settings, read from the environment by Effect's default `Config` source. */
 const runnerSettings = Config.all({
@@ -162,9 +169,10 @@ function refuse(message: string) {
 
 /**
  * The models Pi knows, with the keys in the environment and the sign-ins in `dataDir`. With
- * `baseUrl`, the provider `provider`'s models are called there with its key, through the base URL
- * Pi lets a key's resolution return, as it lets a credential name its own endpoint. Only the key's
- * resolution returns it, so a sign-in's tokens never go there: the Runner refuses to start on one.
+ * `baseUrl`, the provider `provider`'s models are called there, as Pi's coding agent calls them for
+ * a provider's `baseUrl` in its `models.json`, and with its key alone: the provider then takes no
+ * sign-in, not even one saved while the Runner runs, so its calls fail rather than take a sign-in's
+ * tokens to `baseUrl`.
  */
 function runnerModels(dataDir: string, baseUrl?: { provider: string; url: URL }) {
   const models = builtinModels({
@@ -175,18 +183,13 @@ function runnerModels(dataDir: string, baseUrl?: { provider: string; url: URL })
   if (baseUrl && provider && apiKey) {
     // Pi's own base URLs have no trailing slash, and it appends paths such as `/responses` to them.
     const url = baseUrl.url.href.replace(/\/$/, "");
+    const atUrl = <M extends { baseUrl: string }>(model: M): M => ({ ...model, baseUrl: url });
     models.setProvider({
       ...provider,
-      auth: {
-        ...provider.auth,
-        apiKey: {
-          ...apiKey,
-          resolve: async (input) => {
-            const resolution = await apiKey.resolve(input);
-            return resolution && { ...resolution, auth: { ...resolution.auth, baseUrl: url } };
-          },
-        },
-      },
+      baseUrl: url,
+      auth: { apiKey },
+      getModels: () => provider.getModels().map(atUrl),
+      getAllModels: provider.getAllModels && (() => provider.getAllModels?.().map(atUrl) ?? []),
     });
   }
   return models;
@@ -306,26 +309,32 @@ const login = Effect.gen(function* () {
 const run = Effect.gen(function* () {
   const settings = yield* runnerSettings;
   const baseUrl = Option.getOrUndefined(settings.modelBaseUrl);
-  if (baseUrl && baseUrl.protocol !== "https:" && baseUrl.protocol !== "http:") {
-    return yield* refuse(
-      `RUNNER_MODEL_BASE_URL must be an http: or https: URL, not ${baseUrl.protocol}`,
-    );
+  // A sign-in is looked for among all of the provider's auth, as the models with `baseUrl` take
+  // none and would only report the provider unconfigured.
+  if (
+    baseUrl &&
+    (yield* Effect.promise(() => runnerModels(settings.dataDir).checkAuth(settings.provider)))
+      ?.type === "oauth"
+  ) {
+    return yield* refuse(SIGN_IN_WITH_BASE_URL);
   }
   const models = runnerModels(
     settings.dataDir,
     baseUrl && { provider: settings.provider, url: baseUrl },
   );
-  // Before renewing a sign-in, which would otherwise be renewed for nothing.
-  if (
-    baseUrl &&
-    (yield* Effect.promise(() => models.checkAuth(settings.provider)))?.type === "oauth"
-  ) {
-    return yield* refuse(SIGN_IN_WITH_BASE_URL);
-  }
   const problem = yield* Effect.promise(() =>
     renewModelAuthProblem(models, settings.provider, settings.modelId),
   );
   if (problem) return yield* refuse(problem);
+  // Pi takes a Claude subscription's token from this variable as it takes a key, ahead of
+  // `ANTHROPIC_API_KEY`, and names it as the source.
+  if (
+    baseUrl &&
+    (yield* Effect.promise(() => models.getAuth(settings.provider)))?.source ===
+      "ANTHROPIC_OAUTH_TOKEN"
+  ) {
+    return yield* refuse(SIGN_IN_WITH_BASE_URL);
+  }
   return yield* runRunner({
     hubUrl: settings.hubUrl,
     registrationKey: Redacted.value(settings.registrationKey),
