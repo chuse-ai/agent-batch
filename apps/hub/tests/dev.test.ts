@@ -9,18 +9,19 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import getPort from "get-port";
-import { afterAll, describe, expect, inject, test } from "vite-plus/test";
+import { afterAll, describe, expect, inject, onTestFinished, test } from "vite-plus/test";
 
 import { buildRepositoryImage } from "./docker-images.ts";
 
 // `agent-batch dev` as a user runs it: the hub, a Runner and Postgres from the images, here built
-// from the repository and tagged as a release's, through Docker Compose. It uses the Compose project
-// `agent-batch-dev`, so it would remove the containers of an `agent-batch dev` running on the same
-// machine. It needs Docker and image builds, so it is tagged and the default run skips it (ADR 0003).
+// from the repository and tagged as a release's, through Docker Compose, in a Compose project and a
+// data folder of its own, apart from a contributor's own `agent-batch dev`. It needs Docker and image
+// builds, so it is tagged and the default run skips it (ADR 0003).
 
 const run = promisify(execFile);
 const CLI = path.join(import.meta.dirname, "../node_modules/.bin/agent-batch");
-const PROJECT_LABEL = "label=com.docker.compose.project=agent-batch-dev";
+const PROJECT = "agent-batch-dev-test";
+const PROJECT_LABEL = `label=com.docker.compose.project=${PROJECT}`;
 const VERSION = "test";
 
 const stateHome = await mkdtemp(path.join(tmpdir(), "agent-batch-dev-"));
@@ -29,6 +30,7 @@ const { AGENT_BATCH_URL: _url, AGENT_BATCH_API_KEY: _key, ...inherited } = proce
 const env = {
   ...inherited,
   XDG_DATA_HOME: stateHome,
+  AGENT_BATCH_DEV_PROJECT: PROJECT,
   AGENT_BATCH_VERSION: VERSION,
   // The Runner starts only with a key for its provider; no job here reaches the model.
   OPENROUTER_API_KEY: "not-a-key",
@@ -43,6 +45,10 @@ async function startDev(port: number) {
   const dev = spawn(CLI, ["dev", "--port", String(port)], {
     env,
     stdio: ["ignore", "pipe", "pipe"],
+  });
+  // Stopped before `afterAll` resets, also when an assertion fails while it runs.
+  onTestFinished(async () => {
+    if (dev.exitCode === null) await stopDev(dev);
   });
   let output = "";
   dev.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));

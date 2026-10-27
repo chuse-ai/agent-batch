@@ -1,6 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 import * as NodeChildProcessSpawner from "@effect/platform-node-shared/NodeChildProcessSpawner";
@@ -9,7 +7,16 @@ import * as NodePath from "@effect/platform-node-shared/NodePath";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { apiContract, createProblemDetailsLink } from "contract";
-import { Config, Effect, Fiber, Layer, PlatformError, Predicate, Schedule } from "effect";
+import {
+  Config,
+  Effect,
+  FileSystem,
+  Layer,
+  Path,
+  PlatformError,
+  Predicate,
+  Schedule,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import ensureError from "ensure-error";
 import envPaths from "env-paths";
@@ -24,8 +31,11 @@ import * as z from "zod/mini";
 // they hold stays in the project's volumes, and the secrets and keys it made stay in a file of the
 // user's, so the next start finds the same jobs, keys and Runner, with any sign-in the Runner holds.
 
-/** The Compose project, apart from the quickstart's `agent-batch`, so neither touches the other. */
-const PROJECT = "agent-batch-dev";
+/**
+ * The Compose project, apart from the quickstart's `agent-batch`, so neither touches the other.
+ * `AGENT_BATCH_DEV_PROJECT` names another, so the repository's tests never touch a contributor's own.
+ */
+const PROJECT = process.env["AGENT_BATCH_DEV_PROJECT"] ?? "agent-batch-dev";
 
 /** The owner the hub creates on its first start; nobody signs in as it but this command. */
 const OWNER_EMAIL = "owner@example.com";
@@ -62,52 +72,64 @@ type State = z.infer<typeof stateSchema>;
 const DEFAULT_MODEL = { provider: "openrouter", id: "openrouter/free" };
 
 /**
- * The variable pi reads a provider's key from, for most providers: its name in capitals, `-` as
- * `_`, then `_API_KEY`, as `OPENAI_API_KEY` and `OPENROUTER_API_KEY`. pi keeps its full list to
- * itself, so a provider whose variable differs, such as `google`'s `GEMINI_API_KEY`, is named with
- * `--model-key-env`.
+ * The variable Pi reads a provider's key from, for most providers: its name in capitals, `-` as
+ * `_`, then `_API_KEY`, as `OPENAI_API_KEY` and `OPENROUTER_API_KEY`. Pi exports its full list
+ * (`findEnvKeys`) only from `@earendil-works/pi-ai/compat`, which it marks as temporary, and with it
+ * pi-ai would enter every user's bundle, so a provider whose variable differs, such as `google`'s
+ * `GEMINI_API_KEY`, is named with `--model-key-env`.
  */
 function keyEnvOf(provider: string): string {
   return `${provider.toUpperCase().replaceAll("-", "_")}_API_KEY`;
 }
 
-/** Whether `error` is a Node error with `code`, such as `ENOENT`. */
-function isErrorCode(error: unknown, code: string) {
-  return error instanceof Error && "code" in error && error.code === code;
+/** The error for a state file that is not as this command wrote it. */
+function corruptState() {
+  return new Error(
+    `${STATE_FILE} is not as agent-batch dev wrote it; agent-batch dev reset deletes it with the data it belongs to`,
+  );
 }
 
 /** The state of an earlier start, if any. */
 function readState(): Effect.Effect<State | undefined, Error> {
-  return Effect.tryPromise({
-    try: async () => {
-      let text: string;
-      try {
-        text = await readFile(STATE_FILE, "utf8");
-      } catch (error) {
-        if (isErrorCode(error, "ENOENT")) return undefined;
-        throw error;
-      }
-      const parsed = z.safeParse(stateSchema, JSON.parse(text));
-      if (!parsed.success) {
-        throw new Error(
-          `${STATE_FILE} is not as agent-batch dev wrote it; agent-batch dev reset deletes it with the data it belongs to`,
-        );
-      }
-      return parsed.data;
-    },
-    catch: ensureError,
-  });
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const text = yield* fs
+      .readFileString(STATE_FILE)
+      .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)));
+    if (text === undefined) return undefined;
+    const json: unknown = yield* Effect.try({ try: () => JSON.parse(text), catch: corruptState });
+    const parsed = z.safeParse(stateSchema, json);
+    if (!parsed.success) return yield* Effect.fail(corruptState());
+    return parsed.data;
+  }).pipe(Effect.mapError(ensureError), Effect.provide(NodeFileSystem.layer));
 }
 
-/** Saves `state`, readable only by the user: it holds the keys and the database's password. */
+/** Makes the state's folder, which only the user may enter. */
+const makeStateDir = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(STATE_DIR, { recursive: true, mode: 0o700 });
+});
+
+/**
+ * Writes `contents` to `file` in the state's folder, readable only by the user, whole or not at
+ * all: the state holds the keys and the database's password, which a torn write would lose.
+ */
+function writeStateFile(file: string, contents: string) {
+  return makeStateDir.pipe(
+    Effect.andThen(
+      Effect.tryPromise({
+        try: () => writeFileAtomic(file, contents, { mode: 0o600 }),
+        catch: ensureError,
+      }),
+    ),
+    Effect.mapError(ensureError),
+    Effect.provide(NodeFileSystem.layer),
+  );
+}
+
+/** Saves `state`. */
 function writeState(state: State) {
-  return Effect.tryPromise({
-    try: async () => {
-      await mkdir(STATE_DIR, { recursive: true, mode: 0o700 });
-      await writeFileAtomic(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-    },
-    catch: ensureError,
-  });
+  return writeStateFile(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`);
 }
 
 /** A random secret, as `openssl rand -hex 24` makes one for the quickstart. */
@@ -201,20 +223,12 @@ function composeFile(state: State, version: string) {
 
 /** Writes the Compose file for `state`; `docker compose` reads it from there, `dev login` included. */
 function writeComposeFile(state: State, version: string) {
-  return Effect.tryPromise({
-    try: async () => {
-      await mkdir(STATE_DIR, { recursive: true, mode: 0o700 });
-      // JSON is YAML, which Compose reads.
-      await writeFileAtomic(COMPOSE_FILE, JSON.stringify(composeFile(state, version), null, 2), {
-        mode: 0o600,
-      });
-    },
-    catch: ensureError,
-  });
+  // JSON is YAML, which Compose reads.
+  return writeStateFile(COMPOSE_FILE, JSON.stringify(composeFile(state, version), null, 2));
 }
 
 const NodeServices = NodeChildProcessSpawner.layer.pipe(
-  Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)),
+  Layer.provideMerge(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)),
 );
 
 /**
@@ -233,7 +247,8 @@ function compose(
 ) {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const file = existsSync(COMPOSE_FILE) ? ["--file", COMPOSE_FILE] : [];
+    const fs = yield* FileSystem.FileSystem;
+    const file = (yield* fs.exists(COMPOSE_FILE)) ? ["--file", COMPOSE_FILE] : [];
     const logLevel = options.errorsOnly ? ["--log-level", "error"] : [];
     const handle = yield* spawner.spawn(
       ChildProcess.make(
@@ -269,20 +284,33 @@ const removeContainers = compose(["down", "--remove-orphans"], { errorsOnly: tru
 /**
  * Holds the lock on the state while the scope is open, so a second `agent-batch dev` cannot remove
  * the first one's containers. A run killed outright leaves the lock behind; proper-lockfile takes
- * it over once its holder stops refreshing it.
+ * it over once its holder stops refreshing it, by default after 10 seconds.
  */
 const lockState = Effect.acquireRelease(
-  Effect.tryPromise({
-    try: async () => {
-      await mkdir(STATE_DIR, { recursive: true, mode: 0o700 });
-      return lockfile.lock(STATE_DIR, { lockfilePath: path.join(STATE_DIR, "lock") });
-    },
-    catch: (error) =>
-      isErrorCode(error, "ELOCKED")
-        ? new Error("agent-batch dev is already running; stop it first")
-        : ensureError(error),
-  }),
-  (release) => Effect.promise(() => release()),
+  makeStateDir.pipe(
+    Effect.provide(NodeFileSystem.layer),
+    Effect.andThen(
+      Effect.tryPromise({
+        try: () =>
+          lockfile.lock(STATE_DIR, {
+            lockfilePath: path.join(STATE_DIR, "lock"),
+            // Without it, proper-lockfile throws from a timer, outside any fiber, and the process
+            // ends without removing its containers.
+            onCompromised: (error) =>
+              process.stderr.write(
+                `agent-batch dev lost its lock (${error.message}), so another could start beside it\n`,
+              ),
+          }),
+        catch: (error) =>
+          error instanceof Error && "code" in error && error.code === "ELOCKED"
+            ? new Error("agent-batch dev is running; Ctrl-C in its terminal stops it")
+            : ensureError(error),
+      }),
+    ),
+    Effect.mapError(ensureError),
+  ),
+  // Releasing a lock that was lost fails, and changes nothing.
+  (release) => Effect.tryPromise(() => release()).pipe(Effect.ignore),
 );
 
 type MemberClient = ContractRouterClient<typeof apiContract>;
@@ -337,14 +365,28 @@ function createKeys(client: MemberClient) {
   });
 }
 
-/** Waits until a Runner has been heard from since `since`, as the hub lists them. */
-function waitForRunner(client: MemberClient, since: Date) {
+/** When the hub last heard from each Runner it knows, by its own clock. */
+function listRunnersLastSeen(client: MemberClient) {
   return Effect.tryPromise({ try: () => client.runners.list(), catch: ensureError }).pipe(
-    // The hub stopping ends the wait through Compose, which stops then, so a failed read only waits.
+    Effect.map((runners) => new Map(runners.map((runner) => [runner.id, runner.lastSeenAt]))),
+  );
+}
+
+/**
+ * Waits until the hub hears from a Runner after `before`, what it had last heard from each:
+ * compared on the hub's clock alone, which the host's may differ from, as in a virtual machine.
+ */
+function waitForRunner(client: MemberClient, before: Map<string, Date>) {
+  return listRunnersLastSeen(client).pipe(
+    // A read the hub does not answer only waits: the hub stopping ends the run through Compose.
     Effect.retry({ schedule: Schedule.spaced("1 second") }),
     Effect.repeat({
       schedule: Schedule.spaced("1 second"),
-      until: (runners) => runners.some((runner) => runner.lastSeenAt >= since),
+      until: (now) =>
+        [...now].some(([id, lastSeenAt]) => {
+          const earlier = before.get(id);
+          return earlier === undefined || lastSeenAt > earlier;
+        }),
     }),
   );
 }
@@ -367,7 +409,7 @@ function chooseModel(
 }
 
 /** The state for a run with `flags`: an earlier run's, or new secrets, with the flags applied. */
-function prepareState(flags: { port?: number } & Parameters<typeof chooseModel>[0]) {
+function saveStateForRun(flags: { port?: number } & Parameters<typeof chooseModel>[0]) {
   return Effect.gen(function* () {
     const saved = yield* readState();
     const model = yield* Effect.try({
@@ -430,7 +472,7 @@ const modelFlags = {
 function start(version: string, flags: { port?: number } & Parameters<typeof chooseModel>[0]) {
   return Effect.gen(function* () {
     yield* lockState;
-    let state = yield* prepareState(flags);
+    let state = yield* saveStateForRun(flags);
     const images = yield* imageVersion(version);
     yield* writeComposeFile(state, images);
     // Containers a run stopped outright left behind; the volumes stay.
@@ -450,15 +492,9 @@ function start(version: string, flags: { port?: number } & Parameters<typeof cho
       yield* writeState(state);
       yield* writeComposeFile(state, images);
     }
-    // Compose's own foreground mode: it starts the Runner, prints every container's log, and stops
-    // them all when any of them stops, as a Runner that refuses to start does.
-    const since = new Date(Date.now() - 1000);
-    // However Compose exits on its own, a container stopped, which the error below says.
-    const attached = yield* Effect.forkScoped(
-      compose(["up", "--abort-on-container-exit"]).pipe(Effect.exit),
-    );
-    yield* Effect.raceFirst(
-      waitForRunner(client, since).pipe(
+    const before = yield* listRunnersLastSeen(client);
+    yield* Effect.forkScoped(
+      waitForRunner(client, before).pipe(
         Effect.andThen(
           say(
             [
@@ -470,24 +506,30 @@ function start(version: string, flags: { port?: number } & Parameters<typeof cho
             ].join("\n"),
           ),
         ),
-        Effect.andThen(Fiber.join(attached)),
       ),
-      Fiber.join(attached),
+    );
+    // Compose's own foreground mode: it starts the Runner, prints every container's log, and stops
+    // them all when any of them stops, as a Runner that refuses to start does. It ends on its own
+    // only then, or when it cannot start the Runner.
+    const stopped = yield* compose(["up", "--abort-on-container-exit"]).pipe(
+      Effect.match({ onFailure: (error) => `${error.message}. `, onSuccess: () => "" }),
     );
     return yield* Effect.fail(
       new Error(
-        "A container stopped, so agent-batch dev stopped them all; its log above says why. A Runner that cannot run jobs in a sandbox on Ubuntu 24.04 needs the host setting in the Runner's README (https://github.com/chuse-ai/agent-batch/blob/main/apps/runner/README.md#what-a-host-needs).",
+        `${stopped}The hub, the Runner or the database stopped, or Compose could not start them, so agent-batch dev stopped them all; Compose's output above says why. If the Runner says jobs cannot run in a sandbox, on Ubuntu 24.04 run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 (see https://github.com/chuse-ai/agent-batch/blob/main/apps/runner/README.md#what-a-host-needs).`,
       ),
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices));
 }
 
 /**
- * Runs `work` until it ends or the user stops it with Ctrl-C or `SIGTERM`, which interrupts it so
- * its finalizers run. A signal while it stops is ignored, so the containers are still removed; a
- * listener on the signal keeps Node from exiting at it.
+ * Runs `work` until it ends or the user stops it with Ctrl-C, `SIGTERM` or a closed terminal
+ * (`SIGHUP`), which interrupts it so its finalizers run. A signal while it stops is ignored, so the
+ * containers are still removed; a listener on the signal keeps Node from exiting at it. Effect's
+ * `NodeRuntime.runMain` does the same for `SIGINT` and `SIGTERM` only, and is built to end the
+ * process, where this returns to trpc-cli.
  */
-async function runUntilStopped(work: Effect.Effect<void, Error>) {
+async function runUntilStopped(work: Effect.Effect<void, unknown>) {
   const controller = new AbortController();
   const onSignal = () => {
     if (controller.signal.aborted) {
@@ -496,22 +538,27 @@ async function runUntilStopped(work: Effect.Effect<void, Error>) {
     }
     controller.abort();
   };
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  for (const signal of signals) process.on(signal, onSignal);
   try {
     await Effect.runPromise(work, { signal: controller.signal });
   } catch (error) {
     // Stopping is how the command ends; only a failure before it is one.
     if (!controller.signal.aborted) throw error;
   } finally {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
+    for (const signal of signals) process.off(signal, onSignal);
   }
 }
 
 /** Runs a command's `work` to its end, its failure an `Error` for trpc-cli to print. */
-function runToEnd(work: Effect.Effect<void, Error, ChildProcessSpawner.ChildProcessSpawner>) {
-  return Effect.runPromise(work.pipe(Effect.provide(NodeServices)));
+function runToEnd(
+  work: Effect.Effect<
+    void,
+    unknown,
+    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+  >,
+) {
+  return Effect.runPromise(work.pipe(Effect.mapError(ensureError), Effect.provide(NodeServices)));
 }
 
 /** The `dev` commands, running the images of `version`. */
@@ -545,6 +592,8 @@ export function devCommands(version: string) {
         description:
           "Removes the containers agent-batch dev left behind when it was stopped outright, keeping their data.",
       })
+      // Without an input, trpc-cli offers a `--json` it cannot describe.
+      .input(z.object({}))
       .handler(() => runToEnd(lockState.pipe(Effect.andThen(removeContainers), Effect.scoped))),
     reset: os
       .meta({
@@ -552,15 +601,34 @@ export function devCommands(version: string) {
         description:
           "Deletes everything agent-batch dev keeps: the hub's jobs, the Runner's data and any sign-in it holds, and the keys and secrets made for them.",
       })
+      // Without an input, trpc-cli offers a `--json` it cannot describe.
+      .input(z.object({}))
       .handler(() =>
         runToEnd(
           Effect.gen(function* () {
             yield* lockState;
             yield* compose(["down", "--remove-orphans", "--volumes"], { errorsOnly: true });
-            yield* Effect.tryPromise({
-              try: () => rm(STATE_DIR, { recursive: true, force: true }),
-              catch: ensureError,
-            });
+            // Compose succeeds when a volume is still in use, and keeps it; its password is in the
+            // state, so the state goes only with the volumes.
+            const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+            const left = yield* spawner.string(
+              ChildProcess.make("docker", [
+                "volume",
+                "ls",
+                "--quiet",
+                "--filter",
+                `label=com.docker.compose.project=${PROJECT}`,
+              ]),
+            );
+            if (left.trim() !== "") {
+              return yield* Effect.fail(
+                new Error(
+                  `Docker kept volumes still in use, so the keys and secrets for them stay: ${left.trim().split("\n").join(", ")}`,
+                ),
+              );
+            }
+            const fs = yield* FileSystem.FileSystem;
+            return yield* fs.remove(STATE_DIR, { recursive: true, force: true });
           }).pipe(Effect.scoped),
         ),
       ),
@@ -575,7 +643,7 @@ export function devCommands(version: string) {
         runToEnd(
           Effect.gen(function* () {
             yield* lockState;
-            const state = yield* prepareState(input);
+            const state = yield* saveStateForRun(input);
             yield* writeComposeFile(state, yield* imageVersion(version));
             yield* compose(
               ["run", "--rm", "--no-deps", "runner", "node", "dist/main.mjs", "login"],
@@ -590,6 +658,8 @@ export function devCommands(version: string) {
         description:
           "Prints the hub's address and the API key agent-batch dev made as shell exports, for clients other than agent-batch.",
       })
+      // Without an input, trpc-cli offers a `--json` it cannot describe.
+      .input(z.object({}))
       .handler(() =>
         Effect.runPromise(
           Effect.gen(function* () {
