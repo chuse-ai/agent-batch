@@ -5,7 +5,9 @@ const OUTPUT_PATH = "./src/db/generated";
 
 /** The contract's type for each JSON column, as ADR 0020 asks, by table and column. */
 const JSON_COLUMN_TYPES = {
-  job: { resultContract: "ResultContract", result: "JsonValue" },
+  job: { resultContract: "ResultContract", result: "JsonValue", labels: "Labels" },
+  batch: { labels: "Labels" },
+  usageRecord: { labels: "Labels" },
   jobProgress: { usage: "JobUsage", activity: "JobActivity" },
 };
 
@@ -15,8 +17,10 @@ const JSON_COLUMN_TYPES = {
  */
 const COPIED_ID_COLUMNS = {
   job: { runnerId: "Runner", submitterKeyId: "Apikey", submitterMemberId: "Member" },
+  batch: { submitterKeyId: "Apikey", submitterMemberId: "Member" },
   usageRecord: {
     jobId: "Job",
+    batchId: "Batch",
     runnerId: "Runner",
     submitterKeyId: "Apikey",
     submitterMemberId: "Member",

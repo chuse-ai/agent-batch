@@ -1,12 +1,14 @@
 # Release scope and limitations
 
-The current implementation runs individual unattended jobs on provisioned Runners. A job supplies a prompt, inline text input files and a JSON Schema result contract. The hub records events, activity, results and usage; callers can pause, resume, cancel and delete jobs, and set run-time and model-spend limits. The CLI calls the hub's HTTP API.
+The current implementation runs unattended jobs on provisioned Runners, alone or in Batches. A job supplies a prompt, inline text input files, a JSON Schema result contract and labels. The hub records events, activity, results and usage; callers can pause, resume, cancel and delete jobs, set run-time and model-spend limits, and list jobs by status, label and Batch. A Batch runs its first jobs, its Canary, before the rest, and pauses itself when too many of its jobs fail; callers can pause, resume and cancel it as one. The CLI calls the hub's HTTP API.
 
 The hub runs on Cloudflare Workers with Postgres through Hyperdrive, or on Node/Docker with Postgres directly. Each Runner is a separate Node process. The hub assigns jobs to connected Runners that report available capacity. A job's journal and Workspace remain on its Runner's host.
 
 ## Planned capabilities
 
-Automatic cloud overflow, moving jobs between hosts, batch submission and canaries, labels, per-job model selection and governance, secret injection and network egress, richer file upload/download flows, validation scripts, incremental result submission, a dashboard, SSO, and CLI login/local orchestration are planned.
+Automatic cloud overflow, moving jobs between hosts, per-job model selection and governance, secret injection and network egress, richer file upload/download flows, validation scripts, incremental result submission, a dashboard, SSO, and CLI login/local orchestration are planned.
+
+A Batch's breaker counts every failed job alike, including jobs that fail because their host ran out of memory, so a host that keeps running out of memory can pause the Batches whose jobs it runs.
 
 Events currently remain in Postgres. Object storage, event compaction and retention policies are planned. Deployments must account for database growth. The Docker hub runs as one process; multiple replicas do not yet coordinate Runner connections.
 

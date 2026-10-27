@@ -23,7 +23,7 @@ Where a job is in its life: queued, running, paused, succeeded, failed or cancel
 _Avoid_: phase
 
 **Control**:
-What a caller asks of a job besides submitting and reading it: to pause, resume, cancel or delete it. A pause holds a job whose work is still owed, so a caller's wait stays open; a cancel withdraws it, though a cancelled job that started can still be resumed. One its Runner must carry out waits for it, shown beside the job's status until the Runner confirms it or the job ends first.
+What a caller asks of a job besides submitting and reading it: to pause, resume, cancel or delete it. A pause holds a job whose work is still owed, so its Batch and a caller's wait stay open; a cancel withdraws it, though a cancelled job that started can still be resumed. One its Runner must carry out waits for it, shown beside the job's status until the Runner confirms it or the job ends first.
 
 **Journal**:
 A job's durable record on its Runner, one file per job: the agent's entries and conversation records, which are copied to the hub as the job's events, and pi's own task records, documents and submissions. The job is recovered from it after a restart, and it is deleted with the job's files.
@@ -33,8 +33,20 @@ _Avoid_: checkpoint
 A running job carrying on from its journal after its Runner stopped and started again: it stays running, completed tool calls are not repeated, a tool call cut off mid-flight gets an interrupted result, and a model call in flight is made again. Not a resume, which is a control a caller gives a stopped job.
 
 **Usage record**:
-The small, lasting record of a job's outcome and cost (model, status, tokens, cost, times), kept after the job's content is deleted. A job resumed after it ended has one for each end, each with what it used since the previous one.
+The small, lasting record of a job's outcome and cost (labels, Batch, model, status, tokens, cost, times), kept after the job's content is deleted. A job resumed after it ended has one for each end, each with what it used since the previous one.
 _Avoid_: billing record, receipt
+
+**Batch**:
+The jobs submitted together, released and paused as one.
+_Avoid_: group, campaign
+
+**Label**:
+A key and value attached to a job when it is submitted, such as `customer = acme`, used to find jobs, group them, and attribute their cost.
+_Avoid_: tag
+
+**Canary**:
+The first jobs of a Batch, run before the rest are released, so that a flaw every job shares shows after a few jobs.
+_Avoid_: preflight, pilot, trial run
 
 **Prompt**:
 The instruction text that tells a job's agent what to do.

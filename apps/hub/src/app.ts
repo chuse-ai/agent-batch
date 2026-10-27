@@ -39,7 +39,16 @@ import {
   requireKey,
 } from "./auth/auth.ts";
 import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
-import { ApikeyId, EventId, InputFileName, JobId, RunnerId, UploadChunkIndex } from "./db/types.ts";
+import { cancelBatch, createBatch, getBatch, holdBatch, submitIntoBatch } from "./batches.ts";
+import {
+  ApikeyId,
+  BatchId,
+  EventId,
+  InputFileName,
+  JobId,
+  RunnerId,
+  UploadChunkIndex,
+} from "./db/types.ts";
 import { readInputFileChunk } from "./input-files.ts";
 import {
   type Control,
@@ -48,6 +57,7 @@ import {
   getJob,
   type GivenLimits,
   limitProblems,
+  listJobs,
   resultContractProblems,
   readJobEvents,
   submitJob,
@@ -203,7 +213,56 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
         );
       }),
     },
+    batches: {
+      create: os.batches.create.effect(function* ({ input, context }) {
+        const key = yield* callerKey(context.caller);
+        const { result, created } = yield* createBatch(
+          input,
+          submitterOf(key),
+          yield* JobLimitSettings,
+        );
+        if (created) yield* hintRunners("live");
+        return result;
+      }),
+      submit: os.batches.submit.effect(function* ({ input, context }) {
+        const key = yield* callerKey(context.caller);
+        const { result, created } = yield* submitIntoBatch(
+          BatchId(input.id),
+          input.jobs,
+          submitterOf(key),
+          yield* JobLimitSettings,
+        );
+        if (created) yield* hintRunners("live");
+        return result;
+      }),
+      get: os.batches.get.effect(function* ({ input }) {
+        return yield* getBatch(BatchId(input.id));
+      }),
+      pause: os.batches.pause.effect(function* ({ input }) {
+        return (yield* holdBatch(BatchId(input.id), "pause")).batch;
+      }),
+      resume: os.batches.resume.effect(function* ({ input }) {
+        const { batch, hints } = yield* holdBatch(BatchId(input.id), "resume");
+        yield* Effect.forEach(hints, hintRunners, { discard: true });
+        return batch;
+      }),
+      cancel: os.batches.cancel.effect(function* ({ input }) {
+        const { batch, hints } = yield* cancelBatch(BatchId(input.id));
+        yield* Effect.forEach(hints, hintRunners, { discard: true });
+        return batch;
+      }),
+    },
     jobs: {
+      list: os.jobs.list.effect(function* ({ input }) {
+        return yield* listJobs({
+          statuses: input.status ?? [],
+          ...(input.labels === undefined ? {} : { labels: input.labels }),
+          ...(input.batchId === undefined ? {} : { batchId: BatchId(input.batchId) }),
+          ...(input.key === undefined ? {} : { key: input.key }),
+          ...(input.after === undefined ? {} : { after: JobId(input.after) }),
+          limit: input.limit,
+        });
+      }),
       submit: os.jobs.submit.effect(function* ({ input, context, errors }) {
         const key = yield* callerKey(context.caller);
         const settings = yield* JobLimitSettings;

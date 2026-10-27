@@ -3,6 +3,7 @@
 import { Brand } from "effect";
 
 import type { ApikeyId as ApikeyIdType } from "./generated/agent_batch/Apikey.ts";
+import type { BatchId as BatchIdType } from "./generated/agent_batch/Batch.ts";
 import type { BlobSha256 as BlobSha256Type } from "./generated/agent_batch/Blob.ts";
 import type { InputFileName as InputFileNameType } from "./generated/agent_batch/InputFile.ts";
 import type { JobId as JobIdType } from "./generated/agent_batch/Job.ts";
@@ -11,14 +12,18 @@ import type { MemberId as MemberIdType } from "./generated/agent_batch/Member.ts
 import type { RunnerId as RunnerIdType } from "./generated/agent_batch/Runner.ts";
 import type { UploadId as UploadIdType } from "./generated/agent_batch/Upload.ts";
 import type { UploadChunkIndex as UploadChunkIndexType } from "./generated/agent_batch/UploadChunk.ts";
+import type { UsageRecordId } from "./generated/agent_batch/UsageRecord.ts";
 
 export type { default as Database } from "./generated/Database.ts";
-export type { Job as JobRow, JobUpdate } from "./generated/agent_batch/Job.ts";
+export type { Job as JobRow, JobUpdate, NewJob } from "./generated/agent_batch/Job.ts";
+export type { Batch as BatchRow } from "./generated/agent_batch/Batch.ts";
+export type { default as BatchPausedBy } from "./generated/agent_batch/BatchPausedBy.ts";
 export type { JobProgress as JobProgressRow } from "./generated/agent_batch/JobProgress.ts";
 export type { default as JobStatus } from "./generated/agent_batch/JobStatus.ts";
 export type { default as JobControl } from "./generated/agent_batch/JobControl.ts";
 export type { default as JobFailureReason } from "./generated/agent_batch/JobFailureReason.ts";
 export type { JobDeletion as JobDeletionRow } from "./generated/agent_batch/JobDeletion.ts";
+export type { UsageRecordId };
 export type { NewUploadChunk } from "./generated/agent_batch/UploadChunk.ts";
 
 // Each ID type with its constructor under the same name, as Effect brands are declared. A string
@@ -27,6 +32,8 @@ export type { NewUploadChunk } from "./generated/agent_batch/UploadChunk.ts";
 // constructor checks its value yet; `Brand.make` can, once an ID has a format worth checking.
 export type JobId = JobIdType;
 export const JobId = Brand.nominal<JobId>();
+export type BatchId = BatchIdType;
+export const BatchId = Brand.nominal<BatchId>();
 export type RunnerId = RunnerIdType;
 export const RunnerId = Brand.nominal<RunnerId>();
 export type ApikeyId = ApikeyIdType;

@@ -129,3 +129,41 @@ export type ResultContract = z.infer<typeof resultContractSchema>;
 
 /** What the agent is asked to do. */
 export const promptSchema = textSchema.check(z.minLength(1));
+
+/**
+ * A label's key, in Kubernetes's syntax: a name of at most 63 characters, beginning and ending with
+ * a letter or digit, with `-`, `_` and `.` between, optionally behind a DNS subdomain prefix and `/`,
+ * such as `customer` or `example.com/team`.
+ */
+export const labelKeySchema = z
+  .string()
+  .check(
+    z.regex(
+      /^(?:(?=.{1,253}\/)[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*\/)?[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?$/,
+      "Must be a name of at most 63 letters, digits, `-`, `_` and `.`, beginning and ending with a letter or digit, optionally behind a DNS subdomain and `/`",
+    ),
+  );
+
+/** A label's value, in Kubernetes's syntax: empty, or as a key's name. */
+export const labelValueSchema = z
+  .string()
+  .check(
+    z.regex(
+      /^(?:[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?)?$/,
+      "Must be empty or at most 63 letters, digits, `-`, `_` and `.`, beginning and ending with a letter or digit",
+    ),
+  );
+
+/** The most labels a job carries. */
+export const MAX_LABELS = 64;
+
+/** A job's labels, by key: what it is for, to find it, group it and attribute its cost by. */
+export const labelsSchema = z
+  .record(labelKeySchema, labelValueSchema)
+  .check(
+    z.refine(
+      (labels) => Object.keys(labels).length <= MAX_LABELS,
+      `Must have at most ${MAX_LABELS} labels`,
+    ),
+  );
+export type Labels = z.infer<typeof labelsSchema>;

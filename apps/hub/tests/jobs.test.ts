@@ -54,6 +54,7 @@ test("a submitted job answers 201 and reads back as queued, with a key or a memb
     endedAt: null,
     usage: unused,
     ...limits,
+    labels: {},
   });
 
   const read = {
@@ -64,6 +65,7 @@ test("a submitted job answers 201 and reads back as queued, with a key or a memb
     endedAt: null,
     usage: unused,
     ...limits,
+    labels: {},
   };
   expect(await client.jobs.get({ id: job.id })).toEqual(read);
   expect(await system.owner().jobs.get({ id: job.id })).toEqual(read);

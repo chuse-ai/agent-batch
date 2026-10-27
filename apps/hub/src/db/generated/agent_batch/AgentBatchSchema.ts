@@ -3,6 +3,7 @@
 
 import type { default as AccountTable } from "./Account.js";
 import type { default as ApikeyTable } from "./Apikey.js";
+import type { default as BatchTable } from "./Batch.js";
 import type { default as BlobTable } from "./Blob.js";
 import type { default as InputFileTable } from "./InputFile.js";
 import type { default as InvitationTable } from "./Invitation.js";
@@ -33,6 +34,8 @@ export default interface AgentBatchSchema {
   session: SessionTable;
 
   jobDeletion: JobDeletionTable;
+
+  batch: BatchTable;
 
   uploadChunk: UploadChunkTable;
 

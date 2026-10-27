@@ -16,6 +16,7 @@ import {
   createProblemDetailsLink,
   FINAL_JOB_STATUSES,
   getAccess,
+  batchCreationSchema,
   jobRefSchema,
   jobSubmissionSchema,
   problemOf,
@@ -275,6 +276,39 @@ function submitCommand() {
 }
 
 /**
+ * `batches create`: retried on a transient failure with one idempotency key, as `jobs submit` is,
+ * so a retry never creates a second Batch, and submits the Batch's jobs again only to find them
+ * there.
+ */
+function createBatchCommand() {
+  return os
+    .meta({
+      description: getOpenAPIMeta(apiContract.batches.create)?.description,
+      examples: ["agent-batch batches create --input batch.json"],
+    })
+    .input(z.object(batchCreationSchema.shape))
+    .handler(({ input }) =>
+      runCommand(
+        Effect.gen(function* () {
+          const client = yield* apiClient;
+          const idempotencyKey = input.idempotencyKey ?? crypto.randomUUID();
+          if (input.idempotencyKey === undefined) {
+            yield* Effect.sync(() =>
+              process.stderr.write(
+                `Creating with idempotency key ${idempotencyKey}: if this command cannot tell whether the Batch was created, create it again with this key, as idempotencyKey in its JSON, to find out.\n`,
+              ),
+            );
+          }
+          const created = yield* hubCall(() =>
+            client.batches.create({ ...input, idempotencyKey }),
+          ).pipe(Effect.retry(retryTransient));
+          yield* printStep(created);
+        }),
+      ),
+    );
+}
+
+/**
  * `jobs wait`: reads the job until its status is final, waiting longer while nothing changes, from
  * a second up to half a minute; prints it, and exits non-zero unless it succeeded, as `gh run watch
  * --exit-status` does. Stopping the command leaves the job running.
@@ -327,6 +361,7 @@ export function agentBatchCli(version: string) {
     router: os.router({
       ...commands,
       jobs: { ...commands["jobs"], submit: submitCommand(), wait: waitCommand() },
+      batches: { ...commands["batches"], create: createBatchCommand() },
     }),
   });
 }
