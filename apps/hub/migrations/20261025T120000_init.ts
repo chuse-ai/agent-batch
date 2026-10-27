@@ -54,6 +54,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .createType("hostDeletionOutcome")
     .asEnum(["confirmed", "notRequired", "abandoned"])
     .execute();
+  // Who paused a Batch: a caller, or its failure breaker.
+  await schema.createType("batchPausedBy").asEnum(["caller", "breaker"]).execute();
 
   // A Runner's row goes with its own key: deleting the key, through the hub or through Better Auth,
   // deletes the Runner in the same statement.
@@ -69,6 +71,145 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     )
     .execute();
 
+  // Input files' content is stored once per SHA-256 as a blob: a file many jobs share is stored
+  // once, and its bytes sit in chunk rows of original bytes, each compressed as one zstd frame,
+  // which a Runner downloads one at a time. A blob's bytes belong to the upload that wrote them, and
+  // the blob is reached through the upload: so an upload can write its chunks before its blob is
+  // known and verified, and publishing it copies no bytes. Today every upload is an inline file of
+  // a Batch's creation or of an add, written whole and published in the same transaction.
+  await schema
+    .createTable("blob")
+    // The SHA-256 of the original bytes, as 32 raw bytes: the address of the blob, which a Runner
+    // checks what it downloads against.
+    .addColumn("sha256", "bytea", (col) => col.primaryKey().check(sql`octet_length(sha256) = 32`))
+    .addColumn("originalSizeBytes", "bigint", (col) =>
+      col.notNull().check(sql`"originalSizeBytes" >= 0`),
+    )
+    .execute();
+
+  await schema
+    .createTable("upload")
+    .addColumn("id", "uuid", (col) => col.primaryKey())
+    // The blob the upload published: deleting the blob deletes its upload, and with it the bytes.
+    .addColumn("sha256", "bytea", (col) =>
+      col.notNull().references("blob.sha256").onDelete("cascade"),
+    )
+    // How many original bytes each of its chunks holds but the last, chosen as the upload starts,
+    // so the hub can choose another for new blobs without rewriting what it stored.
+    .addColumn("chunkBytes", "integer", (col) => col.notNull().check(sql`"chunkBytes" > 0`))
+    // A blob's bytes are those of one upload, through which it is read.
+    .addUniqueConstraint("upload_sha256_key", ["sha256"])
+    .execute();
+
+  await schema
+    .createTable("uploadChunk")
+    .addColumn("uploadId", "uuid", (col) =>
+      col.notNull().references("upload.id").onDelete("cascade"),
+    )
+    // The chunk's position in the file: chunk `index` holds the original bytes from `index` times
+    // the upload's `chunkBytes`.
+    .addColumn("index", "integer", (col) => col.notNull().check(sql`index >= 0`))
+    // One zstd frame.
+    .addColumn("bytes", "bytea", (col) => col.notNull())
+    .addPrimaryKeyConstraint("uploadChunk_pkey", ["uploadId", "index"])
+    .execute();
+  // zstd's output does not compress further, so Postgres stores it as it is rather than trying
+  // its own compression on every value first.
+  await sql`alter table agent_batch."uploadChunk" alter column bytes set storage external`.execute(
+    db,
+  );
+
+  // Every job belongs to a Batch: the jobs added to it run one agent, are released, paused and
+  // cancelled as one, and are watched by its failure breaker. A Batch keeps only what its jobs
+  // cannot tell: its agent, labels and breaker, its pause and its cancel, and the breaker's counts
+  // and Canary. Its jobs' counts by status and their cost are read from the jobs themselves.
+  await schema
+    .createTable("batch")
+    .addColumn("id", "uuid", (col) => col.primaryKey())
+    .addColumn("organizationId", "text", (col) =>
+      col.notNull().references("organization.id").onDelete("cascade"),
+    )
+    // The caller's own ID for the Batch, unique in the Organization; null when its creation gave
+    // none, which the unique constraint below ignores.
+    .addColumn("customId", "text")
+    // SHA-256 of the creation's RFC 8785 canonical JSON without the custom ID, in hex, which a
+    // creation naming the same custom ID compares; null when there is none to compare under.
+    .addColumn("contentHash", "text")
+    // The agent every job of the Batch runs, as the creation gave it, with the hub's default for
+    // each limit it left out. Its Input files are `batchInputFile`'s.
+    // What the agent is told beside the Runner's own instructions; null when the agent has none.
+    .addColumn("instructions", "text")
+    .addColumn("resultContract", "jsonb", (col) => col.notNull())
+    // Each job takes these limits when it is added; a job's resume may give it others.
+    .addColumn("runTimeoutSeconds", "integer", (col) =>
+      col.notNull().check(sql`"runTimeoutSeconds" > 0`),
+    )
+    .addColumn("modelBudgetUsd", "numeric", (col) => col.notNull().check(sql`"modelBudgetUsd" > 0`))
+    // Labels every job gets, beside its own, which win where both name a key.
+    .addColumn("labels", "jsonb", (col) => col.notNull())
+    // The failure breaker: how many jobs each Canary holds, and the share of failed jobs among those
+    // ended since the Canary began, as a percentage, past which the Batch pauses. Both are null when
+    // the Batch has no breaker.
+    .addColumn("canary", "integer", (col) => col.check(sql`canary >= 0`))
+    .addColumn("maxFailurePercent", "numeric", (col) =>
+      col.check(sql`"maxFailurePercent" between 0 and 100`),
+    )
+    .addColumn("submitterKeyId", "text", (col) => col.notNull())
+    // Null when the key has no name, which Better Auth allows.
+    .addColumn("submitterKeyName", "text")
+    .addColumn("submitterMemberId", "text", (col) => col.notNull())
+    .addColumn("createdAt", "timestamptz", (col) => col.notNull())
+    // Who paused the Batch and when, by the hub's clock; both null while it is not paused.
+    .addColumn("pausedBy", sql`agent_batch."batchPausedBy"`)
+    .addColumn("pausedAt", "timestamptz")
+    // When the breaker's rule tripped while a caller had the Batch paused, by the hub's clock; null
+    // otherwise. The caller's resume then starts a new Canary, as a resume of the breaker's pause
+    // does, and clears it.
+    .addColumn("breakerTrippedAt", "timestamptz")
+    // When the Batch was cancelled, by the hub's clock; null unless it was. A cancel is final.
+    .addColumn("cancelledAt", "timestamptz")
+    // The breaker's counts since its current Canary began: the jobs whose counted end, success or
+    // failure, has a Usage record after `countedAfterUsageRecordId`, and of them those that failed.
+    // That ID is the latest record's when the Canary began, and 0 for the Batch's first Canary.
+    .addColumn("countedAfterUsageRecordId", "bigint", (col) => col.notNull().defaultTo(0))
+    .addColumn("countedEnds", "integer", (col) => col.notNull().defaultTo(0))
+    .addColumn("countedFailures", "integer", (col) => col.notNull().defaultTo(0))
+    // The places of its current Canary that no job has taken yet, which the jobs added next take.
+    .addColumn("canaryPlacesLeft", "integer", (col) => col.notNull().defaultTo(0))
+    .addUniqueConstraint("batch_organizationId_customId_key", ["organizationId", "customId"])
+    .addCheckConstraint(
+      "batch_contentHash_check",
+      sql`("customId" is null) = ("contentHash" is null)`,
+    )
+    .addCheckConstraint(
+      "batch_breaker_check",
+      sql`(canary is null) = ("maxFailurePercent" is null)`,
+    )
+    .addCheckConstraint("batch_pausedBy_check", sql`("pausedBy" is null) = ("pausedAt" is null)`)
+    .addCheckConstraint(
+      "batch_breakerTrippedAt_check",
+      sql`"breakerTrippedAt" is null or "pausedBy" = 'caller'`,
+    )
+    .execute();
+
+  // The agent's Input files, which every job of the Batch gets beside its own. A Batch's files go
+  // with it; a blob cannot be deleted while a Batch's file refers to it.
+  await schema
+    .createTable("batchInputFile")
+    .addColumn("batchId", "uuid", (col) => col.notNull().references("batch.id").onDelete("cascade"))
+    .addColumn("name", "text", (col) => col.notNull())
+    .addColumn("sha256", "bytea", (col) =>
+      col.notNull().references("blob.sha256").onDelete("restrict"),
+    )
+    .addPrimaryKeyConstraint("batchInputFile_pkey", ["batchId", "name"])
+    .execute();
+  // For the reference check of deleting a blob, and for finding whether any Batch still uses one.
+  await schema
+    .createIndex("batchInputFile_sha256_idx")
+    .on("batchInputFile")
+    .column("sha256")
+    .execute();
+
   // A job belongs to the Organization (ADR 0007). Its submitter and Runner are copied rather than
   // referenced: Better Auth deletes a key's row when the key is revoked or expires, and a removed
   // Runner stays on the jobs it ran, whose execution history identifies the host.
@@ -77,11 +218,12 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("id", "uuid", (col) => col.primaryKey())
     .addColumn("organizationId", "text", (col) => col.notNull())
     .addColumn("status", sql`agent_batch."jobStatus"`, (col) => col.notNull())
-    .addColumn("prompt", "text", (col) => col.notNull())
-    .addColumn("resultContract", "jsonb", (col) => col.notNull())
-    // Null when the submission carried none; the unique constraint below ignores nulls.
-    .addColumn("idempotencyKey", "text")
-    // SHA-256 of the submission's RFC 8785 canonical JSON without the key, in hex: replays compare it.
+    // What the job gives its Batch's agent.
+    .addColumn("input", "text", (col) => col.notNull())
+    // The caller's own ID for the job, unique in its Batch.
+    .addColumn("customId", "text", (col) => col.notNull())
+    // SHA-256 of the job's RFC 8785 canonical JSON as added, without its custom ID, in hex, which an
+    // add naming the same custom ID compares.
     .addColumn("contentHash", "text", (col) => col.notNull())
     .addColumn("submitterKeyId", "text", (col) => col.notNull())
     // Null when the key has no name, which Better Auth allows.
@@ -118,8 +260,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     // end counts what it used from them, and updates them in the statement that writes its record.
     .addColumn("recordedTotalTokens", "bigint", (col) => col.notNull().defaultTo(0))
     .addColumn("recordedCostUsd", "numeric", (col) => col.notNull().defaultTo(0))
-    // The job's limits, resolved when it is submitted from what it gives or the hub's defaults, so a
-    // later change of defaults never moves them, and given again by a resume that names new ones.
+    // The job's limits, its Batch's when it is added, so a later change of the hub's defaults never
+    // moves them, and given again by a resume that names new ones.
     // Each sync of the job's Runner sends both with the job's run.
     // How long each run may work on its Runner, in seconds.
     .addColumn("runTimeoutSeconds", "integer", (col) =>
@@ -128,6 +270,16 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     // The most the job's model calls may cost over its life, in US dollars, compared exactly with its
     // cost.
     .addColumn("modelBudgetUsd", "numeric", (col) => col.notNull().check(sql`"modelBudgetUsd" > 0`))
+    // The job's Batch. Nothing deletes a Batch yet; the Organization's deletion deletes its Batches
+    // and jobs in the same statement, by which point no job refers to a Batch.
+    .addColumn("batchId", "uuid", (col) =>
+      col.notNull().references("batch.id").onDelete("no action"),
+    )
+    // Whether the job is in its Batch's current Canary, which runs before the rest are released.
+    .addColumn("inCanary", "boolean", (col) => col.notNull().defaultTo(false))
+    // What finds the job, groups it and attributes its cost: its Batch's labels with its own, which
+    // win where both name a key.
+    .addColumn("labels", "jsonb", (col) => col.notNull())
     .addForeignKeyConstraint(
       "job_organizationId_fkey",
       ["organizationId"],
@@ -135,11 +287,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       ["id"],
       (constraint) => constraint.onDelete("cascade"),
     )
-    // Accepting a job inserts it under this constraint, so a concurrent duplicate waits for the first.
-    .addUniqueConstraint("job_organizationId_idempotencyKey_key", [
-      "organizationId",
-      "idempotencyKey",
-    ])
+    // Adding a job inserts it under this constraint, so a concurrent duplicate waits for the first.
+    .addUniqueConstraint("job_batchId_customId_key", ["batchId", "customId"])
     // A placement is sent to a Runner, so a job sent has one; a resumed job has its Runner, the one
     // holding its journal, before it is sent.
     .addCheckConstraint("job_placedAt_check", sql`"placedAt" is null or "runnerId" is not null`)
@@ -171,17 +320,38 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .where(sql.ref("status"), "=", "queued")
     .where(sql.ref("placedAt"), "is", null)
     .execute();
+  // Listing jobs by custom ID across Batches.
+  await schema.createIndex("job_customId_idx").on("job").column("customId").execute();
+  // Listing jobs by label reads `labels @> …`, which this operator class serves.
+  await sql`create index "job_labels_idx" on agent_batch.job using gin (labels jsonb_path_ops)`.execute(
+    db,
+  );
+  // A Batch's summary and its controls read its unfinished jobs; placement, its unfinished Canary.
+  await schema
+    .createIndex("job_batchId_unfinished_idx")
+    .on("job")
+    .columns(["batchId", "inCanary"])
+    .where(sql.ref("status"), "in", sql`('queued', 'running', 'paused')`)
+    .execute();
+  // Listing a Batch's jobs, newest first.
+  await schema.createIndex("job_batchId_id_idx").on("job").columns(["batchId", "id"]).execute();
 
+  // A job's own Input files.
   await schema
     .createTable("inputFile")
     .addColumn("jobId", "uuid", (col) => col.notNull())
     .addColumn("name", "text", (col) => col.notNull())
-    .addColumn("content", "text", (col) => col.notNull())
+    // A job's file refers to its blob, which cannot be deleted while any job's file refers to it.
+    .addColumn("sha256", "bytea", (col) =>
+      col.notNull().references("blob.sha256").onDelete("restrict"),
+    )
     .addPrimaryKeyConstraint("inputFile_pkey", ["jobId", "name"])
     .addForeignKeyConstraint("inputFile_jobId_fkey", ["jobId"], "job", ["id"], (constraint) =>
       constraint.onDelete("cascade"),
     )
     .execute();
+  // For the reference check of deleting a blob, and for finding whether any job still uses one.
+  await schema.createIndex("inputFile_sha256_idx").on("inputFile").column("sha256").execute();
 
   // What a job has used so far and what it is doing: one row per job, inserted when the job is
   // accepted and rewritten by every report that changes it. A rewrite avoids new index entries only
@@ -275,6 +445,10 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     // its Runner still owes their deletion, and before the job is deleted.
     .addColumn("hostDeletionOutcome", sql`agent_batch."hostDeletionOutcome"`)
     .addColumn("hostDeletionOutcomeAt", "timestamptz")
+    // The job's Batch and labels as it ended, to group cost by after the job is deleted. The Batch
+    // is copied rather than referenced, as the Runner is.
+    .addColumn("batchId", "uuid", (col) => col.notNull())
+    .addColumn("labels", "jsonb", (col) => col.notNull())
     .addForeignKeyConstraint(
       "usageRecord_organizationId_fkey",
       ["organizationId"],
@@ -359,6 +533,11 @@ export async function down(db: Kysely<unknown>): Promise<void> {
     "jobProgress",
     "inputFile",
     "job",
+    "batchInputFile",
+    "batch",
+    "uploadChunk",
+    "upload",
+    "blob",
     "runner",
     "rateLimit",
     "apikey",
@@ -372,7 +551,13 @@ export async function down(db: Kysely<unknown>): Promise<void> {
   ]) {
     await schema.dropTable(table).execute();
   }
-  for (const type of ["hostDeletionOutcome", "jobFailureReason", "jobControl", "jobStatus"]) {
+  for (const type of [
+    "batchPausedBy",
+    "hostDeletionOutcome",
+    "jobFailureReason",
+    "jobControl",
+    "jobStatus",
+  ]) {
     await schema.dropType(type).execute();
   }
 }
