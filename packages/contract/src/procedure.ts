@@ -36,9 +36,10 @@ export const HubNotSetUp = error("SERVICE_UNAVAILABLE", { message: "The hub is n
 export const NotFound = error("NOT_FOUND");
 
 /**
- * Every HTTP call, the API's and the Runner's, whose bodies are all JSON. oRPC's client reads only `application/json` as
- * JSON by itself, and errors arrive as Problem Details. Every call says who may make it (`byKey`,
- * `byMember` or `byKeyOrMember`), and the hub refuses anyone else with `UNAUTHORIZED`.
+ * Every HTTP call, the API's and the Runner's, whose bodies are JSON unless the call says otherwise.
+ * oRPC's client reads only `application/json` as JSON by itself, and errors arrive as Problem
+ * Details. Every call says who may make it (`byKey`, `byMember` or `byKeyOrMember`), and the hub
+ * refuses anyone else with `UNAUTHORIZED`.
  */
 export const api = oc.errors({ [Unauthorized.code]: Unauthorized }).meta(
   openapi({ responseBodyHint: "json" }),
