@@ -59,6 +59,14 @@ const DEFAULT_THINKING_LEVEL = "medium";
 /** The file in the Runner's data directory holding its sign-ins' tokens. */
 const CREDENTIALS_FILE = "auth.json";
 
+/**
+ * Why a sign-in is not used with `RUNNER_MODEL_BASE_URL`: its tokens would go to whatever serves
+ * that URL, and Pi shapes a sign-in's requests for the provider's own endpoint, such as ChatGPT's,
+ * which it recognizes by its URL.
+ */
+const SIGN_IN_WITH_BASE_URL =
+  "RUNNER_MODEL_BASE_URL takes the provider's key, not a sign-in, whose tokens would go to that URL. Unset it, or give the key and delete the sign-in (auth.json in the data directory) or unset ANTHROPIC_OAUTH_TOKEN.";
+
 /** The file in the Runner's data directory holding the ID a provider knows this installation by. */
 const INSTALLATION_FILE = "installation_id";
 
@@ -110,6 +118,16 @@ if (command !== undefined && command !== "register" && command !== "login") {
 /** Where the Runner keeps what must survive restarts. */
 const dataDirSetting = Config.String("RUNNER_DATA_DIR").pipe(Config.withDefault("data"));
 
+/** Where the Runner calls its provider's models instead of the provider's own URL, if anywhere. */
+const modelBaseUrlSetting = Config.schema(
+  Schema.URL.check(
+    Schema.makeFilter((url) => url.protocol === "http:" || url.protocol === "https:", {
+      message: "Not an http: or https: URL",
+    }),
+  ),
+  "RUNNER_MODEL_BASE_URL",
+).pipe(Config.option);
+
 /** The Runner's settings, read from the environment by Effect's default `Config` source. */
 const runnerSettings = Config.all({
   hubUrl: Config.URL("HUB_URL"),
@@ -118,6 +136,7 @@ const runnerSettings = Config.all({
   maxJobs: Config.Int("RUNNER_MAX_JOBS").pipe(Config.option),
   provider: Config.NonEmptyString("RUNNER_MODEL_PROVIDER"),
   modelId: Config.NonEmptyString("RUNNER_MODEL_ID"),
+  modelBaseUrl: modelBaseUrlSetting,
   thinkingLevel: Config.Literals(MODEL_THINKING_LEVELS, "RUNNER_THINKING_LEVEL").pipe(
     Config.withDefault(DEFAULT_THINKING_LEVEL),
   ),
@@ -148,9 +167,31 @@ function refuse(message: string) {
   return Effect.sync(() => console.error(message)).pipe(Effect.andThen(Effect.fail(new Refused())));
 }
 
-/** The models Pi knows, with the keys in the environment and the sign-ins in `dataDir`. */
-function runnerModels(dataDir: string) {
-  return builtinModels({ credentials: fileCredentialStore(path.join(dataDir, CREDENTIALS_FILE)) });
+/**
+ * The models Pi knows, with the keys in the environment and the sign-ins in `dataDir`. With
+ * `baseUrl`, the provider `provider`'s models are called there, as Pi's coding agent calls them for
+ * a provider's `baseUrl` in its `models.json`.
+ */
+function runnerModels(dataDir: string, baseUrl?: { provider: string; url: URL }) {
+  const models = builtinModels({
+    credentials: fileCredentialStore(path.join(dataDir, CREDENTIALS_FILE)),
+  });
+  const provider = baseUrl && models.getProvider(baseUrl.provider);
+  const apiKey = provider?.auth.apiKey;
+  if (baseUrl && provider && apiKey) {
+    const url = baseUrl.url.href;
+    const atUrl = <M extends { baseUrl: string }>(model: M): M => ({ ...model, baseUrl: url });
+    models.setProvider({
+      ...provider,
+      baseUrl: url,
+      // The key alone: a sign-in, even one saved while the Runner runs, fails rather than sends its
+      // tokens to `url`.
+      auth: { apiKey },
+      getModels: () => provider.getModels().map(atUrl),
+      getAllModels: provider.getAllModels && (() => provider.getAllModels?.().map(atUrl) ?? []),
+    });
+  }
+  return models;
 }
 
 /**
@@ -221,10 +262,13 @@ const terminalInteraction: AuthInteraction = {
 
 /** Signs in to the model's provider, as `login` does, and saves the sign-in in the data directory. */
 const login = Effect.gen(function* () {
-  const { dataDir, provider } = yield* Config.all({
+  const { dataDir, provider, modelBaseUrl } = yield* Config.all({
     dataDir: dataDirSetting,
     provider: Config.NonEmptyString("RUNNER_MODEL_PROVIDER"),
+    modelBaseUrl: modelBaseUrlSetting,
   });
+  // A refusal fails the program, so nothing after it runs.
+  if (Option.isSome(modelBaseUrl)) yield* refuse(SIGN_IN_WITH_BASE_URL);
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(dataDir, { recursive: true }).pipe(Effect.orDie);
   const id = yield* loadOrCreateInstallationId(dataDir).pipe(Effect.orDie);
@@ -263,11 +307,40 @@ const login = Effect.gen(function* () {
 
 const run = Effect.gen(function* () {
   const settings = yield* runnerSettings;
-  const models = runnerModels(settings.dataDir);
+  const baseUrl = Option.getOrUndefined(settings.modelBaseUrl);
+  // Pi calls Azure OpenAI at `AZURE_OPENAI_BASE_URL`, or the URL of `AZURE_OPENAI_RESOURCE_NAME`,
+  // ahead of a model's own URL, so the setting would be passed over whenever either is set.
+  if (baseUrl && settings.provider === "azure") {
+    return yield* refuse(
+      "RUNNER_MODEL_BASE_URL is not used with Azure OpenAI: set AZURE_OPENAI_BASE_URL to call its models at another URL.",
+    );
+  }
+  // Checked without `baseUrl`, whose models would report the provider unconfigured rather than find
+  // the sign-in.
+  if (
+    baseUrl &&
+    (yield* Effect.promise(() => runnerModels(settings.dataDir).checkAuth(settings.provider)))
+      ?.type === "oauth"
+  ) {
+    return yield* refuse(SIGN_IN_WITH_BASE_URL);
+  }
+  const models = runnerModels(
+    settings.dataDir,
+    baseUrl && { provider: settings.provider, url: baseUrl },
+  );
   const problem = yield* Effect.promise(() =>
     renewModelAuthProblem(models, settings.provider, settings.modelId),
   );
   if (problem) return yield* refuse(problem);
+  // Pi takes a Claude subscription's token from this variable as it takes a key, ahead of
+  // `ANTHROPIC_API_KEY`, and names it as the source.
+  if (
+    baseUrl &&
+    (yield* Effect.promise(() => models.getAuth(settings.provider)))?.source ===
+      "ANTHROPIC_OAUTH_TOKEN"
+  ) {
+    return yield* refuse(SIGN_IN_WITH_BASE_URL);
+  }
   return yield* runRunner({
     hubUrl: settings.hubUrl,
     registrationKey: Redacted.value(settings.registrationKey),
