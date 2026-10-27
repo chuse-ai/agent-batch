@@ -65,7 +65,7 @@ const CREDENTIALS_FILE = "auth.json";
  * which it recognizes by its URL.
  */
 const SIGN_IN_WITH_BASE_URL =
-  "RUNNER_MODEL_BASE_URL works with the provider's key only, not with a sign-in or a subscription's token, which would go to that URL. Unset it, or delete the sign-in (auth.json in the data directory) or unset ANTHROPIC_OAUTH_TOKEN, and give the provider's key in the environment.";
+  "RUNNER_MODEL_BASE_URL takes the provider's key, not a sign-in, whose tokens would go to that URL. Unset it, or give the key and delete the sign-in (auth.json in the data directory) or unset ANTHROPIC_OAUTH_TOKEN.";
 
 /** The file in the Runner's data directory holding the ID a provider knows this installation by. */
 const INSTALLATION_FILE = "installation_id";
@@ -170,9 +170,7 @@ function refuse(message: string) {
 /**
  * The models Pi knows, with the keys in the environment and the sign-ins in `dataDir`. With
  * `baseUrl`, the provider `provider`'s models are called there, as Pi's coding agent calls them for
- * a provider's `baseUrl` in its `models.json`, and with its key alone: the provider then takes no
- * sign-in, not even one saved while the Runner runs, so its calls fail rather than take a sign-in's
- * tokens to `baseUrl`.
+ * a provider's `baseUrl` in its `models.json`.
  */
 function runnerModels(dataDir: string, baseUrl?: { provider: string; url: URL }) {
   const models = builtinModels({
@@ -186,6 +184,8 @@ function runnerModels(dataDir: string, baseUrl?: { provider: string; url: URL })
     models.setProvider({
       ...provider,
       baseUrl: url,
+      // The key alone: a sign-in, even one saved while the Runner runs, fails rather than sends its
+      // tokens to `url`.
       auth: { apiKey },
       getModels: () => provider.getModels().map(atUrl),
       getAllModels: provider.getAllModels && (() => provider.getAllModels?.().map(atUrl) ?? []),
@@ -315,8 +315,8 @@ const run = Effect.gen(function* () {
       "RUNNER_MODEL_BASE_URL is not used with Azure OpenAI: set AZURE_OPENAI_BASE_URL to call its models at another URL.",
     );
   }
-  // A sign-in is looked for among all of the provider's auth, as the models with `baseUrl` take
-  // none and would only report the provider unconfigured.
+  // Checked without `baseUrl`, whose models would report the provider unconfigured rather than find
+  // the sign-in.
   if (
     baseUrl &&
     (yield* Effect.promise(() => runnerModels(settings.dataDir).checkAuth(settings.provider)))
