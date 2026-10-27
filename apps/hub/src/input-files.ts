@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { zstdCompressSync } from "node:zlib";
 
 import type { JobSubmission } from "contract";
-import { Effect, Record } from "effect";
+import { Array, Effect, Record } from "effect";
 import type { Kysely } from "kysely";
 
 import { Db, jsonRows } from "./db/database.ts";
@@ -13,6 +13,7 @@ import {
   type Database,
   InputFileName,
   type JobId,
+  type NewUpload,
   type NewUploadChunk,
   type RunnerId,
   UploadChunkIndex,
@@ -37,6 +38,16 @@ import {
  * keeps the size it was stored with.
  */
 const CHUNK_BYTES = 1024 * 1024;
+
+// Eight chunks use 24 parameters and at most about 8.04 MiB with zstd's compression bound.
+// pg's binary serializer allocates about 16.45 MiB for that group, leaving room for the hub and
+// prepared files within Workers' 128 MB. Postgres allows 65,535 parameters and messages just
+// under 1 GiB; Hyperdrive documents a 60-second query limit, no query or parameter byte limit.
+// https://www.postgresql.org/docs/current/limits.html
+// https://github.com/postgres/postgres/blob/REL_18_STABLE/src/include/libpq/libpq.h
+// https://developers.cloudflare.com/hyperdrive/platform/limits/
+// https://developers.cloudflare.com/workers/platform/limits/#memory
+const CHUNKS_PER_INSERT = 8;
 
 /** A blob a submission's Input files need, compressed if the hub held none of it when it looked. */
 interface PreparedBlob {
@@ -214,22 +225,42 @@ async function storeBlobs(trx: Kysely<Database>, prepared: readonly PreparedInpu
     .returning("sha256")
     .execute();
   const created = new Set(inserted.map((row) => row.sha256.toString("hex")));
+  if (created.size === 0) return;
+  const uploads: NewUpload[] = [];
+  const chunks: NewUploadChunk[] = [];
   for (const [hex, blob] of blobs) {
     if (!created.has(hex)) continue;
     const uploadId = UploadId(randomUUID());
-    await trx
-      .insertInto("upload")
-      .values({ id: uploadId, sha256: blob.sha256, chunkBytes: CHUNK_BYTES })
-      .execute();
+    uploads.push({ id: uploadId, sha256: blob.sha256, chunkBytes: CHUNK_BYTES });
     // Compressed here only when the blob was stored when the submission looked and deleted since.
-    const chunks: NewUploadChunk[] = (blob.chunks ?? compress(blob.bytes)).map((bytes, index) => ({
-      uploadId,
-      index: UploadChunkIndex(index),
-      bytes,
-    }));
-    // An empty file has no chunks. pg sends a Buffer parameter as binary, so the bytes cross to
-    // Postgres as they are.
-    if (chunks.length > 0) await trx.insertInto("uploadChunk").values(chunks).execute();
+    for (const [index, bytes] of (blob.chunks ?? compress(blob.bytes)).entries()) {
+      chunks.push({ uploadId, index: UploadChunkIndex(index), bytes });
+    }
+  }
+  await trx
+    .insertInto("upload")
+    .columns(["id", "sha256", "chunkBytes"])
+    .expression(
+      trx
+        .selectFrom((eb) =>
+          jsonRows(
+            eb,
+            uploads.map((upload) => ({ ...upload, sha256: upload.sha256.toString("hex") })),
+          ),
+        )
+        .select((eb) => [
+          eb.cast<UploadId>(eb.ref("row.value", "->>").key("id"), "uuid").as("id"),
+          eb
+            .fn<BlobSha256>("decode", [eb.ref("row.value", "->>").key("sha256"), eb.val("hex")])
+            .as("sha256"),
+          eb.cast<number>(eb.ref("row.value", "->>").key("chunkBytes"), "integer").as("chunkBytes"),
+        ]),
+    )
+    .execute();
+  // An empty file has no chunks. pg sends a Buffer parameter as binary, so the bytes cross to
+  // Postgres as they are, without JSON or hex expansion.
+  for (const group of Array.chunksOf(chunks, CHUNKS_PER_INSERT)) {
+    await trx.insertInto("uploadChunk").values(group).execute();
   }
 }
 

@@ -96,6 +96,59 @@ test("a sync names a job's Input files, and only the Runner the job is placed on
   }
 });
 
+test("one add stores and serves every Input file across many jobs", async () => {
+  const client = await system.clientWithNewJobsKey();
+  const shared = { content: "Shared across the add." };
+  const batch = await client.batches.create({
+    agent: { resultContract: { schema: {} }, inputFiles: { "shared.txt": shared } },
+    breaker: false,
+  });
+  const jobs = Array.from({ length: 100 }, (_, index) => ({
+    customId: `files-${index}`,
+    input: "Read the files.",
+    inputFiles: {
+      "own.txt": { content: index === 0 ? `${LARGE}First job.` : `File for job ${index}.` },
+      "copy.txt": shared,
+      "empty.txt": { content: "" },
+    },
+  }));
+  const added = await client.batches.addJobs({ id: batch.id, jobs });
+  expect(added.jobs).toHaveLength(jobs.length);
+  expect(added.jobs.every(({ created }) => created)).toBe(true);
+  const placed = await connectProtocolRunner();
+  try {
+    const { runs } = await placed.runner.request("sync", { held: [], free: jobs.length }, 10_000);
+    for (const [index, submission] of jobs.entries()) {
+      const addedJob = added.jobs[index];
+      assert(addedJob);
+      const id = addedJob.job.id;
+      const listed = runs.find((run) => run.jobId === id)?.job?.inputFiles;
+      assert(listed);
+      const expected = { ...submission.inputFiles, "shared.txt": shared };
+      expect(listed.map(({ name }) => name).toSorted()).toEqual(Object.keys(expected).toSorted());
+      for (const [name, { content }] of Object.entries(expected)) {
+        const file = listed.find((entry) => entry.name === name);
+        assert(file);
+        expect(file).toMatchObject({
+          sha256: sha256(content),
+          originalSizeBytes: Buffer.byteLength(content),
+        });
+        const chunks: Buffer[] = [];
+        const count = Math.ceil(file.originalSizeBytes / file.chunkBytes);
+        for (let chunkIndex = 0; chunkIndex < count; chunkIndex++) {
+          const chunk = await placed.api.getInputFileChunk({ id, name, index: chunkIndex });
+          assert(chunk instanceof Blob);
+          chunks.push(zstdDecompressSync(await chunk.arrayBuffer()));
+        }
+        expect(Buffer.concat(chunks).toString("utf8")).toBe(content);
+      }
+    }
+  } finally {
+    await client.batches.cancel({ id: batch.id });
+    placed.close();
+  }
+}, 30_000);
+
 test("deleting a job deletes the content of its Input files that no other job uses", async () => {
   const client = await system.clientWithNewJobsKey();
   const shared = { content: "Shared between both jobs." };
