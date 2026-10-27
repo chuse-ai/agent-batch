@@ -110,6 +110,8 @@ const AcceptedResult = defineDoc<{ result?: JsonValue }>({
   history: "latest",
   fork: "initial",
   initial: () => ({}),
+  // Written once, so there is no replay of changes to bound.
+  checkpointWhen: () => false,
 });
 
 /**
