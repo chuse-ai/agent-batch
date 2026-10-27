@@ -1,6 +1,6 @@
 {
   "name": "contract",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "The hub's API contract and runner protocol, shared by the hub, runner and client.",
   "type": "module",
