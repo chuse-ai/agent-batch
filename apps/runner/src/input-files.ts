@@ -16,7 +16,7 @@ import { type AgentSettings, jobPaths } from "./agent.ts";
 // frame because Node's zstd decoder before 26.10 stops at the end of the first frame of a stream
 // that holds several, and the Runner supports Node 22. So neither side holds more than a chunk.
 
-/** The hub's calls for Runners, made with the Runner's own key. */
+/** The hub's calls for Runners; each client's link sends the key its calls need. */
 export type HubClient = ContractRouterClient<typeof runnerContract>;
 
 /** A job's Input file that could not be downloaded, naming the file and why. */

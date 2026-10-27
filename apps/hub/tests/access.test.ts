@@ -9,7 +9,7 @@ import { GRANTABLE_KEY_PERMISSIONS, RUNNER_KEY_PERMISSIONS } from "../src/auth/o
 // own key holds.
 
 test("every call says who may make it, with key permissions a member can grant or a Runner holds", () => {
-  walkProcedureContractsSync({ ...contract, runner: runnerContract }, (procedure, path) => {
+  walkProcedureContractsSync({ contract, runnerContract }, (procedure, path) => {
     const access = getAccess(procedure);
     expect(access, path.join(".")).toBeDefined();
     if (access?.key) {
