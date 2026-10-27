@@ -8,7 +8,9 @@
         { "type": "json", "path": "apps/hub/package.json", "jsonpath": "$.version" },
         { "type": "json", "path": "apps/runner/package.json", "jsonpath": "$.version" },
         { "type": "json", "path": "packages/cli/package.json", "jsonpath": "$.version" },
-        { "type": "json", "path": "packages/contract/package.json", "jsonpath": "$.version" }
+        { "type": "json", "path": "packages/contract/package.json", "jsonpath": "$.version" },
+        { "type": "generic", "path": "compose.yaml" },
+        { "type": "generic", "path": "README.md" }
       ]
     }
   },

@@ -3,6 +3,10 @@
 # `compose.override.yaml` beside this file, which Compose merges into it. Settings come from `.env`
 # beside this file; the Runner's registration key exists only once the hub runs, so the Runner
 # starts after the hub, and nothing here requires its settings.
+#
+# Each release carries this file with its own version as the images' default, which release-please
+# writes at each release; `AGENT_BATCH_VERSION` in `.env` picks other images. On `main` it names
+# the last release, whose images may not match changes made since.
 name: agent-batch
 
 services:
@@ -30,7 +34,7 @@ services:
     restart: unless-stopped
 
   hub:
-    image: ghcr.io/chuse-ai/agent-batch-hub:${AGENT_BATCH_VERSION:-latest}
+    image: ghcr.io/chuse-ai/agent-batch-hub:${AGENT_BATCH_VERSION:-0.3.0} # x-release-please-version
     depends_on:
       database:
         condition: service_healthy
@@ -57,7 +61,7 @@ services:
     restart: unless-stopped
 
   runner:
-    image: ghcr.io/chuse-ai/agent-batch-runner:${AGENT_BATCH_VERSION:-latest}
+    image: ghcr.io/chuse-ai/agent-batch-runner:${AGENT_BATCH_VERSION:-0.3.0} # x-release-please-version
     # The hub's image checks its health: healthy once it serves requests.
     depends_on:
       hub:
