@@ -12,7 +12,6 @@ import {
   type JobEventsPage,
   type JobsPage,
   type Labels,
-  type ListedJob,
   jobEventSchema,
 } from "contract";
 import { Array, Effect, Order, Record, String } from "effect";
@@ -1097,11 +1096,10 @@ export function listJobs(query: JobListQuery) {
         .limit(limit + 1)
         .execute();
       return {
+        // Read without their content, which the contract's `ListedJob` leaves out of the answer.
         jobs: rows
           .slice(0, limit)
-          .map((row) =>
-            toListedJob(toApiJob({ ...row, result: null, failureMessage: null, activity: null })),
-          ),
+          .map((row) => toApiJob({ ...row, result: null, failureMessage: null, activity: null })),
         hasMore: rows.length > limit,
       } satisfies JobsPage;
     }),
@@ -1124,20 +1122,6 @@ const LISTED_JOB_COLUMNS = [
   "customId",
   "labels",
 ] as const satisfies readonly (typeof JOB_COLUMNS)[number][];
-
-/** `job` as a list reports it: without its result, its failure's message and its activity. */
-function toListedJob(job: Job): ListedJob {
-  if (job.status === "failed") {
-    const { failure, activity: _activity, ...rest } = job;
-    return { ...rest, failure: { reason: failure.reason } };
-  }
-  const { activity: _activity, ...rest } = job;
-  if (rest.status === "succeeded") {
-    const { result: _result, ...withoutResult } = rest;
-    return withoutResult;
-  }
-  return rest;
-}
 
 /**
  * A page of the job `jobId`'s events after the position `after`, or a 404 error. Stored rows
