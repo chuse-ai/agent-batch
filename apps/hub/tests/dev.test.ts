@@ -92,7 +92,8 @@ async function getJob(id: string) {
   );
 }
 
-describe.skipIf(inject("hub") !== "node")("agent-batch dev", () => {
+// The data folder follows `XDG_DATA_HOME` on Linux only; elsewhere the test would use the user's own.
+describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")("agent-batch dev", () => {
   test("runs a hub and a Runner that job commands reach, and Ctrl-C removes the containers but keeps the data and keys", async () => {
     await Promise.all(
       (["hub", "runner"] as const).map(async (target) => {

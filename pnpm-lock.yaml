@@ -592,6 +592,9 @@ importers:
       '@types/write-file-atomic':
         specifier: 'catalog:'
         version: 4.0.3
+      better-auth:
+        specifier: 'catalog:'
+        version: 1.7.12(pg@8.23.1)(vitest@5.0.5)
       contract:
         specifier: workspace:*
         version: link:../contract

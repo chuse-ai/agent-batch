@@ -6,6 +6,7 @@ import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
 import * as NodePath from "@effect/platform-node-shared/NodePath";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
+import { applySetCookies } from "better-auth/cookies/utils";
 import { apiContract, createProblemDetailsLink } from "contract";
 import {
   Config,
@@ -16,6 +17,7 @@ import {
   PlatformError,
   Predicate,
   Schedule,
+  Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import ensureError from "ensure-error";
@@ -278,6 +280,26 @@ function compose(
   );
 }
 
+/** What `docker compose` with `args` prints on the project, failing unless it succeeds. */
+function composeOutput(args: readonly string[]) {
+  return Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const handle = yield* spawner.spawn(
+      ChildProcess.make("docker", ["compose", "--project-name", PROJECT, ...args], {
+        stderr: "inherit",
+      }),
+    );
+    const [stdout, exitCode] = yield* Effect.all(
+      [Stream.mkString(Stream.decodeText(handle.stdout)), handle.exitCode],
+      { concurrency: "unbounded" },
+    );
+    if (exitCode !== 0) {
+      return yield* Effect.fail(new Error(`docker compose ${args[0]} exited with ${exitCode}`));
+    }
+    return stdout;
+  }).pipe(Effect.scoped);
+}
+
 /** Removes the project's containers and network, leaving its volumes, as after a run stopped outright. */
 const removeContainers = compose(["down", "--remove-orphans"], { errorsOnly: true });
 
@@ -334,13 +356,14 @@ function signIn(state: State) {
       if (!response.ok) {
         throw new Error(`The hub refused the owner's sign-in: ${await response.text()}`);
       }
-      // A `Set-Cookie` header is the cookie's `name=value`, then its attributes after `;`.
-      const cookie = response.headers
-        .getSetCookie()
-        .map((header) => header.split(";", 1)[0])
-        .join("; ");
+      const session = new Headers();
+      applySetCookies(session, response.headers.getSetCookie());
       return createORPCClient(
-        createProblemDetailsLink(apiContract, { origin: url, url: "/", headers: { cookie } }),
+        createProblemDetailsLink(apiContract, {
+          origin: url,
+          url: "/",
+          headers: { cookie: session.get("cookie") ?? "" },
+        }),
       );
     },
     catch: ensureError,
@@ -567,7 +590,6 @@ export function devCommands(version: string) {
     start: os
       .meta({
         default: true,
-        jsonInput: "never",
         description:
           "Runs a hub, a Runner and the hub's Postgres on this machine with Docker, until stopped with Ctrl-C, which removes the containers and keeps their data for the next start. The first start creates the hub's owner and an API key, which agent-batch commands in other terminals use while AGENT_BATCH_URL and AGENT_BATCH_API_KEY are unset. The Runner takes its provider's key from this command's environment, or the sign-in agent-batch dev login saves.",
       })
@@ -588,7 +610,6 @@ export function devCommands(version: string) {
       .handler(({ input }) => runUntilStopped(start(version, input))),
     stop: os
       .meta({
-        jsonInput: "never",
         description:
           "Removes the containers agent-batch dev left behind when it was stopped outright, keeping their data.",
       })
@@ -597,7 +618,6 @@ export function devCommands(version: string) {
       .handler(() => runToEnd(lockState.pipe(Effect.andThen(removeContainers), Effect.scoped))),
     reset: os
       .meta({
-        jsonInput: "never",
         description:
           "Deletes everything agent-batch dev keeps: the hub's jobs, the Runner's data and any sign-in it holds, and the keys and secrets made for them.",
       })
@@ -610,16 +630,7 @@ export function devCommands(version: string) {
             yield* compose(["down", "--remove-orphans", "--volumes"], { errorsOnly: true });
             // Compose succeeds when a volume is still in use, and keeps it; its password is in the
             // state, so the state goes only with the volumes.
-            const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-            const left = yield* spawner.string(
-              ChildProcess.make("docker", [
-                "volume",
-                "ls",
-                "--quiet",
-                "--filter",
-                `label=com.docker.compose.project=${PROJECT}`,
-              ]),
-            );
+            const left = yield* composeOutput(["volumes", "--quiet"]);
             if (left.trim() !== "") {
               return yield* Effect.fail(
                 new Error(
@@ -634,7 +645,6 @@ export function devCommands(version: string) {
       ),
     login: os
       .meta({
-        jsonInput: "never",
         description:
           "Signs the Runner in to its model provider's subscription, where Pi offers one, instead of a key; the Runner keeps the sign-in with its data. See the Runner's README for what a sign-in allows.",
       })
@@ -654,7 +664,6 @@ export function devCommands(version: string) {
       ),
     env: os
       .meta({
-        jsonInput: "never",
         description:
           "Prints the hub's address and the API key agent-batch dev made as shell exports, for clients other than agent-batch.",
       })
