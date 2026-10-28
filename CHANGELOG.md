@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.0](https://github.com/chuse-ai/agent-batch/compare/v0.4.0...v0.5.0) (2026-10-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* Supported Docker deployments require Engine 29 or later and Compose 5 or later.
+
+### Features
+
+* **cli:** agent-batch stack runs the local deployment in the background ([#46](https://github.com/chuse-ai/agent-batch/issues/46)) ([f3ce73d](https://github.com/chuse-ai/agent-batch/commit/f3ce73db326aafaff125c3ebdcab0b2700b4b603))
+* **cli:** guide stack startup and manage provider credentials ([#48](https://github.com/chuse-ai/agent-batch/issues/48)) ([ed17876](https://github.com/chuse-ai/agent-batch/commit/ed1787618af8b4504a9a99fe149aab4930b44dc1))
+
+
+### Build System
+
+* update Vite+ and the supported Docker baseline ([#47](https://github.com/chuse-ai/agent-batch/issues/47)) ([7003340](https://github.com/chuse-ai/agent-batch/commit/70033408993500ecae818f33d3d8eae86f1e85e9))
+
 ## [0.4.0](https://github.com/chuse-ai/agent-batch/compare/v0.3.0...v0.4.0) (2026-10-27)
 
 
