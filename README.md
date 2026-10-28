@@ -6,19 +6,19 @@ The hub runs on Cloudflare Workers or Node/Docker; Runners execute jobs on the m
 
 ## Quickstart
 
-From nothing to a finished job on one machine with Docker Engine 29 or later and Compose 5 or later, Node 22.19 or later and `jq`: `agent-batch dev` runs a hub, a Runner and the hub's Postgres from the images released with it, and jobs go through the same `agent-batch` command. To run them for other machines, see [Deploying with Docker Compose](#deploying-with-docker-compose). On Ubuntu 24.04, first let the Runner's job sandboxes create user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, and a file in `/etc/sysctl.d` to keep it; on Ubuntu 25.04 and later they cannot run yet (see [the Runner's README](apps/runner/README.md)).
+From nothing to a finished job on one machine with Docker Engine 29 or later and Compose 5 or later, Node 22.19 or later and `jq`: `agent-batch stack start` runs a hub, a Runner and the hub's Postgres from the images released with it, and jobs go through the same `agent-batch` command. To run them for other machines, see [Deploying with Docker Compose](#deploying-with-docker-compose). On Ubuntu 24.04, first let the Runner's job sandboxes create user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, and a file in `/etc/sysctl.d` to keep it; on Ubuntu 25.04 and later they cannot run yet (see [the Runner's README](apps/runner/README.md)).
 
-1. **Start the hub and a Runner**, with the model every job runs on and its provider's key; here OpenRouter's free models. It keeps running and prints their logs; Ctrl-C stops it.
+1. **Start the hub and a Runner**, with the model every job runs on and its provider's key; here OpenRouter's free models. It returns once the hub is healthy and keeps running in the background, even after you close the terminal.
 
    ```sh
-   OPENROUTER_API_KEY=<your key> npx --yes agent-batch dev
+   OPENROUTER_API_KEY=<your key> npx --yes agent-batch stack start
    ```
 
-   Another model goes in `--model-provider` and `--model-id`, as Pi names them, with the provider's key in `<PROVIDER>_API_KEY`, such as `--model-provider anthropic --model-id claude-sonnet-5-5` with `ANTHROPIC_API_KEY`; `--model-key-env` names another variable, such as `GEMINI_API_KEY` for `google`. `npx agent-batch dev login --model-provider <provider>` signs the Runner in to a provider's subscription instead, where Pi offers one; then start it with that provider and a model. Stopping removes the containers and keeps their data, keys and sign-in for the next start, which remembers the model too; `npx agent-batch dev reset` deletes them.
+   Another model goes in `--model-provider` and `--model-id`, as Pi names them, with the provider's key in `<PROVIDER>_API_KEY`, such as `--model-provider anthropic --model-id claude-sonnet-5-5` with `ANTHROPIC_API_KEY`; `--model-key-env` names another variable, such as `GEMINI_API_KEY` for `google`. `npx agent-batch stack login --model-provider <provider>` signs the Runner in to a provider's subscription instead, where Pi offers one; then start it with that provider and a model. `npx agent-batch stack stop` stops it and keeps its data, keys and sign-in for the next start, which remembers the model too. `npx agent-batch stack delete` stops it and deletes its database and Runner volumes and saved credentials, without a prompt.
 
-   On its first start it creates the hub's owner and an API key for jobs. `agent-batch` commands use that hub and key while `AGENT_BATCH_URL` and `AGENT_BATCH_API_KEY` are unset, and `npx agent-batch dev env` prints both for other clients, such as `curl`.
+   On its first start it creates the hub's owner and an API key for jobs. `agent-batch` commands use that hub and key while `AGENT_BATCH_URL` and `AGENT_BATCH_API_KEY` are unset, and `npx agent-batch stack env` prints both for other clients, such as `curl`.
 
-2. **Submit a job**, in another terminal: the agent it runs, with the Result contract its result must match, the input it works on, Input files the agent finds in its Workspace's `inputs/` folder, and a custom ID. The job's `id` goes into `ID` for the steps that follow.
+2. **Submit a job**: the agent it runs, with the Result contract its result must match, the input it works on, Input files the agent finds in its Workspace's `inputs/` folder, and a custom ID. The job's `id` goes into `ID` for the steps that follow.
 
    ```sh
    cat > job.json <<'EOF'
@@ -40,7 +40,7 @@ From nothing to a finished job on one machine with Docker Engine 29 or later and
    npx agent-batch jobs wait --id "$ID"
    ```
 
-   A job stays `queued` until a Runner has room for it; the Runner's log, which `agent-batch dev` prints, shows any error that keeps it from connecting.
+   A job stays `queued` until a Runner has room for it; the Runner's log, which `npx agent-batch stack logs --follow` prints, shows any error that keeps it from connecting.
 
    What it did is in its events, a page at a time: read again `after` the last event's `id` while `hasMore` is true, and stop once a page without more has a final `status`.
 
@@ -59,6 +59,10 @@ From nothing to a finished job on one machine with Docker Engine 29 or later and
    ```sh
    npx agent-batch jobs cancel --id "$ID"   # likewise pause, resume and delete
    ```
+
+`npx agent-batch stack status` shows whether the stack is running, the hub's URL and health, and the image versions in use. `npx agent-batch stack logs` prints its logs without following them.
+
+To upgrade, run `npx agent-batch stack stop`, back up the volumes if the data matters, then run `npx --yes agent-batch@<new-version> stack start` with the new CLI version and the provider key as above.
 
 ## Deploying with Docker Compose
 
