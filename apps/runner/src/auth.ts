@@ -52,33 +52,34 @@ export const readApiKey = (input: Readable) =>
  */
 export function createRunnerAuth(models: MutableModels, credentials: CredentialStore) {
   /** Append available alternatives without resolving or refreshing unrelated sign-ins. */
-  const withAvailable = async (message: string, signal?: AbortSignal) => {
-    const available = (await models.getAvailable(undefined, { signal })).map(
-      (model) => `${model.provider} ${model.id}`,
-    );
+  const withAvailable = Effect.fn(function* (message: string) {
+    const modelsWithAuth = yield* Effect.tryPromise({
+      try: (signal) => models.getAvailable(undefined, { signal }),
+      catch: ensureError,
+    });
+    const available = modelsWithAuth.map((model) => `${model.provider} ${model.id}`);
     return available.length > 0
       ? `${message}. Models with configured authentication: ${available.join(", ")}`
       : `${message}. No provider has configured authentication.`;
-  };
+  });
 
   return {
     /**
      * Resolve authentication before startup, renewing OAuth through Pi. Only absent credentials
-     * invite onboarding; an incomplete saved credential or a failed refresh requires repair.
+     * invite onboarding; saved credentials Pi cannot resolve or renew require repair.
      * On success, apply the model URL override and disable OAuth for subsequent model calls too.
      */
-    async prepareModel(
-      { provider, modelId, baseUrl }: ModelAuthSettings,
-      signal?: AbortSignal,
-    ): Promise<AuthProblem | undefined> {
-      try {
-        signal?.throwIfAborted();
+    prepareModel: Effect.fn(
+      function* ({
+        provider,
+        modelId,
+        baseUrl,
+      }: ModelAuthSettings): Effect.fn.Return<AuthProblem | undefined, Error> {
         if (!models.getModel(provider, modelId)) {
           return {
             kind: "invalid",
-            message: await withAvailable(
+            message: yield* withAvailable(
               `Pi does not know the model "${modelId}" of provider "${provider}"`,
-              signal,
             ),
           };
         }
@@ -90,23 +91,34 @@ export function createRunnerAuth(models: MutableModels, credentials: CredentialS
               "RUNNER_MODEL_BASE_URL is not used with Azure OpenAI: set AZURE_OPENAI_BASE_URL to call its models at another URL.",
           };
         }
-        if (baseUrl && (await models.checkAuth(provider, { signal }))?.type === "oauth") {
-          return { kind: "invalid", message: SIGN_IN_WITH_BASE_URL };
+        if (baseUrl) {
+          const configured = yield* Effect.tryPromise({
+            try: (signal) => models.checkAuth(provider, { signal }),
+            catch: ensureError,
+          });
+          if (configured?.type === "oauth") {
+            return { kind: "invalid", message: SIGN_IN_WITH_BASE_URL };
+          }
         }
-        const auth = await models.getAuth(provider, { signal });
+        const auth = yield* Effect.tryPromise({
+          try: (signal) => models.getAuth(provider, { signal }),
+          catch: ensureError,
+        });
         if (!auth) {
-          const saved = await credentials.read(provider, { signal });
+          const saved = yield* Effect.tryPromise({
+            try: (signal) => credentials.read(provider, { signal }),
+            catch: ensureError,
+          });
           if (saved !== undefined) {
             return {
               kind: "invalid",
-              message: `Saved authentication for provider "${provider}" is incomplete or unsupported. Repair it with login, or remove it with logout before using environment authentication.`,
+              message: `Pi cannot resolve saved authentication for provider "${provider}". Check its configuration, repair it with login, or remove it with logout.`,
             };
           }
           return {
             kind: "missing",
-            message: await withAvailable(
+            message: yield* withAvailable(
               `Pi finds no authentication for provider "${provider}". Run agent-batch stack login --provider ${provider}, or supply its environment explicitly with stack start --env NAME`,
-              signal,
             ),
           };
         }
@@ -133,29 +145,31 @@ export function createRunnerAuth(models: MutableModels, credentials: CredentialS
           });
         }
         return undefined;
-      } catch (cause) {
-        signal?.throwIfAborted();
-        const error = ensureError(cause);
-        // Pi's top-level messages describe the operation. Causes can contain provider responses
-        // or malformed credential-file contents, so do not print them.
-        return {
-          kind: "invalid",
-          message:
-            error instanceof ModelsError && error.code === "oauth"
-              ? `Pi cannot renew the sign-in to provider "${provider}". Retry when the provider is reachable, or repair the sign-in with login.`
-              : `Pi cannot read or resolve authentication for provider "${provider}". Check its configuration and saved credentials.`,
-        };
-      }
-    },
+      },
+      (effect, { provider }) =>
+        effect.pipe(
+          Effect.catch((error) =>
+            // Pi's top-level messages describe the operation. Causes can contain provider responses
+            // or malformed credential-file contents, so do not print them.
+            Effect.succeed<AuthProblem>({
+              kind: "invalid",
+              message:
+                error instanceof ModelsError && error.code === "oauth"
+                  ? `Pi cannot renew the sign-in to provider "${provider}". Retry when the provider is reachable, or repair the sign-in with login.`
+                  : `Pi cannot read or resolve authentication for provider "${provider}". Check its configuration and saved credentials.`,
+            }),
+          ),
+        ),
+    ),
 
-    async login(
+    login: Effect.fn(function* (
       provider: string,
       interaction: AuthInteraction,
       options: LoginOptions & { apiKey?: string; baseUrl?: URL } = {},
-    ): Promise<void> {
-      interaction.signal?.throwIfAborted();
+    ) {
+      yield* Effect.try({ try: () => interaction.signal?.throwIfAborted(), catch: ensureError });
       const definition = models.getProvider(provider);
-      if (!definition) throw new Error(`Unknown provider "${provider}".`);
+      if (!definition) return yield* Effect.fail(new Error(`Unknown provider "${provider}".`));
       const methods: { id: AuthType; label: string }[] = [];
       if (definition.auth.oauth && !options.baseUrl) {
         methods.push({
@@ -169,30 +183,42 @@ export function createRunnerAuth(models: MutableModels, credentials: CredentialS
       let type: AuthType;
       if (options.apiKey !== undefined) {
         if (!definition.auth.apiKey?.login) {
-          throw new Error(`Provider "${provider}" does not support API-key login.`);
+          return yield* Effect.fail(
+            new Error(`Provider "${provider}" does not support API-key login.`),
+          );
         }
-        if (options.apiKey.trim().length === 0) throw new Error("The API key on stdin is empty.");
+        if (options.apiKey.trim().length === 0) {
+          return yield* Effect.fail(new Error("The API key on stdin is empty."));
+        }
         type = "api_key";
       } else {
         const [only] = methods;
         if (!only) {
-          throw new Error(
-            options.baseUrl && definition.auth.oauth
-              ? SIGN_IN_WITH_BASE_URL
-              : `Provider "${provider}" has no login method; configure its environment instead.`,
+          return yield* Effect.fail(
+            new Error(
+              options.baseUrl && definition.auth.oauth
+                ? SIGN_IN_WITH_BASE_URL
+                : `Provider "${provider}" has no login method; configure its environment instead.`,
+            ),
           );
         }
         const selected =
           methods.length === 1
             ? only.id
-            : await interaction.prompt({
-                type: "select",
-                message: `How do you want to authenticate to ${definition.name}?`,
-                options: methods,
-                signal: interaction.signal,
+            : yield* Effect.tryPromise({
+                try: (signal) =>
+                  interaction.prompt({
+                    type: "select",
+                    message: `How do you want to authenticate to ${definition.name}?`,
+                    options: methods,
+                    signal: interaction.signal
+                      ? AbortSignal.any([signal, interaction.signal])
+                      : signal,
+                  }),
+                catch: ensureError,
               });
         const method = methods.find((candidate) => candidate.id === selected);
-        if (!method) throw new Error("No authentication method selected.");
+        if (!method) return yield* Effect.fail(new Error("No authentication method selected."));
         type = method.id;
       }
       if (type === "oauth") {
@@ -204,45 +230,70 @@ export function createRunnerAuth(models: MutableModels, credentials: CredentialS
         });
       }
       let supplied = false;
-      await models.login(
-        provider,
-        type,
-        {
-          ...interaction,
-          prompt: async (prompt) => {
-            interaction.signal?.throwIfAborted();
-            prompt.signal?.throwIfAborted();
-            if (options.apiKey === undefined) return interaction.prompt(prompt);
-            // Pi owns the flow. A single piped key cannot answer provider-specific selections,
-            // account IDs, or a second secret; refusing leaves the previous credential untouched.
-            if (prompt.type !== "secret" || supplied) {
-              throw new Error(
-                `Provider "${provider}" requires additional input. Run login interactively; --with-api-key supplies one secret only.`,
-              );
-            }
-            supplied = true;
-            return options.apiKey;
-          },
+      return yield* Effect.tryPromise({
+        try: (signal) => {
+          const operationSignal = interaction.signal
+            ? AbortSignal.any([signal, interaction.signal])
+            : signal;
+          return models.login(
+            provider,
+            type,
+            {
+              ...interaction,
+              signal: operationSignal,
+              prompt: async (prompt) => {
+                const promptSignal = prompt.signal
+                  ? AbortSignal.any([operationSignal, prompt.signal])
+                  : operationSignal;
+                promptSignal.throwIfAborted();
+                if (options.apiKey === undefined) {
+                  return interaction.prompt({ ...prompt, signal: promptSignal });
+                }
+                // Pi owns the flow. A single piped key cannot answer provider-specific selections,
+                // account IDs, or a second secret; refusing leaves the previous credential untouched.
+                if (prompt.type !== "secret" || supplied) {
+                  throw new Error(
+                    `Provider "${provider}" requires additional input. Run login interactively; --with-api-key supplies one secret only.`,
+                  );
+                }
+                supplied = true;
+                return options.apiKey;
+              },
+            },
+            options,
+          );
         },
-        options,
-      );
-    },
+        catch: ensureError,
+      });
+    }),
 
     /** Configuration only: no OAuth refresh, token validation or credential values. */
-    async status(provider: string, signal?: AbortSignal) {
-      if (!models.getProvider(provider)) throw new Error(`Unknown provider "${provider}".`);
-      const auth = await models.checkAuth(provider, { signal });
+    status: Effect.fn(function* (provider: string) {
+      if (!models.getProvider(provider)) {
+        return yield* Effect.fail(new Error(`Unknown provider "${provider}".`));
+      }
+      const auth = yield* Effect.tryPromise({
+        try: (signal) => models.checkAuth(provider, { signal }),
+        catch: ensureError,
+      });
       return auth === undefined
         ? { provider, configured: false as const }
         : { provider, configured: true as const, type: auth.type, source: auth.source };
-    },
+    }),
 
-    async logout(provider: string, signal?: AbortSignal): Promise<void> {
+    logout: Effect.fn(function* (provider: string) {
       // An unused data directory has no credential file or lock parent. Removing nothing is a
       // successful logout; existing credentials still use Pi's locked deletion alongside refresh.
-      if ((await credentials.read(provider, { signal })) !== undefined) {
-        await models.logout(provider, { signal });
+      const saved = yield* Effect.tryPromise({
+        try: (signal) => credentials.read(provider, { signal }),
+        catch: ensureError,
+      });
+      if (saved !== undefined) {
+        yield* Effect.tryPromise({
+          try: (signal) => models.logout(provider, { signal }),
+          catch: ensureError,
+        });
       }
-    },
+    }),
   };
 }

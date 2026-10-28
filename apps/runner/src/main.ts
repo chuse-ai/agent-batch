@@ -26,7 +26,6 @@ import {
   Terminal,
 } from "effect";
 import * as Prompt from "effect/cli/Prompt";
-import ensureError from "ensure-error";
 
 import { createRunnerAuth, readApiKey } from "./auth.ts";
 import { fileCredentialStore } from "./credentials.ts";
@@ -174,8 +173,7 @@ const installationIdSchema = Schema.Trim.check(Schema.isUUID());
  * device, ends on a redirect to this host that a remote host never receives, so the operator pastes
  * its address here.
  */
-const terminalInteraction = (signal: AbortSignal): AuthInteraction => ({
-  signal,
+const terminalInteraction = (): AuthInteraction => ({
   prompt: (prompt) => {
     const ask =
       prompt.type === "select"
@@ -198,7 +196,7 @@ const terminalInteraction = (signal: AbortSignal): AuthInteraction => ({
       Prompt.run(ask).pipe(
         Effect.provide(Layer.mergeAll(NodeTerminal.layer, NodeFileSystem.layer, NodePath.layer)),
       ),
-      { signal: prompt.signal ? AbortSignal.any([signal, prompt.signal]) : signal },
+      { signal: prompt.signal },
     );
   },
   notify: (event) => {
@@ -247,22 +245,22 @@ function loginProvider(
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(settings.dataDir, { recursive: true });
     const id = yield* loadOrCreateInstallationId(settings.dataDir);
-    yield* Effect.tryPromise((signal) =>
-      auth.login(settings.provider, terminalInteraction(signal), {
+    yield* auth
+      .login(settings.provider, terminalInteraction(), {
         apiKey,
         baseUrl: settings.baseUrl,
         // The provider sees this app's name. A returning sign-in reuses this installation's ID;
         // Pi otherwise creates a new client each time (earendil-works/pi#10670).
         agentName: "agent-batch",
         getDeviceId: () => id,
-      }),
-    ).pipe(
-      Effect.catch((error) =>
-        Terminal.isQuitError(error.cause)
-          ? refuse("Login cancelled.")
-          : refuse(`Could not log in: ${ensureError(error.cause).message}`),
-      ),
-    );
+      })
+      .pipe(
+        Effect.catch((error) =>
+          Terminal.isQuitError(error)
+            ? refuse("Login cancelled.")
+            : refuse(`Could not log in: ${error.message}`),
+        ),
+      );
     console.log("Authentication saved. The Runner uses it from its next model call.");
   }).pipe(
     Effect.catchTag("PlatformError", () =>
@@ -285,9 +283,9 @@ const login = Effect.gen(function* () {
 
 const logout = Effect.gen(function* () {
   const { dataDir, provider } = yield* authSettings;
-  yield* Effect.tryPromise((signal) => runnerAuth(dataDir).auth.logout(provider, signal)).pipe(
-    Effect.catch(() => refuse("Could not remove saved provider authentication.")),
-  );
+  yield* runnerAuth(dataDir)
+    .auth.logout(provider)
+    .pipe(Effect.catch(() => refuse("Could not remove saved provider authentication.")));
   console.log(
     `Saved authentication removed for "${provider}". Environment authentication, if configured, still applies.`,
   );
@@ -295,11 +293,11 @@ const logout = Effect.gen(function* () {
 
 const authStatus = Effect.gen(function* () {
   const { dataDir, provider } = yield* authSettings;
-  const status = yield* Effect.tryPromise((signal) =>
-    runnerAuth(dataDir).auth.status(provider, signal),
-  ).pipe(
-    Effect.catch(() => refuse(`Could not inspect authentication for provider "${provider}".`)),
-  );
+  const status = yield* runnerAuth(dataDir)
+    .auth.status(provider)
+    .pipe(
+      Effect.catch(() => refuse(`Could not inspect authentication for provider "${provider}".`)),
+    );
   console.log(
     status.configured
       ? `Provider ${status.provider}: configured (${status.type}; source: ${status.source ?? "unspecified"}). Not validated.`
@@ -313,7 +311,7 @@ const authCheck = Effect.gen(function* () {
   const baseUrl = Option.getOrUndefined(yield* modelBaseUrlSetting);
   const { auth } = runnerAuth(settings.dataDir);
   const selection = { provider: settings.provider, modelId, baseUrl };
-  let problem = yield* Effect.promise((signal) => auth.prepareModel(selection, signal));
+  let problem = yield* auth.prepareModel(selection);
   if (problem?.kind === "missing" && values.login && hasTerminal()) {
     const confirmed = yield* Prompt.run(
       Prompt.Confirm({ message: `No authentication for ${settings.provider}. Log in now?` }),
@@ -323,7 +321,7 @@ const authCheck = Effect.gen(function* () {
     );
     if (confirmed) {
       yield* loginProvider(auth, { ...settings, baseUrl });
-      problem = yield* Effect.promise((signal) => auth.prepareModel(selection, signal));
+      problem = yield* auth.prepareModel(selection);
     }
   }
   if (problem) yield* refuse(problem.message);
@@ -332,16 +330,11 @@ const authCheck = Effect.gen(function* () {
 const run = Effect.gen(function* () {
   const settings = yield* runnerSettings;
   const { models, auth } = runnerAuth(settings.dataDir);
-  const problem = yield* Effect.promise((signal) =>
-    auth.prepareModel(
-      {
-        provider: settings.provider,
-        modelId: settings.modelId,
-        baseUrl: Option.getOrUndefined(settings.modelBaseUrl),
-      },
-      signal,
-    ),
-  );
+  const problem = yield* auth.prepareModel({
+    provider: settings.provider,
+    modelId: settings.modelId,
+    baseUrl: Option.getOrUndefined(settings.modelBaseUrl),
+  });
   if (problem) return yield* refuse(problem.message);
   return yield* runRunner({
     hubUrl: settings.hubUrl,

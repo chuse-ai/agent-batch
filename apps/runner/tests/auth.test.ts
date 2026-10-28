@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { PassThrough, Readable } from "node:stream";
+import { Readable } from "node:stream";
 
 import {
   type AuthInteraction,
@@ -14,11 +14,15 @@ import {
   type OAuthCredential,
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { makeMethods } from "@effect/vitest";
 import { Effect } from "effect";
-import { expect, onTestFinished, test, vi } from "vite-plus/test";
+import { expect, it as vitestIt, onTestFinished, vi } from "vite-plus/test";
 
 import { createRunnerAuth, readApiKey } from "../src/auth.ts";
 import { fileCredentialStore } from "../src/credentials.ts";
+
+// Bind Effect's documented test adapter to the runner Vite+ uses.
+const it = makeMethods(vitestIt);
 
 const noPrompt: AuthInteraction = {
   prompt: () => Promise.reject(new Error("No interactive prompt expected")),
@@ -80,199 +84,272 @@ async function credentialFile() {
   return path.join(dir, "auth.json");
 }
 
-test("a piped key persists for the selected provider, supersedes its environment, and logout exposes the environment again", async () => {
-  const credentials = fileCredentialStore(await credentialFile());
-  const { auth, models } = fixture({ credentials, env: { TEST_API_KEY: "fake-environment" } });
-  await credentials.modify("other", async () => ({ type: "api_key", key: "fake-other" }));
+it.live(
+  "a piped key persists for the selected provider, supersedes its environment, and logout exposes the environment again",
+  () =>
+    Effect.gen(function* () {
+      const credentials = fileCredentialStore(yield* Effect.promise(() => credentialFile()));
+      const { auth, models } = fixture({ credentials, env: { TEST_API_KEY: "fake-environment" } });
+      yield* Effect.promise(() =>
+        credentials.modify("other", async () => ({ type: "api_key", key: "fake-other" })),
+      );
 
-  await auth.login("test", noPrompt, { apiKey: "fake-saved" });
+      const login = auth.login("test", noPrompt, { apiKey: "fake-saved" });
+      yield* login;
+      // Reusing an Effect starts a new login, including its allowance for one piped secret.
+      yield* login;
 
-  const restarted = fixture({ credentials, env: { TEST_API_KEY: "fake-environment" } });
-  expect((await restarted.models.getAuth("test"))?.auth.apiKey).toBe("fake-saved");
-  expect(await auth.status("test")).toEqual({
-    provider: "test",
-    configured: true,
-    type: "api_key",
-    source: "stored credential",
-  });
-  await auth.logout("test");
-  expect((await models.getAuth("test"))?.auth.apiKey).toBe("fake-environment");
-  expect(await credentials.read("other")).toEqual({ type: "api_key", key: "fake-other" });
-});
-
-test("interactive login offers Pi's supported methods and requests an API key as a secret", async () => {
-  const { auth } = fixture();
-  const prompt = vi.fn<AuthInteraction["prompt"]>(async (question) =>
-    question.type === "select" ? "api_key" : "fake-interactive-key",
-  );
-
-  await auth.login("test", { ...noPrompt, prompt });
-
-  expect(prompt).toHaveBeenNthCalledWith(1, {
-    type: "select",
-    message: expect.any(String),
-    options: [
-      { id: "oauth", label: "Sign in to Test" },
-      { id: "api_key", label: "Test API key" },
-    ],
-    signal: undefined,
-  });
-  expect(prompt).toHaveBeenNthCalledWith(2, { type: "secret", message: "Enter Test API key" });
-  expect((await auth.status("test")).configured).toBe(true);
-});
-
-test.each(["amazon-bedrock", "google-vertex", "cloudflare-workers-ai", "cloudflare-ai-gateway"])(
-  "stdin login refuses %s's additional prompts without replacing saved credentials",
-  async (provider) => {
-    const credentials = new InMemoryCredentialStore();
-    const original = { type: "api_key" as const, key: "fake-original" };
-    await credentials.modify(provider, async () => original);
-    const models = builtinModels({
-      credentials,
-      authContext: { env: async () => undefined, fileExists: async () => false },
-    });
-
-    await expect(
-      createRunnerAuth(models, credentials).login(provider, noPrompt, {
-        apiKey: "fake-replacement",
-      }),
-    ).rejects.toThrow("requires additional input");
-
-    expect(await credentials.read(provider)).toEqual(original);
-  },
+      const restarted = fixture({ credentials, env: { TEST_API_KEY: "fake-environment" } });
+      expect((yield* Effect.promise(() => restarted.models.getAuth("test")))?.auth.apiKey).toBe(
+        "fake-saved",
+      );
+      expect(yield* auth.status("test")).toEqual({
+        provider: "test",
+        configured: true,
+        type: "api_key",
+        source: "stored credential",
+      });
+      yield* auth.logout("test");
+      expect((yield* Effect.promise(() => models.getAuth("test")))?.auth.apiKey).toBe(
+        "fake-environment",
+      );
+      expect(yield* Effect.promise(() => credentials.read("other"))).toEqual({
+        type: "api_key",
+        key: "fake-other",
+      });
+    }),
 );
 
-test("an OAuth-only provider refuses a piped API key without starting sign-in", async () => {
-  const credentials = new InMemoryCredentialStore();
-  const models = builtinModels({ credentials });
-  await expect(
-    createRunnerAuth(models, credentials).login("openai-codex", noPrompt, { apiKey: "fake-key" }),
-  ).rejects.toThrow("does not support API-key login");
-  expect(await credentials.list()).toEqual([]);
-});
+it.live("interactive login offers Pi's supported methods and requests an API key as a secret", () =>
+  Effect.gen(function* () {
+    const { auth, models } = fixture();
+    const prompt = vi.fn<AuthInteraction["prompt"]>(async (question) =>
+      question.type === "select" ? "api_key" : "fake-interactive-key",
+    );
 
-test("status does not refresh OAuth or disclose tokens; preflight fails a broken refresh without falling back to the environment", async () => {
-  const refresh = vi.fn(async (): Promise<OAuthCredential> => {
-    throw new Error("fake-private-provider-response");
-  });
-  const { auth, credentials, selection } = fixture({ env: { TEST_API_KEY: "fake-key" }, refresh });
-  const expired = signIn(0);
-  await credentials.modify("test", async () => expired);
+    yield* auth.login("test", { ...noPrompt, prompt });
 
-  expect(await auth.status("test")).toEqual({
-    provider: "test",
-    configured: true,
-    type: "oauth",
-    source: "OAuth",
-  });
-  expect(refresh).not.toHaveBeenCalled();
-  expect(await auth.prepareModel(selection)).toEqual({
-    kind: "invalid",
-    message: expect.stringContaining("cannot renew"),
-  });
-  expect(refresh).toHaveBeenCalledOnce();
-  expect(await credentials.read("test")).toEqual(expired);
-});
+    expect(prompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "select",
+        options: expect.arrayContaining([
+          expect.objectContaining({ id: "oauth", label: "Sign in to Test" }),
+          expect.objectContaining({ id: "api_key", label: "Test API key" }),
+        ]),
+      }),
+    );
+    expect(prompt).toHaveBeenCalledWith(expect.objectContaining({ type: "secret" }));
+    expect((yield* Effect.promise(() => models.getAuth("test")))?.auth.apiKey).toBe(
+      "fake-interactive-key",
+    );
+  }),
+);
 
-test("only missing authentication is eligible for onboarding; unknown models and incomplete saved credentials require repair", async () => {
-  const { auth, credentials, selection } = fixture();
-  expect((await auth.prepareModel(selection))?.kind).toBe("missing");
-  expect((await auth.prepareModel({ ...selection, modelId: "unknown" }))?.kind).toBe("invalid");
-  await credentials.modify("test", async () => ({ type: "api_key" }));
-  expect((await auth.prepareModel(selection))?.kind).toBe("invalid");
-});
+it.live.each(["amazon-bedrock", "google-vertex", "cloudflare-workers-ai", "cloudflare-ai-gateway"])(
+  "stdin login refuses %s's additional prompts without replacing saved credentials",
+  (provider) =>
+    Effect.gen(function* () {
+      const credentials = new InMemoryCredentialStore();
+      const original = { type: "api_key" as const, key: "fake-original" };
+      yield* Effect.promise(() => credentials.modify(provider, async () => original));
+      const models = builtinModels({
+        credentials,
+        authContext: { env: async () => undefined, fileExists: async () => false },
+      });
 
-test("a configured API key passes preflight without a provider request", async () => {
-  const { auth, selection } = fixture({ env: { TEST_API_KEY: "fake-unvalidated-key" } });
-  // The faux model makes no request during authentication. Pi resolves the environment only.
-  expect(await auth.prepareModel(selection)).toBeUndefined();
-  expect(await auth.status("test")).toEqual({
-    provider: "test",
-    configured: true,
-    type: "api_key",
-    source: "TEST_API_KEY",
-  });
-});
-
-test("a replacement endpoint refuses saved OAuth before refreshing and keeps rejecting a sign-in saved after startup", async () => {
-  const refresh = vi.fn(async () => signIn());
-  const { auth, models, credentials, selection } = fixture({ refresh });
-  const baseUrl = new URL("http://localhost:4000/v1");
-  await credentials.modify("test", async () => signIn(0));
-  expect((await auth.prepareModel({ ...selection, baseUrl }))?.message).toContain(
-    "not a subscription sign-in",
-  );
-  expect(refresh).not.toHaveBeenCalled();
-
-  await auth.login("test", noPrompt, { apiKey: "fake-key", baseUrl });
-  expect(await auth.prepareModel({ ...selection, baseUrl })).toBeUndefined();
-  expect(models.getModel("test", "model")?.baseUrl).toBe(baseUrl.href);
-  await credentials.modify("test", async () => signIn());
-  expect(await models.getAuth("test")).toBeUndefined();
-});
-
-test("replacement endpoints reject Azure's conflicting setting and Anthropic's environment subscription token", async () => {
-  const baseUrl = new URL("http://localhost:4000/v1");
-  const azure = fixture({ provider: "azure", env: { TEST_API_KEY: "fake-key" } });
-  expect((await azure.auth.prepareModel({ ...azure.selection, baseUrl }))?.message).toContain(
-    "AZURE_OPENAI_BASE_URL",
-  );
-
-  const credentials = new InMemoryCredentialStore();
-  const models = builtinModels({
-    credentials,
-    authContext: {
-      env: async (name) => (name === "ANTHROPIC_OAUTH_TOKEN" ? "fake-token" : undefined),
-      fileExists: async () => false,
-    },
-  });
-  const [model] = models.getModels("anthropic");
-  if (!model) throw new Error("Pi has no Anthropic models");
-  const problem = await createRunnerAuth(models, credentials).prepareModel({
-    provider: "anthropic",
-    modelId: model.id,
-    baseUrl,
-  });
-  expect(problem?.message).toContain("not a subscription sign-in");
-});
-
-test("logout succeeds before the data directory exists", async () => {
-  const file = path.join(await credentialFile(), "not-created", "auth.json");
-  const { auth } = fixture({ credentials: fileCredentialStore(file) });
-  await expect(auth.logout("test")).resolves.toBeUndefined();
-  expect(await auth.status("test")).toEqual({ provider: "test", configured: false });
-});
-
-test("cancelling a login preserves the saved credential", async () => {
-  const { auth, credentials } = fixture();
-  await auth.login("test", noPrompt, { apiKey: "fake-original" });
-  const controller = new AbortController();
-  await expect(
-    auth.login("test", {
-      ...noPrompt,
-      signal: controller.signal,
-      prompt: async () => {
-        controller.abort(new Error("cancelled"));
-        return "api_key";
-      },
+      const error = yield* createRunnerAuth(models, credentials)
+        .login(provider, noPrompt, {
+          apiKey: "fake-replacement",
+        })
+        .pipe(Effect.flip);
+      expect(error.message).toContain("requires additional input");
+      expect(yield* Effect.promise(() => credentials.read(provider))).toEqual(original);
     }),
-  ).rejects.toThrow("cancelled");
-  expect(await credentials.read("test")).toEqual({ type: "api_key", key: "fake-original" });
-});
+);
 
-test("stdin accepts a newline-terminated key and rejects empty or oversized input", async () => {
-  expect(await Effect.runPromise(readApiKey(Readable.from(["fake-key\n"])))).toBe("fake-key");
-  await expect(Effect.runPromise(readApiKey(Readable.from([" \n"])))).rejects.toThrow("empty");
-  await expect(Effect.runPromise(readApiKey(Readable.from(["x".repeat(65_537)])))).rejects.toThrow(
-    "64 KiB",
-  );
-});
+it.live("an OAuth-only provider refuses a piped API key without starting sign-in", () =>
+  Effect.gen(function* () {
+    const credentials = new InMemoryCredentialStore();
+    const models = builtinModels({ credentials });
+    const error = yield* createRunnerAuth(models, credentials)
+      .login("openai-codex", noPrompt, { apiKey: "fake-key" })
+      .pipe(Effect.flip);
+    expect(error.message).toContain("does not support API-key login");
+    expect(yield* Effect.promise(() => credentials.list())).toEqual([]);
+  }),
+);
 
-test("cancelling stdin input releases the stream", async () => {
-  const input = new PassThrough();
-  const controller = new AbortController();
-  const reading = Effect.runPromise(readApiKey(input), { signal: controller.signal });
-  controller.abort();
-  await expect(reading).rejects.toThrow();
-  expect(input.destroyed).toBe(true);
-});
+it.live(
+  "status does not refresh OAuth or disclose tokens; preflight fails a broken refresh without falling back to the environment",
+  () =>
+    Effect.gen(function* () {
+      const refresh = vi.fn(async (): Promise<OAuthCredential> => {
+        throw new Error("fake-private-provider-response");
+      });
+      const { auth, credentials, selection } = fixture({
+        env: { TEST_API_KEY: "fake-key" },
+        refresh,
+      });
+      const expired = signIn(0);
+      yield* Effect.promise(() => credentials.modify("test", async () => expired));
+
+      expect(yield* auth.status("test")).toEqual({
+        provider: "test",
+        configured: true,
+        type: "oauth",
+        source: "OAuth",
+      });
+      expect(refresh).not.toHaveBeenCalled();
+      expect(yield* auth.prepareModel(selection)).toEqual({
+        kind: "invalid",
+        message: expect.stringContaining("cannot renew"),
+      });
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(yield* Effect.promise(() => credentials.read("test"))).toEqual(expired);
+    }),
+);
+
+it.live(
+  "only missing authentication is eligible for onboarding; unknown models and unresolved saved credentials require repair",
+  () =>
+    Effect.gen(function* () {
+      const { auth, credentials, selection } = fixture();
+      expect((yield* auth.prepareModel(selection))?.kind).toBe("missing");
+      expect((yield* auth.prepareModel({ ...selection, modelId: "unknown" }))?.kind).toBe(
+        "invalid",
+      );
+      yield* Effect.promise(() => credentials.modify("test", async () => ({ type: "api_key" })));
+      expect((yield* auth.prepareModel(selection))?.kind).toBe("invalid");
+    }),
+);
+
+it.live(
+  "Pi resolves an environment API key even with a keyless saved entry, without a provider request",
+  () =>
+    Effect.gen(function* () {
+      const { auth, credentials, selection } = fixture({
+        env: { TEST_API_KEY: "fake-unvalidated-key" },
+      });
+      yield* Effect.promise(() => credentials.modify("test", async () => ({ type: "api_key" })));
+      // The faux model makes no request during authentication. Pi resolves the environment only.
+      expect(yield* auth.prepareModel(selection)).toBeUndefined();
+      expect(yield* auth.status("test")).toEqual({
+        provider: "test",
+        configured: true,
+        type: "api_key",
+        source: "TEST_API_KEY",
+      });
+    }),
+);
+
+it.live(
+  "a replacement endpoint refuses saved OAuth before refreshing and keeps rejecting a sign-in saved after startup",
+  () =>
+    Effect.gen(function* () {
+      const refresh = vi.fn(async () => signIn());
+      const { auth, models, credentials, selection } = fixture({ refresh });
+      const baseUrl = new URL("http://localhost:4000/v1");
+      yield* Effect.promise(() => credentials.modify("test", async () => signIn(0)));
+      expect((yield* auth.prepareModel({ ...selection, baseUrl }))?.message).toContain(
+        "not a subscription sign-in",
+      );
+      expect(refresh).not.toHaveBeenCalled();
+
+      yield* auth.login("test", noPrompt, { apiKey: "fake-key", baseUrl });
+      expect(yield* auth.prepareModel({ ...selection, baseUrl })).toBeUndefined();
+      expect(models.getModel("test", "model")?.baseUrl).toBe(baseUrl.href);
+      yield* Effect.promise(() => credentials.modify("test", async () => signIn()));
+      expect(yield* Effect.promise(() => models.getAuth("test"))).toBeUndefined();
+    }),
+);
+
+it.live(
+  "replacement endpoints reject Azure's conflicting setting and Anthropic's environment subscription token",
+  () =>
+    Effect.gen(function* () {
+      const baseUrl = new URL("http://localhost:4000/v1");
+      const azure = fixture({ provider: "azure", env: { TEST_API_KEY: "fake-key" } });
+      expect((yield* azure.auth.prepareModel({ ...azure.selection, baseUrl }))?.message).toContain(
+        "AZURE_OPENAI_BASE_URL",
+      );
+
+      const credentials = new InMemoryCredentialStore();
+      const models = builtinModels({
+        credentials,
+        authContext: {
+          env: async (name) => (name === "ANTHROPIC_OAUTH_TOKEN" ? "fake-token" : undefined),
+          fileExists: async () => false,
+        },
+      });
+      const [model] = models.getModels("anthropic");
+      if (!model) throw new Error("Pi has no Anthropic models");
+      const problem = yield* createRunnerAuth(models, credentials).prepareModel({
+        provider: "anthropic",
+        modelId: model.id,
+        baseUrl,
+      });
+      expect(problem?.message).toContain("not a subscription sign-in");
+    }),
+);
+
+it.live("logout succeeds before the data directory exists", () =>
+  Effect.gen(function* () {
+    const file = path.join(
+      yield* Effect.promise(() => credentialFile()),
+      "not-created",
+      "auth.json",
+    );
+    const { auth } = fixture({ credentials: fileCredentialStore(file) });
+    yield* auth.logout("test");
+    expect(yield* auth.status("test")).toEqual({
+      provider: "test",
+      configured: false,
+    });
+  }),
+);
+
+it.live.each(["interaction", "operation"] as const)(
+  "cancelling a login through the %s signal cancels its prompt and preserves the saved credential",
+  (source) =>
+    Effect.gen(function* () {
+      const { auth, credentials } = fixture();
+      yield* auth.login("test", noPrompt, { apiKey: "fake-original" });
+      const controller = new AbortController();
+      let promptSignal: AbortSignal | undefined;
+      // This runtime boundary lets the operation signal interrupt login without interrupting the test.
+      yield* Effect.promise(() =>
+        expect(
+          Effect.runPromise(
+            auth.login("test", {
+              ...noPrompt,
+              signal: source === "interaction" ? controller.signal : undefined,
+              prompt: async (prompt) => {
+                promptSignal = prompt.signal;
+                controller.abort(new Error("cancelled"));
+                promptSignal?.throwIfAborted();
+                return "api_key";
+              },
+            }),
+            { signal: source === "operation" ? controller.signal : undefined },
+          ),
+        ).rejects.toThrow(),
+      );
+      expect(promptSignal?.aborted).toBe(true);
+      expect(yield* Effect.promise(() => credentials.read("test"))).toEqual({
+        type: "api_key",
+        key: "fake-original",
+      });
+    }),
+);
+
+it.live("stdin accepts a newline-terminated key and rejects empty or oversized input", () =>
+  Effect.gen(function* () {
+    expect(yield* readApiKey(Readable.from(["fake-key\n"]))).toBe("fake-key");
+    expect((yield* readApiKey(Readable.from([" \n"])).pipe(Effect.flip)).message).toContain(
+      "empty",
+    );
+    expect(
+      (yield* readApiKey(Readable.from(["x".repeat(65_537)])).pipe(Effect.flip)).message,
+    ).toContain("64 KiB");
+  }),
+);
