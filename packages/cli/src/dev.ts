@@ -1,20 +1,21 @@
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 
+// The shared package avoids @effect/platform-node's required redis peer, which the CLI does not use.
 import * as NodeChildProcessSpawner from "@effect/platform-node-shared/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
 import * as NodePath from "@effect/platform-node-shared/NodePath";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
-import { applySetCookies } from "better-auth/cookies/utils";
+import { writeFile } from "atomically";
 import { apiContract, createProblemDetailsLink } from "contract";
 import { Cause, Config, Effect, Exit, FileSystem, Layer, Path, Schedule, Stream } from "effect";
+import { Cookies } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import ensureError from "ensure-error";
 import envPaths from "env-paths";
 import lockfile from "proper-lockfile";
 import { os } from "trpc-cli";
-import writeFileAtomic from "write-file-atomic";
 import * as z from "zod/mini";
 
 // `agent-batch dev`: a hub, a Runner and the hub's Postgres on this machine, from the images released
@@ -110,7 +111,7 @@ function writeStateFile(file: string, contents: string) {
   return makeStateDir.pipe(
     Effect.andThen(
       Effect.tryPromise({
-        try: () => writeFileAtomic(file, contents, { mode: 0o600 }),
+        try: () => writeFile(file, contents, { mode: 0o600 }),
         catch: ensureError,
       }),
     ),
@@ -352,13 +353,12 @@ function signIn(state: State) {
       if (!response.ok) {
         throw new Error(`The hub refused the owner's sign-in: ${await response.text()}`);
       }
-      const session = new Headers();
-      applySetCookies(session, response.headers.getSetCookie());
+      const cookie = Cookies.toCookieHeader(Cookies.fromSetCookie(response.headers.getSetCookie()));
       return createORPCClient(
         createProblemDetailsLink(apiContract, {
           origin: url,
           url: "/",
-          headers: { cookie: session.get("cookie") ?? "" },
+          headers: { cookie },
         }),
       );
     },

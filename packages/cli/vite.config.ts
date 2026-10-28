@@ -20,9 +20,6 @@ export default defineConfig({
     // are still changing (ADR 0004), so it exports none, and needs no type declarations.
     entry: ["src/bin.ts"],
     dts: false,
-    // Bundled CommonJS packages, such as write-file-atomic, read `__filename`, which ES modules lack;
-    // tsdown's shims define it.
-    shims: true,
     // In the workspace the bin points to the source, as the other packages' exports do (ADR 0006),
     // so the hub's tests run the command unbuilt; publishing takes `publishConfig`'s, which points
     // to `dist`.

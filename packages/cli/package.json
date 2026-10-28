@@ -47,8 +47,7 @@
     "@standard-schema/utils": "catalog:",
     "@types/node": "catalog:",
     "@types/proper-lockfile": "catalog:",
-    "@types/write-file-atomic": "catalog:",
-    "better-auth": "catalog:",
+    "atomically": "catalog:",
     "contract": "workspace:*",
     "effect": "catalog:",
     "ensure-error": "catalog:",
@@ -59,7 +58,6 @@
     "trpc-cli": "catalog:",
     "typescript": "^7.0.2",
     "vite-plus": "catalog:",
-    "write-file-atomic": "catalog:",
     "zod": "catalog:"
   },
   "engines": {
@@ -78,7 +76,7 @@
     "@standard-server/core": "0.10.3",
     "@standard-server/fetch": "0.10.3",
     "@standard-server/shared": "0.10.3",
-    "better-auth": "1.7.12",
+    "atomically": "2.1.1",
     "commander": "14.0.3",
     "content-type": "3.1.1",
     "effect": "4.0.5",
@@ -91,13 +89,12 @@
     "json-rpc-2.0": "1.8.1",
     "proper-lockfile": "4.1.2",
     "retry": "0.12.0",
-    "signal-exit": [
-      "3.0.7",
-      "4.1.0"
-    ],
+    "signal-exit": "3.0.7",
+    "stubborn-fs": "2.0.0",
+    "stubborn-utils": "1.0.2",
     "trpc-cli": "0.17.1",
     "valid-filename": "5.0.0",
-    "write-file-atomic": "7.0.1",
+    "when-exit": "2.1.5",
     "zod": "4.6.7"
   }
 }

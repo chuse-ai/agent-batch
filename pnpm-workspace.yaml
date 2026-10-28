@@ -49,6 +49,7 @@ catalog:
   "@types/proper-lockfile": ^4.1.4
   "@types/write-file-atomic": ^4.0.3
   "@types/ws": ^8.18.2
+  atomically: ^2.1.1
   auth: 1.7.12
   better-auth: 1.7.12
   canonicalize: ^5.1.0
