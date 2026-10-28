@@ -1,15 +1,17 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { parseArgs } from "node:util";
 
-import { type AuthInteraction, type Models, ModelsError } from "@earendil-works/pi-ai";
+import type { AuthInteraction } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { MODEL_THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-schema";
+import * as NodeChildProcessSpawner from "@effect/platform-node-shared/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
 import * as NodePath from "@effect/platform-node-shared/NodePath";
 // The shared package rather than `@effect/platform-node`, whose required `redis` peer the Runner
 // would install without using.
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
+import * as NodeSocketServer from "@effect/platform-node-shared/NodeSocketServer";
+import * as NodeStdio from "@effect/platform-node-shared/NodeStdio";
 import * as NodeTerminal from "@effect/platform-node-shared/NodeTerminal";
 import { getDotPath } from "@standard-schema/utils";
 import {
@@ -18,6 +20,7 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Latch,
   Option,
   Redacted,
   Runtime,
@@ -25,9 +28,11 @@ import {
   SchemaIssue,
   Terminal,
 } from "effect";
+import { Command, Flag } from "effect/cli";
 import * as Prompt from "effect/cli/Prompt";
-import ensureError from "ensure-error";
 
+import packageJson from "../package.json" with { type: "json" };
+import { createRunnerAuth, readApiKey } from "./auth.ts";
 import { fileCredentialStore } from "./credentials.ts";
 import { DEFAULT_SANDBOX_SETTINGS, runRunner } from "./index.ts";
 
@@ -56,64 +61,11 @@ function settingsProblems(error: Config.ConfigError): string {
 /** How hard the model thinks unless `RUNNER_THINKING_LEVEL` says otherwise: Pi's coding agent's default. */
 const DEFAULT_THINKING_LEVEL = "medium";
 
-/** The file in the Runner's data directory holding its sign-ins' tokens. */
+/** The file in the Runner's data directory holding its provider credentials. */
 const CREDENTIALS_FILE = "auth.json";
-
-/**
- * Why a sign-in is not used with `RUNNER_MODEL_BASE_URL`: its tokens would go to whatever serves
- * that URL, and Pi shapes a sign-in's requests for the provider's own endpoint, such as ChatGPT's,
- * which it recognizes by its URL.
- */
-const SIGN_IN_WITH_BASE_URL =
-  "RUNNER_MODEL_BASE_URL takes the provider's key, not a sign-in, whose tokens would go to that URL. Unset it, or give the key and delete the sign-in (auth.json in the data directory) or unset ANTHROPIC_OAUTH_TOKEN.";
 
 /** The file in the Runner's data directory holding the ID a provider knows this installation by. */
 const INSTALLATION_FILE = "installation_id";
-
-/**
- * Why the Runner cannot run jobs on the model, if it cannot: Pi does not know it, has no key or
- * sign-in for it, or cannot renew the sign-in. Renews an expired sign-in and saves the new tokens:
- * `getAuth` rather than `checkAuth`, which finds a sign-in stored without renewing it, so a sign-in
- * that can no longer be renewed stops the Runner here rather than failing its jobs.
- */
-async function renewModelAuthProblem(models: Models, provider: string, modelId: string) {
-  if (!models.getModel(provider, modelId)) {
-    return withAvailable(
-      models,
-      `Pi does not know the model "${modelId}" of provider "${provider}"`,
-    );
-  }
-  const auth = await models.getAuth(provider).catch(ensureError);
-  // A renewal also fails while the provider cannot be reached, so the operator is told why it
-  // failed, not that the sign-in is gone.
-  if (auth instanceof ModelsError && auth.code === "oauth") {
-    return `Pi cannot renew the sign-in to provider "${provider}": ${auth.message}. If the provider no longer accepts it, sign in again with \`login\`.`;
-  }
-  if (auth instanceof Error)
-    return `Pi cannot authenticate to provider "${provider}": ${auth.message}`;
-  if (!auth) {
-    return withAvailable(
-      models,
-      `Pi finds no key for provider "${provider}" in the environment, and the Runner has not signed in to it with \`login\``,
-    );
-  }
-  return undefined;
-}
-
-/** `problem`, followed by the models the Runner could run on instead. */
-async function withAvailable(models: Models, problem: string) {
-  const available = (await models.getAvailable()).map((model) => `${model.provider} ${model.id}`);
-  return available.length > 0
-    ? `${problem}. Models with a key or sign-in: ${available.join(", ")}`
-    : `${problem}. No provider has a key in the environment or a sign-in.`;
-}
-
-const { positionals } = parseArgs({ allowPositionals: true });
-const [command] = positionals;
-if (command !== undefined && command !== "register" && command !== "login") {
-  console.error(`Unknown command "${command}"; the commands are "register" and "login"`);
-  process.exit(1);
-}
 
 /** Where the Runner keeps what must survive restarts. */
 const dataDirSetting = Config.String("RUNNER_DATA_DIR").pipe(Config.withDefault("data"));
@@ -167,31 +119,11 @@ function refuse(message: string) {
   return Effect.sync(() => console.error(message)).pipe(Effect.andThen(Effect.fail(new Refused())));
 }
 
-/**
- * The models Pi knows, with the keys in the environment and the sign-ins in `dataDir`. With
- * `baseUrl`, the provider `provider`'s models are called there, as Pi's coding agent calls them for
- * a provider's `baseUrl` in its `models.json`.
- */
-function runnerModels(dataDir: string, baseUrl?: { provider: string; url: URL }) {
-  const models = builtinModels({
-    credentials: fileCredentialStore(path.join(dataDir, CREDENTIALS_FILE)),
-  });
-  const provider = baseUrl && models.getProvider(baseUrl.provider);
-  const apiKey = provider?.auth.apiKey;
-  if (baseUrl && provider && apiKey) {
-    const url = baseUrl.url.href;
-    const atUrl = <M extends { baseUrl: string }>(model: M): M => ({ ...model, baseUrl: url });
-    models.setProvider({
-      ...provider,
-      baseUrl: url,
-      // The key alone: a sign-in, even one saved while the Runner runs, fails rather than sends its
-      // tokens to `url`.
-      auth: { apiKey },
-      getModels: () => provider.getModels().map(atUrl),
-      getAllModels: provider.getAllModels && (() => provider.getAllModels?.().map(atUrl) ?? []),
-    });
-  }
-  return models;
+/** The same Pi models and credential store serve startup and credential commands. */
+function runnerAuth(dataDir: string) {
+  const credentials = fileCredentialStore(path.join(dataDir, CREDENTIALS_FILE));
+  const models = builtinModels({ credentials });
+  return { models, auth: createRunnerAuth(models, credentials) };
 }
 
 /**
@@ -225,7 +157,7 @@ const installationIdSchema = Schema.Trim.check(Schema.isUUID());
  * device, ends on a redirect to this host that a remote host never receives, so the operator pastes
  * its address here.
  */
-const terminalInteraction: AuthInteraction = {
+const terminalInteraction = (): AuthInteraction => ({
   prompt: (prompt) => {
     const ask =
       prompt.type === "select"
@@ -234,7 +166,15 @@ const terminalInteraction: AuthInteraction = {
             choices: prompt.options.map((option) => ({ title: option.label, value: option.id })),
           })
         : prompt.type === "secret"
-          ? Prompt.Hidden({ message: prompt.message }).pipe(Prompt.map(Redacted.value))
+          ? Prompt.Hidden({
+              message: prompt.message,
+              // Pi persists the returned value; an accidental empty submission must not replace
+              // an existing credential. Provider-specific optional fields use text prompts.
+              validate: (value) =>
+                value.trim().length === 0
+                  ? Effect.fail("Enter a nonempty credential.")
+                  : Effect.succeed(value.trim()),
+            }).pipe(Prompt.map(Redacted.value))
           : Prompt.String({ message: prompt.message });
     return Effect.runPromise(
       Prompt.run(ask).pipe(
@@ -258,121 +198,232 @@ const terminalInteraction: AuthInteraction = {
         break;
     }
   },
-};
+});
 
-/** Signs in to the model's provider, as `login` does, and saves the sign-in in the data directory. */
-const login = Effect.gen(function* () {
-  const { dataDir, provider, modelBaseUrl } = yield* Config.all({
-    dataDir: dataDirSetting,
-    provider: Config.NonEmptyString("RUNNER_MODEL_PROVIDER"),
-    modelBaseUrl: modelBaseUrlSetting,
-  });
-  // A refusal fails the program, so nothing after it runs.
-  if (Option.isSome(modelBaseUrl)) yield* refuse(SIGN_IN_WITH_BASE_URL);
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs.makeDirectory(dataDir, { recursive: true }).pipe(Effect.orDie);
-  const id = yield* loadOrCreateInstallationId(dataDir).pipe(Effect.orDie);
-  // OpenAI's Sign in with ChatGPT Terms ask for express consent before background use.
-  console.log(
-    `The Runner will make its jobs' model calls on this sign-in in the background, without asking each time. Run only your own jobs on it.`,
-  );
-  yield* Effect.tryPromise((signal) =>
-    runnerModels(dataDir).login(
-      provider,
-      "oauth",
-      { ...terminalInteraction, signal },
-      // OpenAI's sign-in guide asks a returning sign-in to reuse the client it issued; Pi registers a
-      // new one each time (earendil-works/pi#10670).
-      {
-        // The guide also asks an app to sign in under its own name, not Pi's.
+const terminalLayer = Layer.mergeAll(NodeTerminal.layer, NodeFileSystem.layer, NodePath.layer);
+const hasTerminal = () => process.stdin.isTTY && process.stdout.isTTY;
+
+const authSettings = Config.all({
+  dataDir: dataDirSetting,
+  provider: Config.NonEmptyString("RUNNER_MODEL_PROVIDER"),
+});
+
+/** The same login operation serves explicit login and confirmed first-start setup. */
+function loginProvider(
+  auth: ReturnType<typeof createRunnerAuth>,
+  settings: { dataDir: string; provider: string; baseUrl?: URL },
+  withApiKey = false,
+) {
+  return Effect.gen(function* () {
+    if (withApiKey && process.stdin.isTTY) {
+      yield* refuse("Pipe the API key to login --with-api-key, or use login for masked entry.");
+    }
+    if (!withApiKey && !hasTerminal()) {
+      yield* refuse(
+        "Interactive login needs a terminal. To save a provider API key, pipe it to agent-batch stack login --with-api-key.",
+      );
+    }
+    const apiKey = withApiKey
+      ? yield* readApiKey(process.stdin).pipe(Effect.catch((error) => refuse(error.message)))
+      : undefined;
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(settings.dataDir, { recursive: true });
+    const id = yield* loadOrCreateInstallationId(settings.dataDir);
+    yield* auth
+      .login(settings.provider, terminalInteraction(), {
+        apiKey,
+        baseUrl: settings.baseUrl,
+        // The provider sees this app's name. A returning sign-in reuses this installation's ID;
+        // Pi otherwise creates a new client each time (earendil-works/pi#10670).
         agentName: "agent-batch",
         getDeviceId: () => id,
-      },
+      })
+      .pipe(
+        Effect.catch((error) =>
+          Terminal.isQuitError(error)
+            ? refuse("Login cancelled.")
+            : refuse(`Could not log in: ${error.message}`),
+        ),
+      );
+    console.log("Authentication saved. The Runner uses it from its next model call.");
+  }).pipe(
+    Effect.catchTag("PlatformError", () =>
+      refuse("Could not prepare the Runner's credential directory."),
     ),
-  ).pipe(
-    Effect.catch((error) =>
-      // Esc or Ctrl-C at a prompt, which the terminal reads in raw mode rather than as a signal.
-      Terminal.isQuitError(error.cause)
-        ? refuse("Sign-in cancelled.")
-        : refuse(`Could not sign in: ${ensureError(error.cause).message}`),
-    ),
+    Effect.catchTag("SchemaError", () => refuse("The Runner's installation ID is invalid.")),
+    Effect.provide(NodeFileSystem.layer),
   );
-  console.log("Signed in. The Runner uses the sign-in from its next model call, running or not.");
-}).pipe(
-  Effect.catchTag("ConfigError", (error) =>
-    refuse(`The sign-in is not configured: ${settingsProblems(error)}`),
-  ),
-  Effect.provide(NodeFileSystem.layer),
-);
+}
 
-const run = Effect.gen(function* () {
-  const settings = yield* runnerSettings;
-  const baseUrl = Option.getOrUndefined(settings.modelBaseUrl);
-  // Pi calls Azure OpenAI at `AZURE_OPENAI_BASE_URL`, or the URL of `AZURE_OPENAI_RESOURCE_NAME`,
-  // ahead of a model's own URL, so the setting would be passed over whenever either is set.
-  if (baseUrl && settings.provider === "azure") {
-    return yield* refuse(
-      "RUNNER_MODEL_BASE_URL is not used with Azure OpenAI: set AZURE_OPENAI_BASE_URL to call its models at another URL.",
+const login = (withApiKey: boolean) =>
+  Effect.gen(function* () {
+    const settings = yield* authSettings;
+    const baseUrl = Option.getOrUndefined(yield* modelBaseUrlSetting);
+    yield* loginProvider(runnerAuth(settings.dataDir).auth, { ...settings, baseUrl }, withApiKey);
+  });
+
+const logout = Effect.gen(function* () {
+  const { dataDir, provider } = yield* authSettings;
+  yield* runnerAuth(dataDir)
+    .auth.logout(provider)
+    .pipe(Effect.catch(() => refuse("Could not remove saved provider authentication.")));
+  console.log(
+    `Saved authentication removed for "${provider}". Environment authentication, if configured, still applies.`,
+  );
+});
+
+const authStatus = Effect.gen(function* () {
+  const { dataDir, provider } = yield* authSettings;
+  const status = yield* runnerAuth(dataDir)
+    .auth.status(provider)
+    .pipe(
+      Effect.catch(() => refuse(`Could not inspect authentication for provider "${provider}".`)),
     );
-  }
-  // Checked without `baseUrl`, whose models would report the provider unconfigured rather than find
-  // the sign-in.
-  if (
-    baseUrl &&
-    (yield* Effect.promise(() => runnerModels(settings.dataDir).checkAuth(settings.provider)))
-      ?.type === "oauth"
-  ) {
-    return yield* refuse(SIGN_IN_WITH_BASE_URL);
-  }
-  const models = runnerModels(
-    settings.dataDir,
-    baseUrl && { provider: settings.provider, url: baseUrl },
+  console.log(
+    status.configured
+      ? `Provider ${status.provider}: configured (${status.type}; source: ${status.source ?? "unspecified"}). Not validated.`
+      : `Provider ${status.provider}: no authentication configured.`,
   );
-  const problem = yield* Effect.promise(() =>
-    renewModelAuthProblem(models, settings.provider, settings.modelId),
-  );
-  if (problem) return yield* refuse(problem);
-  // Pi takes a Claude subscription's token from this variable as it takes a key, ahead of
-  // `ANTHROPIC_API_KEY`, and names it as the source.
-  if (
-    baseUrl &&
-    (yield* Effect.promise(() => models.getAuth(settings.provider)))?.source ===
-      "ANTHROPIC_OAUTH_TOKEN"
-  ) {
-    return yield* refuse(SIGN_IN_WITH_BASE_URL);
-  }
-  return yield* runRunner({
-    hubUrl: settings.hubUrl,
-    registrationKey: Redacted.value(settings.registrationKey),
-    dataDir: settings.dataDir,
-    models,
-    model: {
+});
+
+const authCheck = (offerLogin: boolean) =>
+  Effect.gen(function* () {
+    const settings = yield* authSettings;
+    const modelId = yield* Config.NonEmptyString("RUNNER_MODEL_ID");
+    const baseUrl = Option.getOrUndefined(yield* modelBaseUrlSetting);
+    const { auth } = runnerAuth(settings.dataDir);
+    const selection = { provider: settings.provider, modelId, baseUrl };
+    let problem = yield* auth.prepareModel(selection);
+    if (problem?.kind === "missing" && offerLogin && hasTerminal()) {
+      const confirmed = yield* Prompt.run(
+        Prompt.Confirm({ message: `No authentication for ${settings.provider}. Log in now?` }),
+      ).pipe(
+        Effect.provide(terminalLayer),
+        Effect.catch(() => refuse("Login cancelled.")),
+      );
+      if (confirmed) {
+        yield* loginProvider(auth, { ...settings, baseUrl });
+        problem = yield* auth.prepareModel(selection);
+      }
+    }
+    if (problem) yield* refuse(problem.message);
+  });
+
+const run = (options: { register: boolean; healthcheck: boolean }) =>
+  Effect.gen(function* () {
+    const settings = yield* runnerSettings;
+    const { models, auth } = runnerAuth(settings.dataDir);
+    const problem = yield* auth.prepareModel({
       provider: settings.provider,
       modelId: settings.modelId,
-      thinkingLevel: settings.thinkingLevel,
-    },
-    maxJobs: Option.getOrUndefined(settings.maxJobs),
-    sandbox: {
-      extraReadPaths: settings.extraReadPaths,
-      jobMemoryLimit: settings.jobMemoryLimit,
-      runWithoutSandbox: settings.runWithoutSandbox,
-    },
-    register: command === "register",
-  }).pipe(
-    Effect.catchTag("SandboxUnavailable", (error) => refuse(error.message)),
-    Effect.catchTag("Removed", () =>
-      // FIXME: re-registering belongs to the CLI. Once it exists, this message names its command
-      // (such as `agent-batch runner register`) and `register` moves out of this entry point.
-      refuse(
-        "This Runner was removed from the hub, or the hub no longer knows it (for example after a reset). To add it again, start it once with `register`.",
+      baseUrl: Option.getOrUndefined(settings.modelBaseUrl),
+    });
+    if (problem) return yield* refuse(problem.message);
+    const ready = yield* Latch.make(false);
+    const running = runRunner({
+      hubUrl: settings.hubUrl,
+      registrationKey: Redacted.value(settings.registrationKey),
+      dataDir: settings.dataDir,
+      models,
+      model: {
+        provider: settings.provider,
+        modelId: settings.modelId,
+        thinkingLevel: settings.thinkingLevel,
+      },
+      maxJobs: Option.getOrUndefined(settings.maxJobs),
+      sandbox: {
+        extraReadPaths: settings.extraReadPaths,
+        jobMemoryLimit: settings.jobMemoryLimit,
+        runWithoutSandbox: settings.runWithoutSandbox,
+      },
+      register: options.register,
+      onReady: ready.open,
+    }).pipe(
+      Effect.catchTag("SandboxUnavailable", (error) => refuse(error.message)),
+      Effect.catchTag("Removed", () =>
+        // FIXME: re-registering belongs to the CLI. Once it exists, this message names its command
+        // (such as `agent-batch runner register`) and `register` moves out of this entry point.
+        refuse(
+          "This Runner was removed from the hub, or the hub no longer knows it (for example after a reset). To add it again, start it once with `register`.",
+        ),
       ),
-    ),
-  );
-}).pipe(
-  Effect.catchTag("ConfigError", (error) =>
-    refuse(`The Runner is not configured: ${settingsProblems(error)}`),
+    );
+    if (!options.healthcheck) return yield* running;
+    // Only this process owns the listener: a restart cannot inherit a stale ready signal.
+    // It records startup, not ongoing provider validity or hub connectivity.
+    const healthcheck = Effect.gen(function* () {
+      yield* ready.await;
+      const server = yield* NodeSocketServer.make({ host: "127.0.0.1", port: 8790 });
+      return yield* server.run((socket) => socket.reader.pipe(Effect.asVoid, Effect.scoped));
+    }).pipe(Effect.scoped);
+    return yield* Effect.all([running, healthcheck], { concurrency: "unbounded", discard: true });
+  });
+
+// Declared on both the Runner and `register`: effect/cli does not pass a command's flags to its
+// subcommands.
+const healthcheck = Flag.Boolean("healthcheck").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription(
+    "Once started, listen on 127.0.0.1:8790 for the container's healthcheck, which the Runner image enables.",
   ),
 );
 
-if (command === "login") NodeRuntime.runMain(login);
-else NodeRuntime.runMain(run);
+const runner = Command.make("runner", { healthcheck }, (flags) =>
+  run({ register: false, ...flags }),
+).pipe(
+  Command.withDescription(
+    "Run a Runner from the environment: it connects to the hub and runs the jobs the hub places on it.",
+  ),
+  Command.withSubcommands([
+    Command.make("register", { healthcheck }, (flags) => run({ register: true, ...flags })).pipe(
+      Command.withDescription("Discard this Runner's key, register it again, then run it."),
+    ),
+    Command.make(
+      "login",
+      {
+        withApiKey: Flag.Boolean("with-api-key").pipe(
+          Flag.withDefault(false),
+          Flag.withDescription("Read a provider API key from stdin instead of asking for it."),
+        ),
+      },
+      ({ withApiKey }) => login(withApiKey),
+    ).pipe(Command.withDescription("Sign in to the model's provider, or save its API key.")),
+    Command.make("logout", {}, () => logout).pipe(
+      Command.withDescription("Remove the provider authentication login saved."),
+    ),
+    Command.make(
+      "auth-check",
+      {
+        login: Flag.Boolean("login").pipe(
+          Flag.withDefault(false),
+          Flag.withDescription("Offer to log in when no authentication is configured."),
+        ),
+      },
+      (flags) => authCheck(flags.login),
+    ).pipe(
+      Command.withDescription(
+        "Resolve the model's authentication as startup does, without starting the Runner.",
+      ),
+    ),
+    Command.make("auth-status", {}, () => authStatus).pipe(
+      Command.withDescription(
+        "Show how the model's provider is authenticated, without validating it.",
+      ),
+    ),
+  ]),
+);
+
+NodeRuntime.runMain(
+  Command.run(runner, { version: packageJson.version }).pipe(
+    Effect.catchTag("ConfigError", (error) =>
+      refuse(`The Runner is not configured: ${settingsProblems(error)}`),
+    ),
+    Effect.provide(
+      NodeChildProcessSpawner.layer.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeTerminal.layer, NodeStdio.layer),
+        ),
+      ),
+    ),
+  ),
+);

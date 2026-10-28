@@ -8,13 +8,15 @@ The hub runs on Cloudflare Workers or Node/Docker; Runners execute jobs on the m
 
 From nothing to a finished job on one machine with Docker Engine 29 or later and Compose 5 or later, Node 22.19 or later and `jq`: `agent-batch stack start` runs a hub, a Runner and the hub's Postgres from the images released with it, and jobs go through the same `agent-batch` command. To run them for other machines, see [Deploying with Docker Compose](#deploying-with-docker-compose). On Ubuntu 24.04, first let the Runner's job sandboxes create user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, and a file in `/etc/sysctl.d` to keep it; on Ubuntu 25.04 and later they cannot run yet (see [the Runner's README](apps/runner/README.md)).
 
-1. **Start the hub and a Runner**, with the model every job runs on and its provider's key; here OpenRouter's free models. It returns once the hub is healthy and keeps running in the background, even after you close the terminal.
+1. **Start the hub and a Runner**, using OpenRouter's free models by default. On first use, the command offers provider login and saves it in the Runner's volume; provider keys are hidden as you type. It returns once the hub is healthy and the Runner has started, and keeps running in the background, even after you close the terminal.
 
    ```sh
-   OPENROUTER_API_KEY=<your key> npx --yes agent-batch stack start
+   npx --yes agent-batch stack start
    ```
 
-   Another model goes in `--model-provider` and `--model-id`, as Pi names them, with the provider's key in `<PROVIDER>_API_KEY`, such as `--model-provider anthropic --model-id claude-sonnet-5-5` with `ANTHROPIC_API_KEY`; `--model-key-env` names another variable, such as `GEMINI_API_KEY` for `google`. `npx agent-batch stack login --model-provider <provider>` signs the Runner in to a provider's subscription instead, where Pi offers one; then start it with that provider and a model. `npx agent-batch stack stop` stops it and keeps its data, keys and sign-in for the next start, which remembers the model too. `npx agent-batch stack delete` stops it and deletes its database and Runner volumes and saved credentials, without a prompt.
+   Choose another model with `--provider` and `--model`, as Pi names them, such as `--provider anthropic --model claude-sonnet-5-5`. `npx agent-batch stack login --provider <provider>` adds or replaces that provider's credential independently. It offers a provider API key or account sign-in where Pi supports them. To supply a key from your environment instead, forward its variable by name: `OPENROUTER_API_KEY="$MY_KEY" npx agent-batch stack start --env OPENROUTER_API_KEY`, where `MY_KEY` already holds the key, so it stays out of your shell history.
+
+   `npx agent-batch stack stop` keeps the containers, data and credentials for the next start. `npx agent-batch stack delete` removes the database and Runner volumes, including saved logins, without a prompt.
 
    On its first start it creates the hub's owner and an API key for jobs. `agent-batch` commands use that hub and key while `AGENT_BATCH_URL` and `AGENT_BATCH_API_KEY` are unset, and `npx agent-batch stack env` prints both for other clients, such as `curl`.
 
@@ -60,9 +62,9 @@ From nothing to a finished job on one machine with Docker Engine 29 or later and
    npx agent-batch jobs cancel --id "$ID"   # likewise pause, resume and delete
    ```
 
-`npx agent-batch stack status` shows whether the stack is running, the hub's URL and health, and the image versions in use. `npx agent-batch stack logs` prints its logs without following them.
+`npx agent-batch stack status` shows whether the stack is running, the hub's URL and health, the image versions in use, and the Runner's authentication source. `npx agent-batch stack logs` prints its logs without following them.
 
-To upgrade, run `npx agent-batch stack stop`, back up the volumes if the data matters, then run `npx --yes agent-batch@<new-version> stack start` with the new CLI version and the provider key as above.
+To upgrade, run `npx agent-batch stack stop`, back up the volumes if the data matters, then run `npx --yes agent-batch@<new-version> stack start` with the new CLI version. Saved logins survive replacement; if you used `--env`, supply those variables again when recreating the Runner.
 
 ## Deploying with Docker Compose
 
@@ -110,7 +112,7 @@ The hub and a Runner from their published images on one machine, as a deployment
    RUNNER_MODEL_ID=openrouter/free
    OPENROUTER_API_KEY=<your key>
    EOF
-   docker compose up -d runner
+   docker compose up --wait runner
    ```
 
    Another model goes in `RUNNER_MODEL_ID` the same way, such as `anthropic/claude-haiku-5.5` or `openai/gpt-6-luna` for real work.

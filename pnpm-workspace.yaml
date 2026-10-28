@@ -7,11 +7,14 @@ catalogMode: prefer
 
 overrides:
   vite@*: "catalog:"
+  vitest@*: "catalog:"
 peerDependencyRules:
   allowAny:
     - vite
+    - vitest
   allowedVersions:
     vite: "*"
+    vitest: "*"
 minimumReleaseAge: 1440
 allowBuilds:
   # Both download their platform's native binary in postinstall; wrangler needs them.
@@ -34,6 +37,7 @@ catalog:
   "@earendil-works/pi-durable": ^1.4.0
   "@earendil-works/pi-env": ^1.4.0
   "@effect/platform-node-shared": ^4.0.5
+  "@effect/vitest": 4.0.5
   "@hono/node-server": ^2.1.5
   "@orpc/client": 2.0.0-beta.44
   "@orpc/contract": 2.0.0-beta.44
@@ -79,6 +83,7 @@ catalog:
   valid-filename: ^5.0.0
   vite: npm:@voidzero-dev/vite-plus-core@1.4.0
   vite-plus: 1.4.0
+  vitest: 5.0.5
   wrangler: ^4.151.3
   ws: ^8.22.0
   zod: ^4.6.7

@@ -84,4 +84,10 @@ COPY --from=runner-build /app/LICENSE /app/LICENSE
 ENV NODE_ENV=production RUNNER_DATA_DIR=/data
 USER runner
 WORKDIR /app
-CMD ["node", "dist/main.mjs"]
+# Healthy once the Runner has finished starting: its model's authentication resolved, registered,
+# and synced with the hub. `--healthcheck` opens a listener on the container's 127.0.0.1:8790 at that
+# point, owned by the process, so a restarted Runner is unhealthy until it starts again. Docker checks
+# each second for the first minute, as for the hub, and the image has no curl, so Node connects.
+HEALTHCHECK --timeout=2s --start-period=60s --start-interval=1s \
+  CMD ["node", "-e", "require('node:net').connect(8790, '127.0.0.1').on('connect', function () { this.end(); }).on('error', () => process.exit(1))"]
+CMD ["node", "dist/main.mjs", "--healthcheck"]

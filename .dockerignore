@@ -8,3 +8,6 @@
 **/.env.*
 **/.dev.vars*
 **/.wrangler
+
+# Local build and test caches are not image inputs.
+**/.cache
