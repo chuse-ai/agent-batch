@@ -162,7 +162,9 @@ function runnerService(state: State, version: string) {
 function runnerConfiguration(state: State, version: string) {
   const runner = runnerService(state, version);
   // Compose's hash includes resolved external values. This label compares the declaration
-  // without reading retained secrets. Registration is used only to initialize the Runner's
+  // without reading retained secrets. The label travels with the container, so it describes the
+  // Runner that exists; the file on disk is rewritten before each start and can describe one that
+  // never launched. Registration is used only to initialize the Runner's
   // identity in its volume, so making the initial key does not change this declaration.
   return JSON.stringify({
     ...runner,
