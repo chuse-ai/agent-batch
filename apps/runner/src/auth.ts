@@ -239,6 +239,8 @@ export function createRunnerAuth(models: MutableModels, credentials: CredentialS
         });
       }
       let supplied = false;
+      // The key and URL are the Runner's; Pi's login gets only its own options.
+      const { apiKey: _apiKey, baseUrl: _baseUrl, ...loginOptions } = options;
       return yield* Effect.tryPromise({
         try: (signal) => {
           const operationSignal = interaction.signal
@@ -269,7 +271,7 @@ export function createRunnerAuth(models: MutableModels, credentials: CredentialS
                 return options.apiKey;
               },
             },
-            options,
+            loginOptions,
           );
         },
         catch: ensureError,

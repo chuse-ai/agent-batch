@@ -142,20 +142,7 @@ function literal(value: string) {
 function runnerService(state: State, version: string) {
   return {
     image: `ghcr.io/chuse-ai/agent-batch-runner:${version}`,
-    command: ["node", "dist/main.mjs", "--healthcheck"],
-    healthcheck: {
-      test: [
-        "CMD",
-        "node",
-        "-e",
-        "require('node:net').connect(8790, '127.0.0.1').on('connect', function () { this.end(); }).on('error', () => process.exit(1))",
-      ],
-      interval: "30s",
-      timeout: "2s",
-      start_period: "60s",
-      start_interval: "1s",
-      retries: 3,
-    },
+    // The image's healthcheck reports the Runner healthy once it has finished starting.
     depends_on: { hub: { condition: "service_healthy" } },
     security_opt: ["seccomp=unconfined", "systempaths=unconfined", "apparmor=unconfined"],
     mem_limit: "8g",
@@ -259,14 +246,15 @@ function runRunnerCommand(
   return Effect.gen(function* () {
     // Compose prepares every declared volume even with --no-deps. Authentication needs only
     // Runner data; it must not initialize the database as a side effect of logging in.
+    // Authentication starts no sandbox and never reaches the hub, so the container gets neither the
+    // sandbox's security options nor the hub's address and registration key. Its command opens no
+    // listener, so the image's healthcheck is off rather than reporting it unhealthy.
+    const { image, environment, volumes } = runnerService(state, version);
+    const { HUB_URL: _hub, RUNNER_REGISTRATION_KEY: _key, ...authEnvironment } = environment;
     const file = yield* writeTemporaryComposeFile({
       name: PROJECT,
       services: {
-        runner: {
-          ...runnerService(state, version),
-          depends_on: undefined,
-          healthcheck: { disable: true },
-        },
+        runner: { image, environment: authEnvironment, volumes, healthcheck: { disable: true } },
       },
       volumes: { "runner-data": {} },
     });
@@ -281,7 +269,9 @@ function runRunnerCommand(
         "dist/main.mjs",
         ...args,
       ],
-      { file, interactive },
+      // This declaration names only the Runner, so Compose would call the stack's hub and database
+      // orphans and suggest --remove-orphans, which would remove them.
+      { file, interactive, ignoreOrphans: true },
     );
   });
 }
@@ -298,7 +288,12 @@ const NodeServices = NodeChildProcessSpawner.layer.pipe(
  */
 function compose(
   args: readonly string[],
-  options: { interactive?: boolean; errorsOnly?: boolean; file?: string } = {},
+  options: {
+    interactive?: boolean;
+    errorsOnly?: boolean;
+    file?: string;
+    ignoreOrphans?: boolean;
+  } = {},
 ) {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -319,6 +314,9 @@ function compose(
           stderr: "inherit",
           // Ctrl-C must also reach Compose, including while following logs.
           detached: false,
+          ...(options.ignoreOrphans
+            ? { env: { COMPOSE_IGNORE_ORPHANS: "true" }, extendEnv: true }
+            : {}),
         },
       ),
     );
@@ -366,35 +364,30 @@ function dockerOutput(args: readonly string[]) {
 /** Reads only lifecycle metadata and our nonsecret declaration, never retained environment values. */
 function existingRunner() {
   return Effect.gen(function* () {
-    const ids = yield* dockerOutput([
+    const output = yield* dockerOutput([
       "ps",
       "--all",
-      "--quiet",
       "--filter",
       `label=com.docker.compose.project=${PROJECT}`,
       "--filter",
       "label=com.docker.compose.service=runner",
       "--filter",
       "label=com.docker.compose.oneoff=False",
+      "--format",
+      `{{json .State}}\t{{json (.Label "${RUNNER_CONFIG_LABEL}")}}`,
     ]);
-    if (ids.trim() === "") return undefined;
-    const id = ids.trim().split("\n");
-    if (id.length !== 1) {
+    if (output.trim() === "") return undefined;
+    const containers = output.trim().split("\n");
+    if (containers.length !== 1) {
       return yield* Effect.fail(
         new Error(
           "The stack has more than one Runner container; inspect it with docker compose before starting",
         ),
       );
     }
-    const output = yield* dockerOutput([
-      "inspect",
-      "--format",
-      `{{json .State.Status}}{{println}}{{json (index .Config.Labels "${RUNNER_CONFIG_LABEL}")}}`,
-      ...id,
-    ]);
     return yield* Effect.try({
       try: () => {
-        const [running, configuration] = output.trim().split("\n");
+        const [running, configuration] = containers[0].split("\t");
         return {
           running: z.parse(z.string(), JSON.parse(running)) === "running",
           configuration: z.parse(z.string(), JSON.parse(configuration)),
@@ -709,6 +702,15 @@ function manageProviderCredential(
   input: { provider?: string; withApiKey?: boolean },
 ) {
   return Effect.gen(function* () {
+    // The container reads the key through `run -T`, where stdin is never a terminal, so only this
+    // process can tell that a key would be typed, echoed, into the terminal.
+    if (input.withApiKey && process.stdin.isTTY) {
+      yield* Effect.fail(
+        new Error(
+          "Pipe the API key to agent-batch stack login --with-api-key, or use agent-batch stack login for hidden entry.",
+        ),
+      );
+    }
     yield* lockState;
     const saved = yield* readState();
     const state = saved ?? (yield* stateForStart({}, undefined));

@@ -8,13 +8,13 @@ The hub runs on Cloudflare Workers or Node/Docker; Runners execute jobs on the m
 
 From nothing to a finished job on one machine with Docker Engine 29 or later and Compose 5 or later, Node 22.19 or later and `jq`: `agent-batch stack start` runs a hub, a Runner and the hub's Postgres from the images released with it, and jobs go through the same `agent-batch` command. To run them for other machines, see [Deploying with Docker Compose](#deploying-with-docker-compose). On Ubuntu 24.04, first let the Runner's job sandboxes create user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, and a file in `/etc/sysctl.d` to keep it; on Ubuntu 25.04 and later they cannot run yet (see [the Runner's README](apps/runner/README.md)).
 
-1. **Start the hub and a Runner**, using OpenRouter's free models by default. On first use, the command offers provider login and saves it in the Runner's volume; provider keys are hidden as you type. It returns once the hub is healthy and keeps running in the background, even after you close the terminal.
+1. **Start the hub and a Runner**, using OpenRouter's free models by default. On first use, the command offers provider login and saves it in the Runner's volume; provider keys are hidden as you type. It returns once the hub is healthy and the Runner has started, and keeps running in the background, even after you close the terminal.
 
    ```sh
    npx --yes agent-batch stack start
    ```
 
-   Choose another model with `--provider` and `--model`, as Pi names them, such as `--provider anthropic --model claude-sonnet-5-5`. `npx agent-batch stack login --provider <provider>` adds or replaces that provider's credential independently. It offers a provider API key or account sign-in where Pi supports them. To supply an external key instead, explicitly forward its variable: `OPENROUTER_API_KEY=<your key> npx agent-batch stack start --env OPENROUTER_API_KEY`.
+   Choose another model with `--provider` and `--model`, as Pi names them, such as `--provider anthropic --model claude-sonnet-5-5`. `npx agent-batch stack login --provider <provider>` adds or replaces that provider's credential independently. It offers a provider API key or account sign-in where Pi supports them. To supply a key from your environment instead, forward its variable by name: `OPENROUTER_API_KEY="$MY_KEY" npx agent-batch stack start --env OPENROUTER_API_KEY`, where `MY_KEY` already holds the key, so it stays out of your shell history.
 
    `npx agent-batch stack stop` keeps the containers, data and credentials for the next start. `npx agent-batch stack delete` removes the database and Runner volumes, including saved logins, without a prompt.
 
