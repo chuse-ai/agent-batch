@@ -83,10 +83,10 @@ catalog:
   valid-filename: ^5.0.0
   vite: npm:@voidzero-dev/vite-plus-core@1.4.0
   vite-plus: 1.4.0
+  vitest: 5.0.5
   wrangler: ^4.151.3
   ws: ^8.22.0
   zod: ^4.6.7
-  vitest: 5.0.5
 patchedDependencies:
   "@anthropic-ai/sandbox-runtime@0.0.81": patches/@anthropic-ai__sandbox-runtime@0.0.81.patch
   generate-license-file: patches/generate-license-file.patch

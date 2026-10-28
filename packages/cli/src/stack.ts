@@ -271,9 +271,7 @@ function runRunnerCommand(
         "dist/main.mjs",
         ...args,
       ],
-      // This declaration names only the Runner, so Compose would call the stack's hub and database
-      // orphans and suggest --remove-orphans, which would remove them.
-      { file, interactive, ignoreOrphans: true },
+      { file, interactive },
     );
   });
 }
@@ -286,7 +284,9 @@ const NodeServices = NodeChildProcessSpawner.layer.pipe(
  * Runs `docker compose` with `args` on the project, printing what it prints, and fails unless it
  * succeeds. It reads only the stack's Compose file, never a deployment in the working directory.
  * `interactive` inherits the terminal's input, for a command that reads it. `errorsOnly` leaves
- * out Compose's warnings, such as that there was nothing to remove.
+ * out Compose's warnings, such as that there was nothing to remove. Another `file` declares only
+ * part of the project, so Compose would call the stack's other services orphans and suggest
+ * --remove-orphans, which would remove them.
  */
 function compose(
   args: readonly string[],
@@ -294,7 +294,6 @@ function compose(
     interactive?: boolean;
     errorsOnly?: boolean;
     file?: string;
-    ignoreOrphans?: boolean;
   } = {},
 ) {
   return Effect.gen(function* () {
@@ -316,9 +315,7 @@ function compose(
           stderr: "inherit",
           // Ctrl-C must also reach Compose, including while following logs.
           detached: false,
-          ...(options.ignoreOrphans
-            ? { env: { COMPOSE_IGNORE_ORPHANS: "true" }, extendEnv: true }
-            : {}),
+          ...(options.file ? { env: { COMPOSE_IGNORE_ORPHANS: "true" }, extendEnv: true } : {}),
         },
       ),
     );

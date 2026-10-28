@@ -359,6 +359,8 @@ const run = (options: { register: boolean; healthcheck: boolean }) =>
     return yield* Effect.all([running, healthcheck], { concurrency: "unbounded", discard: true });
   });
 
+// Declared on both the Runner and `register`: effect/cli does not pass a command's flags to its
+// subcommands.
 const healthcheck = Flag.Boolean("healthcheck").pipe(
   Flag.withDefault(false),
   Flag.withDescription(
