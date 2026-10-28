@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { parseArgs } from "node:util";
 
 import type { AuthInteraction } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { MODEL_THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-schema";
+import * as NodeChildProcessSpawner from "@effect/platform-node-shared/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
 import * as NodePath from "@effect/platform-node-shared/NodePath";
 // The shared package rather than `@effect/platform-node`, whose required `redis` peer the Runner
 // would install without using.
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
 import * as NodeSocketServer from "@effect/platform-node-shared/NodeSocketServer";
+import * as NodeStdio from "@effect/platform-node-shared/NodeStdio";
 import * as NodeTerminal from "@effect/platform-node-shared/NodeTerminal";
 import { getDotPath } from "@standard-schema/utils";
 import {
@@ -27,8 +28,10 @@ import {
   SchemaIssue,
   Terminal,
 } from "effect";
+import { Command, Flag } from "effect/cli";
 import * as Prompt from "effect/cli/Prompt";
 
+import packageJson from "../package.json" with { type: "json" };
 import { createRunnerAuth, readApiKey } from "./auth.ts";
 import { fileCredentialStore } from "./credentials.ts";
 import { DEFAULT_SANDBOX_SETTINGS, runRunner } from "./index.ts";
@@ -63,29 +66,6 @@ const CREDENTIALS_FILE = "auth.json";
 
 /** The file in the Runner's data directory holding the ID a provider knows this installation by. */
 const INSTALLATION_FILE = "installation_id";
-
-const { positionals, values } = parseArgs({
-  allowPositionals: true,
-  options: {
-    "with-api-key": { type: "boolean" },
-    login: { type: "boolean" },
-    healthcheck: { type: "boolean" },
-  },
-});
-const [command] = positionals;
-if (
-  positionals.length > 1 ||
-  (command !== undefined &&
-    !["register", "login", "logout", "auth-check", "auth-status"].includes(command)) ||
-  (values["with-api-key"] && command !== "login") ||
-  (values.login && command !== "auth-check") ||
-  (values.healthcheck && command !== undefined && command !== "register")
-) {
-  console.error(
-    "Usage: node dist/main.mjs [register] [--healthcheck] | login [--with-api-key] | logout | auth-check [--login] | auth-status",
-  );
-  process.exit(1);
-}
 
 /** Where the Runner keeps what must survive restarts. */
 const dataDirSetting = Config.String("RUNNER_DATA_DIR").pipe(Config.withDefault("data"));
@@ -275,15 +255,12 @@ function loginProvider(
   );
 }
 
-const login = Effect.gen(function* () {
-  const settings = yield* authSettings;
-  const baseUrl = Option.getOrUndefined(yield* modelBaseUrlSetting);
-  yield* loginProvider(
-    runnerAuth(settings.dataDir).auth,
-    { ...settings, baseUrl },
-    values["with-api-key"],
-  );
-});
+const login = (withApiKey: boolean) =>
+  Effect.gen(function* () {
+    const settings = yield* authSettings;
+    const baseUrl = Option.getOrUndefined(yield* modelBaseUrlSetting);
+    yield* loginProvider(runnerAuth(settings.dataDir).auth, { ...settings, baseUrl }, withApiKey);
+  });
 
 const logout = Effect.gen(function* () {
   const { dataDir, provider } = yield* authSettings;
@@ -309,92 +286,139 @@ const authStatus = Effect.gen(function* () {
   );
 });
 
-const authCheck = Effect.gen(function* () {
-  const settings = yield* authSettings;
-  const modelId = yield* Config.NonEmptyString("RUNNER_MODEL_ID");
-  const baseUrl = Option.getOrUndefined(yield* modelBaseUrlSetting);
-  const { auth } = runnerAuth(settings.dataDir);
-  const selection = { provider: settings.provider, modelId, baseUrl };
-  let problem = yield* auth.prepareModel(selection);
-  if (problem?.kind === "missing" && values.login && hasTerminal()) {
-    const confirmed = yield* Prompt.run(
-      Prompt.Confirm({ message: `No authentication for ${settings.provider}. Log in now?` }),
-    ).pipe(
-      Effect.provide(terminalLayer),
-      Effect.catch(() => refuse("Login cancelled.")),
-    );
-    if (confirmed) {
-      yield* loginProvider(auth, { ...settings, baseUrl });
-      problem = yield* auth.prepareModel(selection);
+const authCheck = (offerLogin: boolean) =>
+  Effect.gen(function* () {
+    const settings = yield* authSettings;
+    const modelId = yield* Config.NonEmptyString("RUNNER_MODEL_ID");
+    const baseUrl = Option.getOrUndefined(yield* modelBaseUrlSetting);
+    const { auth } = runnerAuth(settings.dataDir);
+    const selection = { provider: settings.provider, modelId, baseUrl };
+    let problem = yield* auth.prepareModel(selection);
+    if (problem?.kind === "missing" && offerLogin && hasTerminal()) {
+      const confirmed = yield* Prompt.run(
+        Prompt.Confirm({ message: `No authentication for ${settings.provider}. Log in now?` }),
+      ).pipe(
+        Effect.provide(terminalLayer),
+        Effect.catch(() => refuse("Login cancelled.")),
+      );
+      if (confirmed) {
+        yield* loginProvider(auth, { ...settings, baseUrl });
+        problem = yield* auth.prepareModel(selection);
+      }
     }
-  }
-  if (problem) yield* refuse(problem.message);
-});
-
-const run = Effect.gen(function* () {
-  const settings = yield* runnerSettings;
-  const { models, auth } = runnerAuth(settings.dataDir);
-  const problem = yield* auth.prepareModel({
-    provider: settings.provider,
-    modelId: settings.modelId,
-    baseUrl: Option.getOrUndefined(settings.modelBaseUrl),
+    if (problem) yield* refuse(problem.message);
   });
-  if (problem) return yield* refuse(problem.message);
-  const ready = yield* Latch.make(false);
-  const running = runRunner({
-    hubUrl: settings.hubUrl,
-    registrationKey: Redacted.value(settings.registrationKey),
-    dataDir: settings.dataDir,
-    models,
-    model: {
+
+const run = (options: { register: boolean; healthcheck: boolean }) =>
+  Effect.gen(function* () {
+    const settings = yield* runnerSettings;
+    const { models, auth } = runnerAuth(settings.dataDir);
+    const problem = yield* auth.prepareModel({
       provider: settings.provider,
       modelId: settings.modelId,
-      thinkingLevel: settings.thinkingLevel,
-    },
-    maxJobs: Option.getOrUndefined(settings.maxJobs),
-    sandbox: {
-      extraReadPaths: settings.extraReadPaths,
-      jobMemoryLimit: settings.jobMemoryLimit,
-      runWithoutSandbox: settings.runWithoutSandbox,
-    },
-    register: command === "register",
-    onReady: ready.open,
-  }).pipe(
-    Effect.catchTag("SandboxUnavailable", (error) => refuse(error.message)),
-    Effect.catchTag("Removed", () =>
-      // FIXME: re-registering belongs to the CLI. Once it exists, this message names its command
-      // (such as `agent-batch runner register`) and `register` moves out of this entry point.
-      refuse(
-        "This Runner was removed from the hub, or the hub no longer knows it (for example after a reset). To add it again, start it once with `register`.",
+      baseUrl: Option.getOrUndefined(settings.modelBaseUrl),
+    });
+    if (problem) return yield* refuse(problem.message);
+    const ready = yield* Latch.make(false);
+    const running = runRunner({
+      hubUrl: settings.hubUrl,
+      registrationKey: Redacted.value(settings.registrationKey),
+      dataDir: settings.dataDir,
+      models,
+      model: {
+        provider: settings.provider,
+        modelId: settings.modelId,
+        thinkingLevel: settings.thinkingLevel,
+      },
+      maxJobs: Option.getOrUndefined(settings.maxJobs),
+      sandbox: {
+        extraReadPaths: settings.extraReadPaths,
+        jobMemoryLimit: settings.jobMemoryLimit,
+        runWithoutSandbox: settings.runWithoutSandbox,
+      },
+      register: options.register,
+      onReady: ready.open,
+    }).pipe(
+      Effect.catchTag("SandboxUnavailable", (error) => refuse(error.message)),
+      Effect.catchTag("Removed", () =>
+        // FIXME: re-registering belongs to the CLI. Once it exists, this message names its command
+        // (such as `agent-batch runner register`) and `register` moves out of this entry point.
+        refuse(
+          "This Runner was removed from the hub, or the hub no longer knows it (for example after a reset). To add it again, start it once with `register`.",
+        ),
+      ),
+    );
+    if (!options.healthcheck) return yield* running;
+    // Only this process owns the listener: a restart cannot inherit a stale ready signal.
+    // It records startup, not ongoing provider validity or hub connectivity.
+    const healthcheck = Effect.gen(function* () {
+      yield* ready.await;
+      const server = yield* NodeSocketServer.make({ host: "127.0.0.1", port: 8790 });
+      return yield* server.run((socket) => socket.reader.pipe(Effect.asVoid, Effect.scoped));
+    }).pipe(Effect.scoped);
+    return yield* Effect.all([running, healthcheck], { concurrency: "unbounded", discard: true });
+  });
+
+const healthcheck = Flag.Boolean("healthcheck").pipe(
+  Flag.withDescription(
+    "Once started, listen on 127.0.0.1:8790 for the container's healthcheck, which the Runner image enables.",
+  ),
+);
+
+const runner = Command.make("runner", { healthcheck }, (flags) =>
+  run({ register: false, ...flags }),
+).pipe(
+  Command.withDescription(
+    "Run a Runner from the environment: it connects to the hub and runs the jobs the hub places on it.",
+  ),
+  Command.withSubcommands([
+    Command.make("register", { healthcheck }, (flags) => run({ register: true, ...flags })).pipe(
+      Command.withDescription("Discard this Runner's key, register it again, then run it."),
+    ),
+    Command.make(
+      "login",
+      {
+        withApiKey: Flag.Boolean("with-api-key").pipe(
+          Flag.withDescription("Read a provider API key from stdin instead of asking for it."),
+        ),
+      },
+      ({ withApiKey }) => login(withApiKey),
+    ).pipe(Command.withDescription("Sign in to the model's provider, or save its API key.")),
+    Command.make("logout", {}, () => logout).pipe(
+      Command.withDescription("Remove the provider authentication login saved."),
+    ),
+    Command.make(
+      "auth-check",
+      {
+        login: Flag.Boolean("login").pipe(
+          Flag.withDescription("Offer to log in when no authentication is configured."),
+        ),
+      },
+      (flags) => authCheck(flags.login),
+    ).pipe(
+      Command.withDescription(
+        "Resolve the model's authentication as startup does, without starting the Runner.",
       ),
     ),
-  );
-  if (!values.healthcheck) return yield* running;
-  // Only this process owns the listener: a restart cannot inherit a stale ready signal.
-  // It records startup, not ongoing provider validity or hub connectivity.
-  const healthcheck = Effect.gen(function* () {
-    yield* ready.await;
-    const server = yield* NodeSocketServer.make({ host: "127.0.0.1", port: 8790 });
-    return yield* server.run((socket) => socket.reader.pipe(Effect.asVoid, Effect.scoped));
-  }).pipe(Effect.scoped);
-  return yield* Effect.all([running, healthcheck], { concurrency: "unbounded", discard: true });
-});
-
-const program =
-  command === "login"
-    ? login
-    : command === "logout"
-      ? logout
-      : command === "auth-check"
-        ? authCheck
-        : command === "auth-status"
-          ? authStatus
-          : run;
+    Command.make("auth-status", {}, () => authStatus).pipe(
+      Command.withDescription(
+        "Show how the model's provider is authenticated, without validating it.",
+      ),
+    ),
+  ]),
+);
 
 NodeRuntime.runMain(
-  program.pipe(
+  Command.run(runner, { version: packageJson.version }).pipe(
     Effect.catchTag("ConfigError", (error) =>
       refuse(`The Runner is not configured: ${settingsProblems(error)}`),
+    ),
+    Effect.provide(
+      NodeChildProcessSpawner.layer.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeTerminal.layer, NodeStdio.layer),
+        ),
+      ),
     ),
   ),
 );
