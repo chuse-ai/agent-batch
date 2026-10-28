@@ -360,6 +360,7 @@ const run = (options: { register: boolean; healthcheck: boolean }) =>
   });
 
 const healthcheck = Flag.Boolean("healthcheck").pipe(
+  Flag.withDefault(false),
   Flag.withDescription(
     "Once started, listen on 127.0.0.1:8790 for the container's healthcheck, which the Runner image enables.",
   ),
@@ -379,6 +380,7 @@ const runner = Command.make("runner", { healthcheck }, (flags) =>
       "login",
       {
         withApiKey: Flag.Boolean("with-api-key").pipe(
+          Flag.withDefault(false),
           Flag.withDescription("Read a provider API key from stdin instead of asking for it."),
         ),
       },
@@ -391,6 +393,7 @@ const runner = Command.make("runner", { healthcheck }, (flags) =>
       "auth-check",
       {
         login: Flag.Boolean("login").pipe(
+          Flag.withDefault(false),
           Flag.withDescription("Offer to log in when no authentication is configured."),
         ),
       },
