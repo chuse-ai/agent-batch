@@ -670,25 +670,22 @@ function start(version: string, flags: StartFlags) {
       replaceRunner ? "--force-recreate" : "--no-recreate",
       "runner",
     ]).pipe(
-      Effect.catch((error) =>
+      Effect.onError(() =>
         Effect.gen(function* () {
           const launched = replaceRunner || !runner?.running;
-          // An explicit launch that never became ready must not keep restarting unseen. Keep
-          // its container and environment for repair; an already-running Runner is left alone.
-          if (launched) {
-            yield* compose(["stop", "--timeout", "10", "runner"]).pipe(
-              Effect.mapError(
-                (stopError) =>
-                  new Error(
-                    `${error.message}. Runner startup did not complete, and stopping it failed: ${stopError.message}. It may still be running or restarting; the hub and saved data remain. Check agent-batch stack status and agent-batch stack logs before retrying.`,
-                  ),
-              ),
-            );
-          }
-          yield* Effect.fail(
-            new Error(
-              `${error.message}. Runner startup did not complete. ${launched ? "The Runner was stopped" : "The existing Runner was not stopped"}; the hub and saved data remain. Check agent-batch stack logs. If provider authentication is missing or needs repair, run agent-batch stack login --provider ${state.model.provider}, then agent-batch stack start.`,
-            ),
+          // Cleanup must also finish on interruption, before the mutation lock is released.
+          // Preserve the container and environment for repair, and leave existing work alone.
+          const disposition = launched
+            ? yield* compose(["stop", "--timeout", "10", "runner"]).pipe(
+                Effect.match({
+                  onSuccess: () => "The Runner was stopped",
+                  onFailure: (error) =>
+                    `Stopping the Runner failed: ${error.message}. It may still be running or restarting`,
+                }),
+              )
+            : "The existing Runner was not stopped";
+          yield* say(
+            `Runner startup did not complete. ${disposition}; the hub and saved data remain. Check agent-batch stack status and agent-batch stack logs. If provider authentication is missing or needs repair, run agent-batch stack login --provider ${state.model.provider}, then agent-batch stack start.`,
           );
         }),
       ),

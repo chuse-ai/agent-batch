@@ -595,7 +595,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Run and manage a hub, a Runner and Postgres on this machine. Starts the stack in the background with Docker and returns once the hub is healthy. The first start creates the hub's owner and an API key, which agent-batch commands use while AGENT_BATCH_URL and AGENT_BATCH_API_KEY are unset. Use stack login for persistent provider authentication, or --env to forward explicitly named variables to the Runner. An interactive first start offers login if authentication is missing.",
+          "description": "Run and manage a hub, a Runner and Postgres on this machine. Starts the stack in the background with Docker and returns once the hub is healthy and the Runner has initialized and synced with it. The first start creates the hub's owner and an API key, which agent-batch commands use while AGENT_BATCH_URL and AGENT_BATCH_API_KEY are unset. Use stack login for persistent provider authentication, or --env to forward explicitly named variables to the Runner. An interactive first start offers login if authentication is missing.",
           "name": "start",
           "options": [
             {

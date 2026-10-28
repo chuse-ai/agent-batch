@@ -286,6 +286,29 @@ describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")(
       );
       await agentBatch("stack", "stop");
       await agentBatch("stack", "logout");
+      // Cancelling a readiness wait must finish cleanup before another command takes the lock.
+      const interruptedRestart = agentBatch("stack", "start");
+      await expect
+        .poll(
+          async () =>
+            Number(
+              (await run("docker", ["inspect", "--format", "{{.RestartCount}}", forwardedRunner]))
+                .stdout,
+            ),
+          { timeout: 30_000 },
+        )
+        .toBeGreaterThan(0);
+      interruptedRestart.child.kill("SIGINT");
+      await expect(interruptedRestart).rejects.toMatchObject({
+        code: 130,
+        stderr: expect.stringContaining("The Runner was stopped"),
+      });
+      expect(
+        (
+          await run("docker", ["inspect", "--format", "{{.State.Status}}", forwardedRunner])
+        ).stdout.trim(),
+      ).toBe("exited");
+
       // Readiness must fail before the subprocess watchdog, without leaving a restart loop.
       const failedRestart = agentBatch("stack", "start");
       await expect(failedRestart).rejects.toMatchObject({
