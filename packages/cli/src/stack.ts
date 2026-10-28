@@ -617,8 +617,10 @@ function start(version: string, flags: StartFlags) {
       runner.configuration !== runnerConfiguration(state, images);
     const interactive = process.stdin.isTTY && process.stdout.isTTY;
     if (replaceRunner) yield* requireForwardedEnvironment(state.env);
-    // With no forwarded variables, the image and shared volume supply the same authentication
-    // to a temporary container. Retained Docker-only inputs require starting the real Runner.
+    // Temporary preflight is valid only when it has the same authentication inputs as the Runner
+    // being started. A replacement uses its proposed environment. For reuse, matching image/model
+    // and the shared credential volume establish equivalence when no variables are forwarded.
+    // Docker-retained inputs must be checked inside the existing Runner.
     if (replaceRunner || (!runner?.running && state.env.length === 0)) {
       yield* runRunnerCommand(
         state,
