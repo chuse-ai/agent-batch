@@ -14,16 +14,13 @@ import {
   type OAuthCredential,
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { makeMethods } from "@effect/vitest";
+import { it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber } from "effect";
 import { TestClock } from "effect/testing";
-import { expect, it as vitestIt, onTestFinished, vi } from "vite-plus/test";
+import { expect, onTestFinished, vi } from "vite-plus/test";
 
 import { createRunnerAuth, readApiKey } from "../src/auth.ts";
 import { fileCredentialStore } from "../src/credentials.ts";
-
-// Bind Effect's documented test adapter to the runner Vite+ uses.
-const it = makeMethods(vitestIt);
 
 const noPrompt: AuthInteraction = {
   prompt: () => Promise.reject(new Error("No interactive prompt expected")),
