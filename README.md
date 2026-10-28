@@ -75,7 +75,7 @@ The hub and a Runner from their published images on one machine, as a deployment
    <!-- x-release-please-start-version -->
 
    ```sh
-   curl -fsSLO https://raw.githubusercontent.com/chuse-ai/agent-batch/v0.4.0/compose.yaml
+   curl -fsSLO https://raw.githubusercontent.com/chuse-ai/agent-batch/v0.5.0/compose.yaml
    cat > .env <<EOF
    BETTER_AUTH_SECRET=$(openssl rand -base64 32)
    POSTGRES_PASSWORD=$(openssl rand -hex 24)
