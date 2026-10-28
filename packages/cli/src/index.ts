@@ -28,7 +28,7 @@ import isNetworkError from "is-network-error";
 import { createCli, os } from "trpc-cli";
 import * as z from "zod/mini";
 
-import { devCommands, savedHub } from "./dev.ts";
+import { stackCommands, savedHub } from "./stack.ts";
 
 // The `agent-batch` command: one command per call of the hub's public API that an API key can
 // make, derived from the contract, so the commands cannot drift from the API, plus `jobs submit` and
@@ -60,7 +60,7 @@ const settingsFromEnv = Config.all({
 
 /**
  * Where the hub is and the API key to call it with, read when a command runs, not for `--help`:
- * from the environment, or, when neither is set there, the hub `agent-batch dev` runs and the key it
+ * from the environment, or, when neither is set there, the hub `agent-batch stack` runs and the key it
  * made, together, so a key never goes to a hub it was not made for.
  */
 const settings = Effect.gen(function* () {
@@ -71,7 +71,7 @@ const settings = Effect.gen(function* () {
     if (saved !== undefined) {
       yield* Effect.sync(() =>
         process.stderr.write(
-          `Calling the hub agent-batch dev runs at ${saved.url.origin}, as AGENT_BATCH_URL and AGENT_BATCH_API_KEY are unset\n`,
+          `Calling the hub agent-batch stack runs at ${saved.url.origin}, as AGENT_BATCH_URL and AGENT_BATCH_API_KEY are unset\n`,
         ),
       );
       return { url: saved.url, apiKey: Redacted.make(saved.apiKey) };
@@ -410,7 +410,7 @@ export function agentBatchCli(version: string) {
       ...commands,
       batches: { ...commands["batches"], create: createBatchCommand() },
       jobs: { submit: submitCommand(), ...commands["jobs"], wait: waitCommand() },
-      dev: devCommands(version),
+      stack: stackCommands(version),
     }),
   });
 }

@@ -9,7 +9,7 @@ import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { writeFile } from "atomically";
 import { apiContract, createProblemDetailsLink } from "contract";
-import { Cause, Config, Effect, Exit, FileSystem, Layer, Path, Schedule, Stream } from "effect";
+import { Config, Effect, FileSystem, Layer, Path, Stream } from "effect";
 import { Cookies } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import ensureError from "ensure-error";
@@ -18,23 +18,22 @@ import lockfile from "proper-lockfile";
 import { os } from "trpc-cli";
 import * as z from "zod/mini";
 
-// `agent-batch dev`: a hub, a Runner and the hub's Postgres on this machine, from the images released
-// with this version of the command, through Docker Compose (ADR 0034). It runs in the foreground, as
-// `wrangler dev` and `temporal server start-dev` do, and stopping it removes the containers. What
-// they hold stays in the project's volumes, and the secrets and keys it made stay in a file of the
-// user's, so the next start finds the same jobs, keys and Runner, with any sign-in the Runner holds.
+// `agent-batch stack`: a hub, a Runner and the hub's Postgres on this machine, from the images
+// released with this version of the command, through Docker Compose (ADR 0034). The containers
+// run in the background until stopped. Their volumes and the user's saved secrets and keys keep
+// the same jobs, keys and Runner, with any sign-in the Runner holds, across starts.
 
 /**
  * The Compose project, apart from the Compose deployment's `agent-batch`, so neither touches the other.
- * `AGENT_BATCH_DEV_PROJECT` names another, so the repository's tests never touch a contributor's own.
+ * `AGENT_BATCH_STACK_PROJECT` names another, so the repository's tests never touch a contributor's own.
  */
-const PROJECT = process.env["AGENT_BATCH_DEV_PROJECT"] ?? "agent-batch-dev";
+const PROJECT = process.env["AGENT_BATCH_STACK_PROJECT"] ?? "agent-batch-stack";
 
 /** The owner the hub creates on its first start; nobody signs in as it but this command. */
 const OWNER_EMAIL = "owner@example.com";
 
 /** Where the state lives: the user's data folder, never the working directory, where it could be committed. */
-const STATE_DIR = path.join(envPaths("agent-batch").data, "dev");
+const STATE_DIR = path.join(envPaths("agent-batch").data, "stack");
 const STATE_FILE = path.join(STATE_DIR, "state.json");
 const COMPOSE_FILE = path.join(STATE_DIR, "compose.json");
 
@@ -78,7 +77,7 @@ function keyEnvOf(provider: string): string {
 /** The error for a state file that is not as this command wrote it. */
 function corruptState() {
   return new Error(
-    `${STATE_FILE} is not as agent-batch dev wrote it; agent-batch dev reset deletes it with the data it belongs to`,
+    `${STATE_FILE} is not as agent-batch stack wrote it; agent-batch stack delete deletes it with the data it belongs to`,
   );
 }
 
@@ -130,7 +129,7 @@ function secret() {
   return randomBytes(24).toString("hex");
 }
 
-/** The hub `agent-batch dev` runs and the key it made, for commands run without their own settings. */
+/** The hub `agent-batch stack` runs and the key it made, for commands run without their own settings. */
 export function savedHub(): Effect.Effect<{ url: URL; apiKey: string } | undefined, Error> {
   return Effect.map(readState(), (state) =>
     state?.apiKey === undefined
@@ -151,9 +150,8 @@ function literal(value: string) {
 /**
  * The Compose file for `state`, with the images of `version`. It follows the repository's
  * `compose.yaml`, the Compose deployment's, with this command's settings in place of `.env`, the
- * hub published on this machine only, and no restart policy: containers of an `agent-batch dev`
- * stopped outright stay stopped, for the next start or `agent-batch dev stop` to remove, rather than
- * starting again with Docker.
+ * hub published on this machine only. Containers restart with Docker unless explicitly stopped,
+ * so jobs can keep running after the user closes their terminal.
  */
 function composeFile(state: State, version: string) {
   const database = {
@@ -178,7 +176,7 @@ function composeFile(state: State, version: string) {
           start_period: "30s",
           start_interval: "2s",
         },
-        restart: "no",
+        restart: "unless-stopped",
       },
       hub: {
         image: `ghcr.io/chuse-ai/agent-batch-hub:${version}`,
@@ -191,7 +189,7 @@ function composeFile(state: State, version: string) {
           ADMIN_PASSWORD: literal(state.ownerPassword),
         },
         ports: [`127.0.0.1:${state.port}:8787`],
-        restart: "no",
+        restart: "unless-stopped",
       },
       runner: {
         image: `ghcr.io/chuse-ai/agent-batch-runner:${version}`,
@@ -207,14 +205,14 @@ function composeFile(state: State, version: string) {
           [state.model.keyEnv]: null,
         },
         volumes: ["runner-data:/data"],
-        restart: "no",
+        restart: "unless-stopped",
       },
     },
     volumes: { database: {}, "runner-data": {} },
   };
 }
 
-/** Writes the Compose file for `state`; `docker compose` reads it from there, `dev login` included. */
+/** Writes the Compose file for `state`; `docker compose` reads it from there, `stack login` included. */
 function writeComposeFile(state: State, version: string) {
   // JSON is YAML, which Compose reads.
   return writeStateFile(COMPOSE_FILE, JSON.stringify(composeFile(state, version), null, 2));
@@ -226,12 +224,8 @@ const NodeServices = NodeChildProcessSpawner.layer.pipe(
 
 /**
  * Runs `docker compose` with `args` on the project, printing what it prints, and fails unless it
- * succeeds. It reads the Compose file written for the project once there is one: without it,
- * Compose finds the project's containers by its name, but not the one-off containers of
- * `dev login`. Stopping this command interrupts it with `SIGINT`, as Ctrl-C would, so Compose stops
- * what it started before it exits. In a process group of its own, as the spawner starts it, it gets
- * no Ctrl-C from the terminal: this command decides what a Ctrl-C stops. `interactive` keeps it in
- * this command's group with the terminal's input, for a command that reads it. `errorsOnly` leaves
+ * succeeds. It reads only the stack's Compose file, never a deployment in the working directory.
+ * `interactive` inherits the terminal's input, for a command that reads it. `errorsOnly` leaves
  * out Compose's warnings, such as that there was nothing to remove.
  */
 function compose(
@@ -241,20 +235,21 @@ function compose(
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fs = yield* FileSystem.FileSystem;
-    const file = (yield* fs.exists(COMPOSE_FILE)) ? ["--file", COMPOSE_FILE] : [];
+    if (!(yield* fs.exists(COMPOSE_FILE))) {
+      yield* say("agent-batch stack has not started a hub yet");
+      return;
+    }
     const logLevel = options.errorsOnly ? ["--log-level", "error"] : [];
     const exitCode = yield* spawner.exitCode(
       ChildProcess.make(
         "docker",
-        [...logLevel, "compose", "--project-name", PROJECT, ...file, ...args],
+        [...logLevel, "compose", "--project-name", PROJECT, "--file", COMPOSE_FILE, ...args],
         {
           stdin: options.interactive ? "inherit" : "ignore",
           stdout: "inherit",
           stderr: "inherit",
-          // The spawner's own default otherwise: a group of its own on POSIX, none on Windows.
-          detached: options.interactive ? false : undefined,
-          killSignal: "SIGINT",
-          forceKillAfter: "30 seconds",
+          // Ctrl-C must also reach Compose, including while following logs.
+          detached: false,
         },
       ),
     );
@@ -264,7 +259,7 @@ function compose(
   }).pipe(
     Effect.catchReason("PlatformError", "NotFound", () =>
       Effect.fail(
-        new Error("agent-batch dev runs the hub and a Runner with Docker: install Docker"),
+        new Error("agent-batch stack runs the hub and a Runner with Docker: install Docker"),
       ),
     ),
     Effect.mapError(ensureError),
@@ -291,14 +286,10 @@ function dockerOutput(args: readonly string[]) {
   }).pipe(Effect.scoped);
 }
 
-/** Removes the project's containers and network, leaving its volumes, as after an
- * `agent-batch dev` stopped outright. */
-const removeContainers = compose(["down", "--remove-orphans"], { errorsOnly: true });
-
 /**
- * Holds the lock on the state while the scope is open, so a second `agent-batch dev` cannot remove
- * the first one's containers. An `agent-batch dev` killed outright leaves the lock behind; proper-lockfile takes
- * it over once its holder stops refreshing it, by default after 10 seconds.
+ * Holds the lock while a mutating command runs, so starts, stops, deletes and sign-ins cannot
+ * race over the state or containers. After a command is killed, proper-lockfile takes the lock
+ * over once its holder stops refreshing it, by default after 10 seconds.
  */
 const lockState = Effect.acquireRelease(
   makeStateDir.pipe(
@@ -309,17 +300,17 @@ const lockState = Effect.acquireRelease(
           lockfile.lock(STATE_DIR, {
             lockfilePath: path.join(STATE_DIR, "lock"),
             // Without it, proper-lockfile throws from a timer, outside any fiber, and the process
-            // ends without removing its containers.
+            // ends outside the command's error handling.
             onCompromised: (error) =>
               process.stderr.write(
-                `agent-batch dev lost its lock (${error.message}), so another could start beside it\n`,
+                `agent-batch stack lost its lock (${error.message}), so another command could change the stack\n`,
               ),
           }),
         catch: (caught) => {
           const error = ensureError(caught);
           return "code" in error && error.code === "ELOCKED"
             ? new Error(
-                "agent-batch dev is running, and Ctrl-C in its terminal stops it; or it was stopped outright less than 10 seconds ago, and holds its lock until then",
+                "Another agent-batch stack command is changing the stack; if it was killed, its lock expires after 10 seconds",
               )
             : error;
         },
@@ -335,8 +326,7 @@ type MemberClient = ContractRouterClient<typeof apiContract>;
 
 /**
  * Signs in as the owner and returns a client calling the hub as them, for what only a member may
- * do: making keys and listing Runners. Better Auth answers a sign-in with its session cookie, which
- * the client sends back.
+ * do: making keys. Better Auth answers a sign-in with its session cookie, which the client sends back.
  */
 function signIn(state: State) {
   return Effect.tryPromise({
@@ -372,14 +362,14 @@ function createKeys(client: MemberClient) {
     try: async (signal) => {
       const runners = await client.apiKeys.create(
         {
-          name: "agent-batch dev runners",
+          name: "agent-batch stack runners",
           permissions: { runner: ["register"] },
         },
         { signal },
       );
       const jobs = await client.apiKeys.create(
         {
-          name: "agent-batch dev jobs",
+          name: "agent-batch stack jobs",
           permissions: { job: ["create", "read", "pause", "resume", "cancel", "delete"] },
         },
         { signal },
@@ -388,35 +378,6 @@ function createKeys(client: MemberClient) {
     },
     catch: ensureError,
   });
-}
-
-/** When the hub last heard from each Runner it knows, by its own clock. */
-function listRunnersLastSeen(client: MemberClient) {
-  return Effect.tryPromise({
-    try: (signal) => client.runners.list(undefined, { signal }),
-    catch: ensureError,
-  }).pipe(
-    Effect.map((runners) => new Map(runners.map((runner) => [runner.id, runner.lastSeenAt]))),
-  );
-}
-
-/**
- * Waits until the hub hears from a Runner after `before`, what it had last heard from each:
- * compared on the hub's clock alone, which the host's may differ from, as in a virtual machine.
- */
-function waitForRunner(client: MemberClient, before: Map<string, Date>) {
-  return listRunnersLastSeen(client).pipe(
-    // A read the hub does not answer only waits: the hub stopping ends `agent-batch dev` through Compose.
-    Effect.retry({ schedule: Schedule.spaced("1 second") }),
-    Effect.repeat({
-      schedule: Schedule.spaced("1 second"),
-      until: (now) =>
-        [...now].some(([id, lastSeenAt]) => {
-          const earlier = before.get(id);
-          return earlier === undefined || lastSeenAt > earlier;
-        }),
-    }),
-  );
 }
 
 /** The model for this start: the flags given, else the last start's, else the first model. */
@@ -496,87 +457,31 @@ const modelFlags = {
   ),
 };
 
-/** `agent-batch dev`, until it is stopped. */
+/** Starts the stack in the background, returning once Compose reports it running and the hub healthy. */
 function start(version: string, flags: { port?: number } & Parameters<typeof chooseModel>[0]) {
   return Effect.gen(function* () {
     yield* lockState;
     let state = yield* saveStateForStart(flags);
     const images = yield* imageVersion(version);
     yield* writeComposeFile(state, images);
-    // Containers an `agent-batch dev` stopped outright left behind; the volumes stay.
-    yield* removeContainers;
-    yield* Effect.addFinalizer(() =>
-      say("Removing the containers; the data stays for the next start").pipe(
-        Effect.andThen(removeContainers),
-        Effect.catch((error) =>
-          say(`${error.message}. agent-batch dev stop removes what is left.`),
-        ),
-      ),
-    );
-    yield* compose(["up", "--detach", "--wait", "hub"]);
-    const client = yield* signIn(state);
+    // The first Runner needs a registration key from the healthy hub before it can start.
+    yield* compose(["up", "-d", "--wait", "hub"]);
     if (state.apiKey === undefined || state.registrationKey === undefined) {
+      const client = yield* signIn(state);
       state = { ...state, ...(yield* createKeys(client)) };
       yield* writeState(state);
       yield* writeComposeFile(state, images);
     }
-    const before = yield* listRunnersLastSeen(client);
-    yield* Effect.forkScoped(
-      waitForRunner(client, before).pipe(
-        Effect.andThen(
-          say(
-            [
-              "",
-              `The hub is at ${hubUrl(state.port)}, with a Runner running ${state.model.id} from ${state.model.provider}.`,
-              "In another terminal, agent-batch commands use it while AGENT_BATCH_URL and AGENT_BATCH_API_KEY are unset;",
-              "agent-batch dev env prints them for other clients. Press Ctrl-C to stop.",
-              "",
-            ].join("\n"),
-          ),
-        ),
-      ),
+    yield* compose(["up", "-d", "--wait"]);
+    yield* say(
+      [
+        `The hub is at ${hubUrl(state.port)}. The stack runs in the background.`,
+        "agent-batch commands use it while AGENT_BATCH_URL and AGENT_BATCH_API_KEY are unset;",
+        "agent-batch stack env prints them for other clients.",
+        "Use agent-batch stack status or agent-batch stack logs to check it, and agent-batch stack stop to stop it.",
+      ].join("\n"),
     );
-    // Compose's own foreground mode: it starts the Runner, prints every container's log, and stops
-    // them all when any of them stops, as a Runner that refuses to start does. It ends on its own
-    // only then, or when it cannot start the Runner.
-    const stopped = yield* compose(["up", "--abort-on-container-exit"]).pipe(
-      Effect.match({ onFailure: (error) => `${error.message}. `, onSuccess: () => "" }),
-    );
-    return yield* Effect.fail(
-      new Error(
-        `${stopped}The hub, the Runner or the database stopped, or Compose could not start them, so agent-batch dev stopped them all; Compose's output above says why. If the Runner says jobs cannot run in a sandbox, on Ubuntu 24.04 run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 (see https://github.com/chuse-ai/agent-batch/blob/main/apps/runner/README.md#what-a-host-needs).`,
-      ),
-    );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices));
-}
-
-/**
- * Runs `work` until it ends or the user stops it with Ctrl-C, `SIGTERM` or a closed terminal
- * (`SIGHUP`), which interrupts it so its finalizers run. A signal while it stops is ignored, so the
- * containers are still removed; a listener on the signal keeps Node from exiting at it. Effect's
- * `NodeRuntime.runMain` does the same for `SIGINT` and `SIGTERM` only, and is built to end the
- * process, where this returns to trpc-cli.
- */
-async function runUntilStopped(work: Effect.Effect<void, unknown>) {
-  const controller = new AbortController();
-  const onSignal = () => {
-    if (controller.signal.aborted) {
-      process.stderr.write("Still stopping: the containers are being removed\n");
-      return;
-    }
-    controller.abort();
-  };
-  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-  for (const signal of signals) process.on(signal, onSignal);
-  try {
-    const exit = await Effect.runPromiseExit(work, { signal: controller.signal });
-    // A signal during cleanup must not hide a failure that already happened.
-    if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
-      throw Cause.squash(exit.cause);
-    }
-  } finally {
-    for (const signal of signals) process.off(signal, onSignal);
-  }
+  }).pipe(Effect.scoped);
 }
 
 /** Runs a command's `work` to its end, its failure an `Error` for trpc-cli to print. */
@@ -590,14 +495,14 @@ function runToEnd(
   return Effect.runPromise(work.pipe(Effect.mapError(ensureError), Effect.provide(NodeServices)));
 }
 
-/** The `dev` commands, running the images of `version`. */
-export function devCommands(version: string) {
+/** The `stack` commands, running the images of `version`. */
+export function stackCommands(version: string) {
   return os.router({
     start: os
       .meta({
         default: true,
         description:
-          "Runs a hub, a Runner and the hub's Postgres on this machine with Docker, until stopped with Ctrl-C, which removes the containers and keeps their data for the next start. The first start creates the hub's owner and an API key, which agent-batch commands in other terminals use while AGENT_BATCH_URL and AGENT_BATCH_API_KEY are unset. The Runner takes its provider's key from this command's environment, or the sign-in agent-batch dev login saves.",
+          "Run and manage a hub, a Runner and Postgres on this machine. Starts the stack in the background with Docker and returns once the hub is healthy. The first start creates the hub's owner and an API key, which agent-batch commands use while AGENT_BATCH_URL and AGENT_BATCH_API_KEY are unset. The Runner takes its provider's key from this command's environment, or the sign-in agent-batch stack login saves.",
       })
       .input(
         z.object({
@@ -613,19 +518,19 @@ export function devCommands(version: string) {
           ...modelFlags,
         }),
       )
-      .handler(({ input }) => runUntilStopped(start(version, input))),
+      .handler(({ input }) => runToEnd(start(version, input))),
     stop: os
       .meta({
         description:
-          "Removes the containers agent-batch dev left behind when it was stopped outright, keeping their data.",
+          "Stops the stack, keeping the database, Runner data and saved credentials for the next start.",
       })
       // Without an input, trpc-cli offers a `--json` it cannot describe.
       .input(z.object({}))
-      .handler(() => runToEnd(lockState.pipe(Effect.andThen(removeContainers), Effect.scoped))),
-    reset: os
+      .handler(() => runToEnd(lockState.pipe(Effect.andThen(compose(["stop"])), Effect.scoped))),
+    delete: os
       .meta({
         description:
-          "Deletes everything agent-batch dev keeps: the hub's jobs, the Runner's data and any sign-in it holds, and the keys and secrets made for them.",
+          "Stops the stack and deletes its database and Runner volumes, including jobs and provider sign-ins, and its saved credentials file.",
       })
       // Without an input, trpc-cli offers a `--json` it cannot describe.
       .input(z.object({}))
@@ -644,17 +549,39 @@ export function devCommands(version: string) {
               `label=com.docker.compose.project=${PROJECT}`,
             ]);
             if (left.trim() !== "") {
-              return yield* Effect.fail(
+              yield* Effect.fail(
                 new Error(
                   `Docker kept volumes still in use, so the keys and secrets for them stay: ${left.trim().split("\n").join(", ")}`,
                 ),
               );
             }
             const fs = yield* FileSystem.FileSystem;
-            return yield* fs.remove(STATE_DIR, { recursive: true, force: true });
+            // Keep the directory and its lock until this command releases it.
+            yield* fs.remove(STATE_FILE, { force: true });
+            yield* fs.remove(COMPOSE_FILE, { force: true });
           }).pipe(Effect.scoped),
         ),
       ),
+    status: os
+      .meta({ description: "Shows the stack's containers, health, image versions and hub URL." })
+      .input(z.object({}))
+      .handler(() =>
+        runToEnd(
+          Effect.gen(function* () {
+            const state = yield* readState();
+            if (state !== undefined) yield* say(`Hub URL: ${hubUrl(state.port)}`);
+            yield* compose(["ps", "--all", "--no-trunc"]);
+          }),
+        ),
+      ),
+    logs: os
+      .meta({ description: "Prints the stack's container logs." })
+      .input(
+        z.object({
+          follow: z.optional(z.boolean().check(z.describe("Keep following new log output."))),
+        }),
+      )
+      .handler(({ input }) => runToEnd(compose(["logs", ...(input.follow ? ["--follow"] : [])]))),
     login: os
       .meta({
         description:
@@ -667,7 +594,7 @@ export function devCommands(version: string) {
               .string()
               .check(
                 z.describe(
-                  "The provider to sign in to, as Pi names it, such as openai-codex; the one agent-batch dev last ran on by default. Start agent-batch dev with it to run jobs on the sign-in.",
+                  "The provider to sign in to, as Pi names it, such as openai-codex; the one agent-batch stack last ran on by default. Start agent-batch stack with it to run jobs on the sign-in.",
                 ),
               ),
           ),
@@ -694,7 +621,7 @@ export function devCommands(version: string) {
     env: os
       .meta({
         description:
-          "Prints the hub's address and the API key agent-batch dev made as shell exports, for clients other than agent-batch.",
+          "Prints the hub's address and the API key agent-batch stack made as shell exports, for clients other than agent-batch.",
       })
       // Without an input, trpc-cli offers a `--json` it cannot describe.
       .input(z.object({}))
@@ -703,7 +630,7 @@ export function devCommands(version: string) {
           Effect.gen(function* () {
             const hub = yield* savedHub();
             if (hub === undefined) {
-              return yield* Effect.fail(new Error("agent-batch dev has not started a hub yet"));
+              return yield* Effect.fail(new Error("agent-batch stack has not started a hub yet"));
             }
             return yield* Effect.sync(() => {
               process.stdout.write(
