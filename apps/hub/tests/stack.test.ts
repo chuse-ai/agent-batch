@@ -85,6 +85,17 @@ describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")(
       expect(await dockerIds("ps", "--filter", "status=running")).toEqual(containers);
       expect((await agentBatch("stack", "env")).stdout).toBe(exports);
 
+      // A failed replacement must leave commands pointed at the hub that is still serving them.
+      const replacementPort = await getPort();
+      await expect(
+        run(CLI, ["stack", "start", "--port", String(replacementPort)], {
+          env: { ...env, AGENT_BATCH_VERSION: "test-missing-version" },
+          timeout: 120_000,
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+      expect((await fetch(`${url}/healthz`)).ok).toBe(true);
+      expect((await agentBatch("stack", "env")).stdout).toBe(exports);
+
       // Status stays on this machine and reports the running images, regardless of the selected hub or version.
       const status = await run(CLI, ["stack", "status"], {
         env: {
@@ -139,6 +150,15 @@ describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")(
       expect(JSON.parse(job.stdout)).toMatchObject({
         id,
         customId: "survives-stop",
+        status: "queued",
+      });
+
+      await agentBatch("stack", "start", "--port", String(replacementPort));
+      const replacementUrl = `http://localhost:${replacementPort}`;
+      expect((await fetch(`${replacementUrl}/healthz`)).ok).toBe(true);
+      expect((await agentBatch("stack", "env")).stdout).toBe(exports.replace(url, replacementUrl));
+      expect(JSON.parse((await agentBatch("jobs", "get", "--id", id)).stdout)).toMatchObject({
+        id,
         status: "queued",
       });
 

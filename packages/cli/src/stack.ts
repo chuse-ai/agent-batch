@@ -5,11 +5,12 @@ import path from "node:path";
 import * as NodeChildProcessSpawner from "@effect/platform-node-shared/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
 import * as NodePath from "@effect/platform-node-shared/NodePath";
+import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { writeFile } from "atomically";
 import { apiContract, createProblemDetailsLink } from "contract";
-import { Config, Effect, FileSystem, Layer, Path, Stream } from "effect";
+import { Cause, Config, Effect, Exit, FileSystem, Layer, Path, Runtime, Stream } from "effect";
 import { Cookies } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import ensureError from "ensure-error";
@@ -397,7 +398,7 @@ function chooseModel(
   return { provider, id, keyEnv };
 }
 
-/** Saves and returns the state for a start with `flags`: an earlier start's, or new secrets, with the flags applied. */
+/** Saves secrets and model settings, returning the proposed state with `flags` applied. */
 function saveStateForStart(flags: { port?: number } & Parameters<typeof chooseModel>[0]) {
   return Effect.gen(function* () {
     const saved = yield* readState();
@@ -413,7 +414,9 @@ function saveStateForStart(flags: { port?: number } & Parameters<typeof chooseMo
       model,
     };
     const updated = { ...state, port: flags.port ?? state.port, model };
-    yield* writeState(updated);
+    // Persist secrets before creating volumes, but keep callers on the previous endpoint until
+    // Compose confirms the replacement hub is healthy: a failed pull can leave the old hub running.
+    yield* writeState({ ...updated, port: saved?.port ?? updated.port });
     return updated;
   });
 }
@@ -466,6 +469,7 @@ function start(version: string, flags: { port?: number } & Parameters<typeof cho
     yield* writeComposeFile(state, images);
     // The first Runner needs a registration key from the healthy hub before it can start.
     yield* compose(["up", "-d", "--wait", "hub"]);
+    yield* writeState(state);
     if (state.apiKey === undefined || state.registrationKey === undefined) {
       const client = yield* signIn(state);
       state = { ...state, ...(yield* createKeys(client)) };
@@ -492,7 +496,18 @@ function runToEnd(
     ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
   >,
 ) {
-  return Effect.runPromise(work.pipe(Effect.mapError(ensureError), Effect.provide(NodeServices)));
+  // runMain interrupts on signals and waits for scoped Compose children before releasing the
+  // mutation lock. Its teardown leaves ordinary failures to trpc-cli's error formatter.
+  return new Promise<void>((resolve, reject) => {
+    NodeRuntime.runMain(work.pipe(Effect.provide(NodeServices)), {
+      disableErrorReporting: true,
+      teardown: (exit, onExit) => {
+        if (Exit.isSuccess(exit)) resolve();
+        else if (Cause.hasInterruptsOnly(exit.cause)) Runtime.defaultTeardown(exit, onExit);
+        else reject(ensureError(Cause.squash(exit.cause)));
+      },
+    });
+  });
 }
 
 /** The `stack` commands, running the images of `version`. */
@@ -570,7 +585,7 @@ export function stackCommands(version: string) {
           Effect.gen(function* () {
             const state = yield* readState();
             if (state !== undefined) yield* say(`Hub URL: ${hubUrl(state.port)}`);
-            yield* compose(["ps", "--all", "--no-trunc"]);
+            yield* compose(["ps", "--all"]);
           }),
         ),
       ),
