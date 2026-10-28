@@ -9,7 +9,7 @@ Run one-off agent jobs unattended on your own machines, each with a validated re
 - `AGENT_BATCH_URL`: the hub's URL.
 - `AGENT_BATCH_API_KEY`: an API key holding the permissions the calls need, such as `job: ["create", "read"]`.
 
-Without either, the commands call the hub `agent-batch dev` runs with the key it made, and say so on stderr.
+Without either, the commands call the hub `agent-batch stack` runs with the key it made, and say so on stderr.
 
 ```sh
 agent-batch jobs submit --input job.json
@@ -27,12 +27,16 @@ Calls only a signed-in member can make, such as creating API keys, are not comma
 
 ## A hub and a Runner on this machine
 
-`agent-batch dev` runs a hub, a Runner and the hub's Postgres with Docker, from the images released with this version of the command, until Ctrl-C, which removes the containers. Their data, the keys the first start made and any sign-in the Runner holds stay for the next start; `agent-batch dev reset` deletes them, and `agent-batch dev stop` removes the containers of a run that was killed. The Runner runs every job on the model `--model-provider` and `--model-id` name, as Pi names them (`openrouter` and `openrouter/free` at first, then the last ones given), with the key in the provider's variable, `<PROVIDER>_API_KEY` or the one `--model-key-env` names, or on the sign-in `agent-batch dev login` saves. `--port` sets where the hub listens on this machine, 8787 at first. `agent-batch dev env` prints the hub's address and key as shell exports. `AGENT_BATCH_VERSION` runs the images of another version.
+`agent-batch stack start` runs a hub, a Runner and Postgres with Docker, from the images released with this version of the command. It returns once the hub is healthy and leaves the stack running in the background, with containers that restart with Docker unless explicitly stopped. `agent-batch stack stop` keeps the database, Runner data and saved credentials for the next start; `agent-batch stack delete` stops the stack and deletes its database and Runner volumes and saved credentials, without a prompt. The Runner runs every job on the model `--model-provider` and `--model-id` name, as Pi names them (`openrouter` and `openrouter/free` at first, then the last ones given), with the key in the provider's variable, `<PROVIDER>_API_KEY` or the one `--model-key-env` names, or on the sign-in `agent-batch stack login` saves. `--port` sets where the hub listens on this machine, 8787 at first. `agent-batch stack env` prints the hub's address and key as shell exports. `AGENT_BATCH_VERSION` runs the images of another version.
 
 ```sh
-OPENROUTER_API_KEY=<your key> agent-batch dev
-agent-batch dev --model-provider anthropic --model-id claude-sonnet-5-5
+OPENROUTER_API_KEY=<your key> agent-batch stack start
+agent-batch stack start --model-provider anthropic --model-id claude-sonnet-5-5
 ```
+
+`agent-batch stack status` shows the hub URL, container state and health, and image versions in use. `agent-batch stack logs` prints the logs; add `--follow` to keep following them. These commands manage this machine regardless of the hub selected for `jobs` and `batches`.
+
+To upgrade, stop the stack, back up the volumes if the data matters, then run `stack start` with the new CLI version and provider key.
 
 ## Development
 

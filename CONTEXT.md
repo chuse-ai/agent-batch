@@ -92,6 +92,9 @@ _Avoid_: log line
 What a running job is doing at this moment, such as waiting on a model or running a tool, and since when; it is replaced as the job moves on and is not one of its events, nor its status.
 _Avoid_: live view
 
+**Stack**:
+A hub, its Postgres and a Runner the CLI runs together on one machine.
+
 **Hub**:
 The single central service, the control plane, that every caller and runner connects to; it accepts jobs, keeps the record of every job and runner, decides where each job runs (among connected Runners with available capacity), and relays each job's events.
 _Avoid_: coordinator
