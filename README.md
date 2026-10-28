@@ -112,7 +112,7 @@ The hub and a Runner from their published images on one machine, as a deployment
    RUNNER_MODEL_ID=openrouter/free
    OPENROUTER_API_KEY=<your key>
    EOF
-   docker compose up -d runner
+   docker compose up --wait runner
    ```
 
    Another model goes in `RUNNER_MODEL_ID` the same way, such as `anthropic/claude-haiku-5.5` or `openai/gpt-6-luna` for real work.
