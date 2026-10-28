@@ -185,6 +185,7 @@ describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")(
       expect((await agentBatch("stack", "status")).stdout).toContain("Exited");
 
       await agentBatch("stack", "start");
+      expect(await dockerIds("ps", "--filter", "status=running")).toEqual(containers);
       expect((await agentBatch("stack", "env")).stdout).toBe(exports);
       const job = await agentBatch("jobs", "get", "--id", id);
       expect(job.stderr).toContain(`agent-batch stack runs at ${url}`);
@@ -228,6 +229,90 @@ describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")(
       ).not.toEqual([runnerBeforePortChange]);
       expect(JSON.parse(await readFile(stateFile, "utf8"))).toMatchObject({ env: [] });
       expect((await fetch(`${replacementUrl}/healthz`)).ok).toBe(true);
+      expect((await agentBatch("stack", "status")).stdout).toContain("source: stored credential");
+
+      const storedLoginContainers = await dockerIds("ps");
+      const [storedLoginRunner] = await dockerIds(
+        "ps",
+        "--filter",
+        "label=com.docker.compose.service=runner",
+      );
+      const { stdout: runningSince } = await run("docker", [
+        "inspect",
+        "--format",
+        "{{.State.StartedAt}}",
+        storedLoginRunner,
+      ]);
+      await agentBatch("stack", "logout");
+      // Checking a running Runner must not stop its jobs just because the saved login is gone.
+      await expect(agentBatch("stack", "start")).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining("agent-batch stack login --provider openrouter"),
+      });
+      expect(
+        (await run("docker", ["inspect", "--format", "{{.State.StartedAt}}", storedLoginRunner]))
+          .stdout,
+      ).toBe(runningSince);
+      expect(await dockerIds("ps", "--filter", "status=running")).toEqual(storedLoginContainers);
+
+      await agentBatch("stack", "stop");
+      // Without forwarded inputs, preflight can find missing authentication before starting
+      // any service, and must leave the deployment's endpoint and containers unchanged.
+      await expect(agentBatch("stack", "start")).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining("agent-batch stack login --provider openrouter"),
+      });
+      expect(await dockerIds("ps")).toEqual(storedLoginContainers);
+      expect(await dockerIds("ps", "--filter", "status=running")).toEqual([]);
+      expect((await agentBatch("stack", "env")).stdout).toBe(exports.replace(url, replacementUrl));
+
+      const repair = agentBatch("stack", "login", "--with-api-key");
+      repair.child.stdin?.end("repaired-provider-key\n");
+      await repair;
+      await agentBatch("stack", "start");
+      expect(await dockerIds("ps", "--filter", "status=running")).toEqual(storedLoginContainers);
+      expect((await agentBatch("stack", "status")).stdout).toContain("source: stored credential");
+
+      // An unrelated forwarded variable cannot supply authentication. Its retained value
+      // forces startup through the real container, rather than the temporary preflight path.
+      env.AGENT_BATCH_TEST_FORWARDING = "retained-noncredential";
+      await agentBatch("stack", "start", "--env", "AGENT_BATCH_TEST_FORWARDING");
+      delete env.AGENT_BATCH_TEST_FORWARDING;
+      const forwardedContainers = await dockerIds("ps");
+      const [forwardedRunner] = await dockerIds(
+        "ps",
+        "--filter",
+        "label=com.docker.compose.service=runner",
+      );
+      await agentBatch("stack", "stop");
+      await agentBatch("stack", "logout");
+      // Readiness must fail before the subprocess watchdog, without leaving a restart loop.
+      const failedRestart = agentBatch("stack", "start");
+      await expect(failedRestart).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining("The Runner was stopped"),
+      });
+      await expect(failedRestart).rejects.toMatchObject({
+        stderr: expect.stringContaining("agent-batch stack login --provider openrouter"),
+      });
+      expect(await dockerIds("ps")).toEqual(forwardedContainers);
+      expect(await dockerIds("ps", "--filter", "status=running")).toHaveLength(2);
+      expect(
+        (
+          await run("docker", ["inspect", "--format", "{{.State.Status}}", forwardedRunner])
+        ).stdout.trim(),
+      ).toBe("exited");
+      expect(JSON.parse((await agentBatch("jobs", "get", "--id", id)).stdout)).toMatchObject({
+        id,
+        status: "queued",
+      });
+      expect((await agentBatch("stack", "env")).stdout).toBe(exports.replace(url, replacementUrl));
+
+      const forwardedRepair = agentBatch("stack", "login", "--with-api-key");
+      forwardedRepair.child.stdin?.end("repaired-provider-key\n");
+      await forwardedRepair;
+      await agentBatch("stack", "start");
+      expect(await dockerIds("ps", "--filter", "status=running")).toEqual(forwardedContainers);
       expect((await agentBatch("stack", "status")).stdout).toContain("source: stored credential");
 
       await agentBatch("stack", "delete");

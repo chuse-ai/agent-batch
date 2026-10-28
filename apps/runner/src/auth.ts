@@ -148,6 +148,15 @@ export function createRunnerAuth(models: MutableModels, credentials: CredentialS
       },
       (effect, { provider }) =>
         effect.pipe(
+          // Bound the caller's wait, not a person's interactive login. Pi receives cancellation
+          // but keeps an in-progress OAuth refresh and persistence under its own deadline.
+          Effect.timeout("60 seconds"),
+          Effect.catchTag("TimeoutError", () =>
+            Effect.succeed<AuthProblem>({
+              kind: "invalid",
+              message: `Authentication for provider "${provider}" did not resolve within 60 seconds. Check its connection and configuration, or repair the sign-in with agent-batch stack login --provider ${provider}.`,
+            }),
+          ),
           Effect.catch((error) =>
             // Pi's top-level messages describe the operation. Causes can contain provider responses
             // or malformed credential-file contents, so do not print them.

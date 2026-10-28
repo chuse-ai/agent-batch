@@ -10,6 +10,7 @@ import * as NodePath from "@effect/platform-node-shared/NodePath";
 // The shared package rather than `@effect/platform-node`, whose required `redis` peer the Runner
 // would install without using.
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
+import * as NodeSocketServer from "@effect/platform-node-shared/NodeSocketServer";
 import * as NodeTerminal from "@effect/platform-node-shared/NodeTerminal";
 import { getDotPath } from "@standard-schema/utils";
 import {
@@ -18,6 +19,7 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Latch,
   Option,
   Redacted,
   Runtime,
@@ -67,6 +69,7 @@ const { positionals, values } = parseArgs({
   options: {
     "with-api-key": { type: "boolean" },
     login: { type: "boolean" },
+    healthcheck: { type: "boolean" },
   },
 });
 const [command] = positionals;
@@ -75,10 +78,11 @@ if (
   (command !== undefined &&
     !["register", "login", "logout", "auth-check", "auth-status"].includes(command)) ||
   (values["with-api-key"] && command !== "login") ||
-  (values.login && command !== "auth-check")
+  (values.login && command !== "auth-check") ||
+  (values.healthcheck && command !== undefined && command !== "register")
 ) {
   console.error(
-    "Usage: node dist/main.mjs [register | login [--with-api-key] | logout | auth-check [--login] | auth-status]",
+    "Usage: node dist/main.mjs [register] [--healthcheck] | login [--with-api-key] | logout | auth-check [--login] | auth-status",
   );
   process.exit(1);
 }
@@ -336,7 +340,8 @@ const run = Effect.gen(function* () {
     baseUrl: Option.getOrUndefined(settings.modelBaseUrl),
   });
   if (problem) return yield* refuse(problem.message);
-  return yield* runRunner({
+  const ready = yield* Latch.make(false);
+  const running = runRunner({
     hubUrl: settings.hubUrl,
     registrationKey: Redacted.value(settings.registrationKey),
     dataDir: settings.dataDir,
@@ -353,6 +358,7 @@ const run = Effect.gen(function* () {
       runWithoutSandbox: settings.runWithoutSandbox,
     },
     register: command === "register",
+    onReady: ready.open,
   }).pipe(
     Effect.catchTag("SandboxUnavailable", (error) => refuse(error.message)),
     Effect.catchTag("Removed", () =>
@@ -363,6 +369,15 @@ const run = Effect.gen(function* () {
       ),
     ),
   );
+  if (!values.healthcheck) return yield* running;
+  // Only this process owns the listener: a restart cannot inherit a stale ready signal.
+  // It records startup, not ongoing provider validity or hub connectivity.
+  const healthcheck = Effect.gen(function* () {
+    yield* ready.await;
+    const server = yield* NodeSocketServer.make({ host: "127.0.0.1", port: 8790 });
+    return yield* server.run((socket) => socket.reader.pipe(Effect.asVoid, Effect.scoped));
+  }).pipe(Effect.scoped);
+  return yield* Effect.all([running, healthcheck], { concurrency: "unbounded", discard: true });
 });
 
 const program =

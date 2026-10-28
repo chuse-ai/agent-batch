@@ -142,6 +142,20 @@ function literal(value: string) {
 function runnerService(state: State, version: string) {
   return {
     image: `ghcr.io/chuse-ai/agent-batch-runner:${version}`,
+    command: ["node", "dist/main.mjs", "--healthcheck"],
+    healthcheck: {
+      test: [
+        "CMD",
+        "node",
+        "-e",
+        "require('node:net').connect(8790, '127.0.0.1').on('connect', function () { this.end(); }).on('error', () => process.exit(1))",
+      ],
+      interval: "30s",
+      timeout: "2s",
+      start_period: "60s",
+      start_interval: "1s",
+      retries: 3,
+    },
     depends_on: { hub: { condition: "service_healthy" } },
     security_opt: ["seccomp=unconfined", "systempaths=unconfined", "apparmor=unconfined"],
     mem_limit: "8g",
@@ -247,7 +261,13 @@ function runRunnerCommand(
     // Runner data; it must not initialize the database as a side effect of logging in.
     const file = yield* writeTemporaryComposeFile({
       name: PROJECT,
-      services: { runner: { ...runnerService(state, version), depends_on: undefined } },
+      services: {
+        runner: {
+          ...runnerService(state, version),
+          depends_on: undefined,
+          healthcheck: { disable: true },
+        },
+      },
       volumes: { "runner-data": {} },
     });
     yield* compose(
@@ -369,14 +389,14 @@ function existingRunner() {
     const output = yield* dockerOutput([
       "inspect",
       "--format",
-      `{{json .State.Running}}{{println}}{{json (index .Config.Labels "${RUNNER_CONFIG_LABEL}")}}`,
+      `{{json .State.Status}}{{println}}{{json (index .Config.Labels "${RUNNER_CONFIG_LABEL}")}}`,
       ...id,
     ]);
     return yield* Effect.try({
       try: () => {
         const [running, configuration] = output.trim().split("\n");
         return {
-          running: z.parse(z.boolean(), JSON.parse(running)),
+          running: z.parse(z.string(), JSON.parse(running)) === "running",
           configuration: z.parse(z.string(), JSON.parse(configuration)),
         };
       },
@@ -580,7 +600,7 @@ const modelFlags = {
   ),
 };
 
-/** Starts the stack in the background, returning once Compose reports it running and the hub healthy. */
+/** Starts the stack in the background, waiting for the hub and the Runner's completed startup. */
 function start(version: string, flags: StartFlags) {
   return Effect.gen(function* () {
     yield* lockState;
@@ -595,9 +615,11 @@ function start(version: string, flags: StartFlags) {
       runner === undefined ||
       flags.env !== undefined ||
       runner.configuration !== runnerConfiguration(state, images);
+    const interactive = process.stdin.isTTY && process.stdout.isTTY;
     if (replaceRunner) yield* requireForwardedEnvironment(state.env);
-    if (replaceRunner) {
-      const interactive = process.stdin.isTTY && process.stdout.isTTY;
+    // With no forwarded variables, the image and shared volume supply the same authentication
+    // to a temporary container. Retained Docker-only inputs require starting the real Runner.
+    if (replaceRunner || (!runner?.running && state.env.length === 0)) {
       yield* runRunnerCommand(
         state,
         images,
@@ -608,11 +630,29 @@ function start(version: string, flags: StartFlags) {
     } else if (runner?.running) {
       // Validate against the retained environment, not the caller's current shell. A stopped
       // existing container starts with its own environment without requiring that shell again.
-      yield* compose(["exec", "-T", "runner", "node", "dist/main.mjs", "auth-check"]);
+      yield* compose(
+        [
+          "exec",
+          ...(interactive ? [] : ["-T"]),
+          "runner",
+          "node",
+          "dist/main.mjs",
+          "auth-check",
+          ...(interactive ? ["--login"] : []),
+        ],
+        { interactive },
+      ).pipe(
+        Effect.mapError(
+          (error) =>
+            new Error(
+              `${error.message}. The existing Runner was not stopped. Check agent-batch stack logs; to repair provider authentication, run agent-batch stack login --provider ${state.model.provider}, then agent-batch stack start.`,
+            ),
+        ),
+      );
     }
     yield* writeComposeFile(state, images);
     // The first Runner needs a registration key from the healthy hub before it can start.
-    yield* compose(["up", "-d", "--wait", "hub"]);
+    yield* compose(["up", "-d", "--wait", "--wait-timeout", "60", "hub"]);
     yield* writeState(state);
     if (state.apiKey === undefined || state.registrationKey === undefined) {
       const client = yield* signIn(state);
@@ -624,15 +664,35 @@ function start(version: string, flags: StartFlags) {
       "up",
       "-d",
       "--wait",
+      "--wait-timeout",
+      "60",
       "--no-deps",
       replaceRunner ? "--force-recreate" : "--no-recreate",
       "runner",
-    ]);
-    if (!replaceRunner && !runner?.running) {
-      // Without a healthcheck, Compose's --wait sees the process before OAuth refresh finishes.
-      // Check in the restarted container to use its retained environment before reporting success.
-      yield* compose(["exec", "-T", "runner", "node", "dist/main.mjs", "auth-check"]);
-    }
+    ]).pipe(
+      Effect.catch((error) =>
+        Effect.gen(function* () {
+          const launched = replaceRunner || !runner?.running;
+          // An explicit launch that never became ready must not keep restarting unseen. Keep
+          // its container and environment for repair; an already-running Runner is left alone.
+          if (launched) {
+            yield* compose(["stop", "--timeout", "10", "runner"]).pipe(
+              Effect.mapError(
+                (stopError) =>
+                  new Error(
+                    `${error.message}. Runner startup did not complete, and stopping it failed: ${stopError.message}. It may still be running or restarting; the hub and saved data remain. Check agent-batch stack status and agent-batch stack logs before retrying.`,
+                  ),
+              ),
+            );
+          }
+          yield* Effect.fail(
+            new Error(
+              `${error.message}. Runner startup did not complete. ${launched ? "The Runner was stopped" : "The existing Runner was not stopped"}; the hub and saved data remain. Check agent-batch stack logs. If provider authentication is missing or needs repair, run agent-batch stack login --provider ${state.model.provider}, then agent-batch stack start.`,
+            ),
+          );
+        }),
+      ),
+    );
     yield* say(
       [
         `The hub is at ${hubUrl(state.port)}. The stack runs in the background.`,
@@ -700,7 +760,7 @@ export function stackCommands(version: string) {
       .meta({
         default: true,
         description:
-          "Run and manage a hub, a Runner and Postgres on this machine. Starts the stack in the background with Docker and returns once the hub is healthy. The first start creates the hub's owner and an API key, which agent-batch commands use while AGENT_BATCH_URL and AGENT_BATCH_API_KEY are unset. Use stack login for persistent provider authentication, or --env to forward explicitly named variables to the Runner. An interactive first start offers login if authentication is missing.",
+          "Run and manage a hub, a Runner and Postgres on this machine. Starts the stack in the background with Docker and returns once the hub is healthy and the Runner has initialized and synced with it. The first start creates the hub's owner and an API key, which agent-batch commands use while AGENT_BATCH_URL and AGENT_BATCH_API_KEY are unset. Use stack login for persistent provider authentication, or --env to forward explicitly named variables to the Runner. An interactive first start offers login if authentication is missing.",
       })
       .input(
         z.object({

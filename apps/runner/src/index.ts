@@ -102,6 +102,8 @@ export interface RunnerOptions {
   heartbeatIntervalMs?: number;
   /** Discards the Runner's own key and registers again, as the `register` command does. */
   register?: boolean;
+  /** Signals completed initialization and a successful hub sync; does not monitor later connectivity. */
+  onReady?: Effect.Effect<void>;
 }
 
 export interface StartRunnerOptions extends RunnerOptions {
@@ -209,6 +211,7 @@ function runRegistered(
         heartbeatIntervalMs: options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS,
         jobs,
         syncNow,
+        onReady: options.onReady ?? Effect.void,
       });
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
@@ -283,6 +286,7 @@ interface ConnectionContext {
   jobs: JobRunner;
   /** Opened when the hub asks for a sync or a job starts or ends, so the next pass goes at once. */
   syncNow: Latch.Latch;
+  onReady: Effect.Effect<void>;
 }
 
 /** The hub no longer knows this Runner: it was removed, or the hub was reset. Nothing retries it. */
@@ -417,6 +421,7 @@ function connectAndSync(
       // Runner that held none has just synced.
       const heldBefore = context.jobs.load().held.length > 0;
       context.jobs.reconcile(yield* request("sync", context.jobs.load()));
+      yield* context.onReady;
       let syncAt = heldBefore ? Date.now() : yield* nextSyncAt;
       for (;;) {
         const prompted = yield* context.syncNow.close;

@@ -15,7 +15,8 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { makeMethods } from "@effect/vitest";
-import { Effect } from "effect";
+import { Deferred, Effect, Exit, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 import { expect, it as vitestIt, onTestFinished, vi } from "vite-plus/test";
 
 import { createRunnerAuth, readApiKey } from "../src/auth.ts";
@@ -206,6 +207,41 @@ it.live(
       });
       expect(refresh).toHaveBeenCalledOnce();
       expect(yield* Effect.promise(() => credentials.read("test"))).toEqual(expired);
+    }),
+);
+
+it.effect(
+  "startup bounds stalled credential resolution, cancels the wait, and preserves saved credentials",
+  () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<AbortSignal>();
+      const { models, auth, credentials, selection } = fixture();
+      const provider = models.getProvider("test");
+      if (!provider) throw new Error("The fixture has no provider");
+      models.setProvider({
+        ...provider,
+        auth: {
+          apiKey: {
+            name: "Stalled credential source",
+            resolve: ({ signal }) =>
+              new Promise((_resolve, reject) => {
+                signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+                Deferred.doneUnsafe(started, Exit.succeed(signal));
+              }),
+          },
+        },
+      });
+      const original = { type: "api_key" as const, key: "fake-saved" };
+      yield* Effect.promise(() => credentials.modify("test", async () => original));
+      const checking = yield* Effect.forkScoped(auth.prepareModel(selection));
+      const signal = yield* Deferred.await(started);
+      yield* TestClock.adjust("60 seconds");
+      expect(yield* Fiber.join(checking)).toEqual({
+        kind: "invalid",
+        message: expect.stringContaining("did not resolve within 60 seconds"),
+      });
+      expect(signal.aborted).toBe(true);
+      expect(yield* Effect.promise(() => credentials.read("test"))).toEqual(original);
     }),
 );
 
