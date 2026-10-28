@@ -6,7 +6,63 @@ The hub runs on Cloudflare Workers or Node/Docker; Runners execute jobs on the m
 
 ## Quickstart
 
-From nothing to a finished job on one machine with Docker Engine 25 or later and Compose 2.20.2 or later, Node 22.19 or later, `curl`, `jq` and `openssl`: the hub and a Runner run from their published images, and jobs go through the `agent-batch` command. To make the same calls with `curl`, see [API](#api). On Ubuntu 24.04, first let the Runner's job sandboxes create user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, and a file in `/etc/sysctl.d` to keep it; on Ubuntu 25.04 and later they cannot run yet (see [the Runner's README](apps/runner/README.md)).
+From nothing to a finished job on one machine with Docker Engine 25 or later and Compose 2.20.2 or later, Node 22.19 or later and `jq`: `agent-batch dev` runs a hub, a Runner and the hub's Postgres from the images released with it, and jobs go through the same `agent-batch` command. To run them for other machines, see [Deploying with Docker Compose](#deploying-with-docker-compose). On Ubuntu 24.04, first let the Runner's job sandboxes create user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, and a file in `/etc/sysctl.d` to keep it; on Ubuntu 25.04 and later they cannot run yet (see [the Runner's README](apps/runner/README.md)).
+
+1. **Start the hub and a Runner**, with the model every job runs on and its provider's key; here OpenRouter's free models. It keeps running and prints their logs; Ctrl-C stops it.
+
+   ```sh
+   OPENROUTER_API_KEY=<your key> npx --yes agent-batch dev
+   ```
+
+   Another model goes in `--model-provider` and `--model-id`, as Pi names them, with the provider's key in `<PROVIDER>_API_KEY`, such as `--model-provider anthropic --model-id claude-sonnet-5-5` with `ANTHROPIC_API_KEY`; `--model-key-env` names another variable, such as `GEMINI_API_KEY` for `google`. `npx agent-batch dev login --model-provider <provider>` signs the Runner in to a provider's subscription instead, where Pi offers one; then start it with that provider and a model. Stopping removes the containers and keeps their data, keys and sign-in for the next start, which remembers the model too; `npx agent-batch dev reset` deletes them.
+
+   On its first start it creates the hub's owner and an API key for jobs. `agent-batch` commands use that hub and key while `AGENT_BATCH_URL` and `AGENT_BATCH_API_KEY` are unset, and `npx agent-batch dev env` prints both for other clients, such as `curl`.
+
+2. **Submit a job**, in another terminal: the agent it runs, with the Result contract its result must match, the input it works on, Input files the agent finds in its Workspace's `inputs/` folder, and a custom ID. The job's `id` goes into `ID` for the steps that follow.
+
+   ```sh
+   cat > job.json <<'EOF'
+   {
+     "customId": "quickstart-1",
+     "agent": { "resultContract": { "schema": { "type": "integer" } } },
+     "input": "Count the lines of inputs/notes.txt and submit the count.",
+     "inputFiles": { "notes.txt": { "content": "one\ntwo\nthree\n" } }
+   }
+   EOF
+   ID=$(npx --yes agent-batch jobs submit --input job.json | jq -er .id)
+   ```
+
+   The command makes the job a Batch of one. Submitting again with the same custom ID returns the same job, so the command retries a submission whose answer did not arrive. Many jobs that run one agent go into one Batch, created with `batches create` and added to with `batches add-jobs`, 100 at a time: its first jobs, its Canary, run before the rest, and it pauses itself when too many of its jobs fail.
+
+3. **Wait for it.** The command prints the job once it ends, and exits with 1 unless it succeeded.
+
+   ```sh
+   npx agent-batch jobs wait --id "$ID"
+   ```
+
+   A job stays `queued` until a Runner has room for it; the Runner's log, which `agent-batch dev` prints, shows any error that keeps it from connecting.
+
+   What it did is in its events, a page at a time: read again `after` the last event's `id` while `hasMore` is true, and stop once a page without more has a final `status`.
+
+   ```sh
+   npx agent-batch jobs events --id "$ID" --after 0
+   ```
+
+4. **Read its result, and control jobs.** A job that succeeded has its `result`, which matches its Result contract: here, `3`.
+
+   ```sh
+   npx agent-batch jobs get --id "$ID"
+   ```
+
+   Jobs can also be paused, resumed, carrying on where they stopped, and cancelled, and deleted once they have ended; a refused control says why, and the reference at `/` says when each applies. `npx agent-batch --help` lists every command.
+
+   ```sh
+   npx agent-batch jobs cancel --id "$ID"   # likewise pause, resume and delete
+   ```
+
+## Deploying with Docker Compose
+
+The hub and a Runner from their published images on one machine, as a deployment that other machines' Runners and callers can reach once the hub's address is opened to them (see `compose.yaml`). It needs Docker Engine 25 or later and Compose 2.20.2 or later, `curl`, `jq` and `openssl`, and on Ubuntu the host setting above.
 
 1. **Start the hub.** It creates its owner from these settings on its first start and serves the API at `http://localhost:8787`. To upgrade later, rerun only the `curl` line from the current README, then `docker compose up -d`.
 
@@ -55,48 +111,7 @@ From nothing to a finished job on one machine with Docker Engine 25 or later and
 
    Another model goes in `RUNNER_MODEL_ID` the same way, such as `anthropic/claude-haiku-5.5` or `openai/gpt-6-luna` for real work.
 
-4. **Submit a job**: the agent it runs, with the Result contract its result must match, the input it works on, Input files the agent finds in its Workspace's `inputs/` folder, and a custom ID. The job's `id` goes into `ID` for the steps that follow.
-
-   ```sh
-   cat > job.json <<'EOF'
-   {
-     "customId": "quickstart-1",
-     "agent": { "resultContract": { "schema": { "type": "integer" } } },
-     "input": "Count the lines of inputs/notes.txt and submit the count.",
-     "inputFiles": { "notes.txt": { "content": "one\ntwo\nthree\n" } }
-   }
-   EOF
-   export AGENT_BATCH_URL=http://localhost:8787
-   ID=$(npx --yes agent-batch jobs submit --input job.json | jq -er .id)
-   ```
-
-   The command makes the job a Batch of one. Submitting again with the same custom ID returns the same job, so the command retries a submission whose answer did not arrive. Many jobs that run one agent go into one Batch, created with `batches create` and added to with `batches add-jobs`, 100 at a time: its first jobs, its Canary, run before the rest, and it pauses itself when too many of its jobs fail.
-
-5. **Wait for it.** The command prints the job once it ends, and exits with 1 unless it succeeded.
-
-   ```sh
-   npx agent-batch jobs wait --id "$ID"
-   ```
-
-   A job stays `queued` until a Runner has room for it; if it stays there, `docker compose logs runner` shows any error that keeps the Runner from connecting.
-
-   What it did is in its events, a page at a time: read again `after` the last event's `id` while `hasMore` is true, and stop once a page without more has a final `status`.
-
-   ```sh
-   npx agent-batch jobs events --id "$ID" --after 0
-   ```
-
-6. **Read its result, and control jobs.** A job that succeeded has its `result`, which matches its Result contract: here, `3`.
-
-   ```sh
-   npx agent-batch jobs get --id "$ID"
-   ```
-
-   Jobs can also be paused, resumed, carrying on where they stopped, and cancelled, and deleted once they have ended; a refused control says why, and the reference at `/` says when each applies. `npx agent-batch --help` lists every command.
-
-   ```sh
-   npx agent-batch jobs cancel --id "$ID"   # likewise pause, resume and delete
-   ```
+4. **Submit jobs** as in the [quickstart](#quickstart), from step 2, with `export AGENT_BATCH_URL=http://localhost:8787`; `docker compose logs runner` shows any error that keeps the Runner from connecting.
 
 ## API
 

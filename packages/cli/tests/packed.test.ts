@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -68,3 +68,25 @@ test("a call the hub refuses prints its Problem Details and exits non-zero", asy
   expect(exitCode).toBe(1);
   expect(JSON.parse(stderr)).toEqual(problem);
 });
+
+// `agent-batch dev` runs its own bundled dependencies before Docker: the lock, the state it saves and
+// the Compose file it writes. Without Docker on the `PATH`, it stops there and says so. The data
+// folder follows `XDG_DATA_HOME` on Linux only.
+test.skipIf(process.platform !== "linux")(
+  "agent-batch dev saves its state, then asks for Docker where there is none",
+  async () => {
+    const data = await mkdtemp(path.join(tmpdir(), "agent-batch-dev-"));
+    onTestFinished(() => rm(data, { recursive: true, force: true }));
+    const { exitCode, stderr } = await runCommand(agentBatch, ["dev"], {
+      env: { PATH: path.dirname(process.execPath), XDG_DATA_HOME: data },
+    });
+
+    expect({ exitCode, stderr: stderr.trim() }).toEqual({
+      exitCode: 1,
+      stderr: "agent-batch dev runs the hub and a Runner with Docker: install Docker",
+    });
+    await expect(
+      readFile(path.join(data, "agent-batch-nodejs/dev/state.json"), "utf8").then(JSON.parse),
+    ).resolves.toMatchObject({ port: 8787, model: { provider: "openrouter" } });
+  },
+);
