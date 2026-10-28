@@ -27,16 +27,26 @@ Calls only a signed-in member can make, such as creating API keys, are not comma
 
 ## A hub and a Runner on this machine
 
-`agent-batch stack start` runs a hub, a Runner and Postgres with Docker, from the images released with this version of the command. It returns once the hub is healthy and leaves the stack running in the background, with containers that restart with Docker unless explicitly stopped. `agent-batch stack stop` keeps the database, Runner data and saved credentials for the next start; `agent-batch stack delete` stops the stack and deletes its database and Runner volumes and saved credentials, without a prompt. The Runner runs every job on the model `--model-provider` and `--model-id` name, as Pi names them (`openrouter` and `openrouter/free` at first, then the last ones given), with the key in the provider's variable, `<PROVIDER>_API_KEY` or the one `--model-key-env` names, or on the sign-in `agent-batch stack login` saves. `--port` sets where the hub listens on this machine, 8787 at first. `agent-batch stack env` prints the hub's address and key as shell exports. `AGENT_BATCH_VERSION` runs the images of another version.
+`agent-batch stack start` runs a hub, a Runner and Postgres with Docker, from the images released with this version of the command. It returns once the hub is healthy and leaves the stack running in the background. The containers restart with Docker unless explicitly stopped. `--provider` and `--model` select the model every job runs on, using Pi's exact names (`openrouter` and `openrouter/free` initially, then the last ones given). `--port` sets the local hub port, initially 8787.
 
 ```sh
-OPENROUTER_API_KEY=<your key> agent-batch stack start
-agent-batch stack start --model-provider anthropic --model-id claude-sonnet-5-5
+agent-batch stack start
+agent-batch stack start --provider anthropic --model claude-sonnet-5-5
 ```
 
-`agent-batch stack status` shows the hub URL, container state and health, and image versions in use. `agent-batch stack logs` prints the logs; add `--follow` to keep following them. These commands manage this machine regardless of the hub selected for `jobs` and `batches`.
+An interactive start offers login if the selected provider has no credentials. `stack login --provider NAME` also works before the first start, and adds or replaces credentials without changing the selected model. Pi supplies the supported methods: provider API keys, account sign-in, or a choice between them. Typed keys are hidden. Login saves to the Runner's volume, using a temporary container that is removed afterwards. For scripted setup, `stack login --provider NAME --with-api-key` reads a provider API key from stdin and saves it; providers needing additional inputs require interactive login. `stack logout --provider NAME` removes only that provider's saved credential.
 
-To upgrade, stop the stack, back up the volumes if the data matters, then run `stack start` with the new CLI version and provider key.
+For externally managed credentials, repeat `--env NAME` to forward variables under Pi's existing names, only to the Runner:
+
+```sh
+OPENROUTER_API_KEY="$MY_KEY" agent-batch stack start --env OPENROUTER_API_KEY
+```
+
+The stack imports no provider keys merely because they exist in your shell. It saves forwarded names, never their values. Docker retains the values in the existing container, so an unchanged start or a restart after `stack stop` needs no original variables. Recreating the Runner requires them again. Omitting `--env` retains the names; an explicit list replaces them and refreshes their values; `--clear-env` removes them. Saved provider login takes precedence over ordinary environment credentials, as in Pi. A failed sign-in refresh requires repair rather than silently switching to an environment key.
+
+`stack stop` keeps the containers, database, Runner data and credentials. `stack delete` removes the database and Runner volumes, including saved logins, and the stack's saved configuration, without a prompt. `stack status` shows the hub URL, container state and health, image versions, and authentication source where available. `stack logs` prints logs; `--follow` keeps following them. These commands manage this machine regardless of the hub selected for `jobs` and `batches`.
+
+`stack env` prints the hub's address and jobs API key as shell exports. `AGENT_BATCH_VERSION` selects another image version. To upgrade, stop the stack, back up its volumes if the data matters, then start with the new CLI version. Supply forwarded variables again for Runner replacement; saved logins survive in its volume.
 
 ## Development
 

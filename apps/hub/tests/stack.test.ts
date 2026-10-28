@@ -2,7 +2,7 @@
  * @module-tag container
  */
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -26,9 +26,10 @@ const VERSION = "test";
 
 const stateHome = await mkdtemp(path.join(tmpdir(), "agent-batch-stack-"));
 const stateFile = path.join(stateHome, "agent-batch-nodejs/stack/state.json");
+const composeFile = path.join(stateHome, "agent-batch-nodejs/stack/compose.json");
 /** The environment of every command here: the state in a folder of its own, the images built here. */
 const { AGENT_BATCH_URL: _url, AGENT_BATCH_API_KEY: _key, ...inherited } = process.env;
-const env = {
+const env: NodeJS.ProcessEnv = {
   ...inherited,
   XDG_DATA_HOME: stateHome,
   AGENT_BATCH_STACK_PROJECT: PROJECT,
@@ -73,11 +74,49 @@ describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")(
       const port = await getPort();
       const url = `http://localhost:${port}`;
 
+      // An ambient provider key is not permission to forward it, even on the first start.
+      await expect(agentBatch("stack", "start", "--port", String(port))).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining("login"),
+      });
+      expect(await dockerIds("ps")).toEqual([]);
+
+      // Login works before a hub exists and leaves only the shared data volume behind.
+      const login = agentBatch("stack", "login", "--provider", "openrouter", "--with-api-key");
+      login.child.stdin?.end("stored-provider-key\n");
+      await login;
+      expect(await dockerIds("ps")).toEqual([]);
+      expect(await dockerIds("volume")).toHaveLength(1);
+
+      await agentBatch("stack", "delete");
+      expect(await dockerIds("volume")).toEqual([]);
+      await expect(stat(stateFile)).rejects.toMatchObject({ code: "ENOENT" });
+      const loginAgain = agentBatch("stack", "login", "--provider", "openrouter", "--with-api-key");
+      loginAgain.child.stdin?.end("stored-provider-key\n");
+      await loginAgain;
+
       const started = await agentBatch("stack", "start", "--port", String(port));
       expect(started.stderr).toContain(`The hub is at ${url}`);
       expect((await fetch(`${url}/healthz`)).ok).toBe(true);
+      expect(await dockerIds("ps", "--filter", "status=running")).toHaveLength(3);
+
+      await agentBatch("stack", "logout", "--provider", "openrouter");
+      await agentBatch("stack", "start", "--env", "OPENROUTER_API_KEY");
       const containers = await dockerIds("ps", "--filter", "status=running");
-      expect(containers).toHaveLength(3);
+      // Forwarding saves only names; stopping and starting will use Docker's retained values.
+      delete env.OPENROUTER_API_KEY;
+      for (const file of [stateFile, composeFile]) {
+        const content = await readFile(file, "utf8");
+        expect(content).not.toContain("not-a-key");
+        expect(content).not.toContain("stored-provider-key");
+      }
+      await expect(
+        agentBatch("stack", "start", "--env", "OPENROUTER_API_KEY"),
+      ).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining("OPENROUTER_API_KEY"),
+      });
+      expect(await dockerIds("ps", "--filter", "status=running")).toEqual(containers);
 
       const { stdout: exports } = await agentBatch("stack", "env");
       expect(exports).toContain(`export AGENT_BATCH_URL=${url}`);
@@ -109,6 +148,8 @@ describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")(
       expect(status.stdout).toContain(`ghcr.io/chuse-ai/agent-batch-hub:${VERSION}`);
       expect(status.stdout).toContain(`ghcr.io/chuse-ai/agent-batch-runner:${VERSION}`);
       expect(status.stdout).toContain("healthy");
+      expect(status.stdout).toContain("source: OPENROUTER_API_KEY");
+      expect(status.stdout).not.toContain("not-a-key");
       const logs = await agentBatch("stack", "logs");
       expect(logs.stdout).toContain("hub-1");
       expect(logs.stdout).toContain("database-1");
@@ -153,6 +194,11 @@ describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")(
         status: "queued",
       });
 
+      const [runnerBeforePortChange] = await dockerIds(
+        "ps",
+        "--filter",
+        "label=com.docker.compose.service=runner",
+      );
       await agentBatch("stack", "start", "--port", String(replacementPort));
       const replacementUrl = `http://localhost:${replacementPort}`;
       expect((await fetch(`${replacementUrl}/healthz`)).ok).toBe(true);
@@ -161,6 +207,28 @@ describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")(
         id,
         status: "queued",
       });
+
+      expect(await dockerIds("ps", "--filter", "label=com.docker.compose.service=runner")).toEqual([
+        runnerBeforePortChange,
+      ]);
+
+      // A deliberate login survives replacement, letting the caller stop forwarding a key.
+      const replacementLogin = agentBatch(
+        "stack",
+        "login",
+        "--provider",
+        "openrouter",
+        "--with-api-key",
+      );
+      replacementLogin.child.stdin?.end("replacement-provider-key\n");
+      await replacementLogin;
+      await agentBatch("stack", "start", "--clear-env");
+      expect(
+        await dockerIds("ps", "--filter", "label=com.docker.compose.service=runner"),
+      ).not.toEqual([runnerBeforePortChange]);
+      expect(JSON.parse(await readFile(stateFile, "utf8"))).toMatchObject({ env: [] });
+      expect((await fetch(`${replacementUrl}/healthz`)).ok).toBe(true);
+      expect((await agentBatch("stack", "status")).stdout).toContain("source: stored credential");
 
       await agentBatch("stack", "delete");
       expect(await dockerIds("ps")).toEqual([]);
