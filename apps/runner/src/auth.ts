@@ -166,7 +166,7 @@ export function createRunnerAuth(models: MutableModels, credentials: CredentialS
       provider: string,
       interaction: AuthInteraction,
       options: LoginOptions & { apiKey?: string; baseUrl?: URL } = {},
-    ) {
+    ): Effect.fn.Return<void, Error> {
       yield* Effect.try({ try: () => interaction.signal?.throwIfAborted(), catch: ensureError });
       const definition = models.getProvider(provider);
       if (!definition) return yield* Effect.fail(new Error(`Unknown provider "${provider}".`));
@@ -264,7 +264,7 @@ export function createRunnerAuth(models: MutableModels, credentials: CredentialS
           );
         },
         catch: ensureError,
-      });
+      }).pipe(Effect.asVoid);
     }),
 
     /** Configuration only: no OAuth refresh, token validation or credential values. */
