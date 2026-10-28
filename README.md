@@ -6,7 +6,7 @@ The hub runs on Cloudflare Workers or Node/Docker; Runners execute jobs on the m
 
 ## Quickstart
 
-From nothing to a finished job on one machine with Docker Engine 25 or later and Compose 2.20.2 or later, Node 22.19 or later and `jq`: `agent-batch dev` runs a hub, a Runner and the hub's Postgres from the images released with it, and jobs go through the same `agent-batch` command. To run them for other machines, see [Deploying with Docker Compose](#deploying-with-docker-compose). On Ubuntu 24.04, first let the Runner's job sandboxes create user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, and a file in `/etc/sysctl.d` to keep it; on Ubuntu 25.04 and later they cannot run yet (see [the Runner's README](apps/runner/README.md)).
+From nothing to a finished job on one machine with Docker Engine 29 or later and Compose 5 or later, Node 22.19 or later and `jq`: `agent-batch dev` runs a hub, a Runner and the hub's Postgres from the images released with it, and jobs go through the same `agent-batch` command. To run them for other machines, see [Deploying with Docker Compose](#deploying-with-docker-compose). On Ubuntu 24.04, first let the Runner's job sandboxes create user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, and a file in `/etc/sysctl.d` to keep it; on Ubuntu 25.04 and later they cannot run yet (see [the Runner's README](apps/runner/README.md)).
 
 1. **Start the hub and a Runner**, with the model every job runs on and its provider's key; here OpenRouter's free models. It keeps running and prints their logs; Ctrl-C stops it.
 
@@ -62,7 +62,7 @@ From nothing to a finished job on one machine with Docker Engine 25 or later and
 
 ## Deploying with Docker Compose
 
-The hub and a Runner from their published images on one machine, as a deployment that other machines' Runners and callers can reach once the hub's address is opened to them (see `compose.yaml`). It needs Docker Engine 25 or later and Compose 2.20.2 or later, `curl`, `jq` and `openssl`, and on Ubuntu the host setting above.
+The hub and a Runner from their published images on one machine, as a deployment that other machines' Runners and callers can reach once the hub's address is opened to them (see `compose.yaml`). It needs Docker Engine 29 or later and Compose 5 or later, `curl`, `jq` and `openssl`, and on Ubuntu the host setting above. Use current patch releases of [Docker Engine](https://docs.docker.com/engine/install/) and [Compose](https://docs.docker.com/compose/install/).
 
 1. **Start the hub.** It creates its owner from these settings on its first start and serves the API at `http://localhost:8787`. To upgrade later, rerun only the `curl` line from the current README, then `docker compose up -d`.
 
