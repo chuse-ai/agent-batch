@@ -8,7 +8,7 @@ import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { applySetCookies } from "better-auth/cookies/utils";
 import { apiContract, createProblemDetailsLink } from "contract";
-import { Config, Effect, FileSystem, Layer, Path, Schedule, Stream } from "effect";
+import { Cause, Config, Effect, Exit, FileSystem, Layer, Path, Schedule, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import ensureError from "ensure-error";
 import envPaths from "env-paths";
@@ -270,12 +270,12 @@ function compose(
   );
 }
 
-/** What `docker compose` with `args` prints on the project, failing unless it succeeds. */
-function composeOutput(args: readonly string[]) {
+/** What `docker` with `args` prints, failing unless it succeeds. */
+function dockerOutput(args: readonly string[]) {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const handle = yield* spawner.spawn(
-      ChildProcess.make("docker", ["compose", "--project-name", PROJECT, ...args], {
+      ChildProcess.make("docker", args, {
         stderr: "inherit",
       }),
     );
@@ -284,7 +284,7 @@ function composeOutput(args: readonly string[]) {
       { concurrency: "unbounded" },
     );
     if (exitCode !== 0) {
-      return yield* Effect.fail(new Error(`docker compose ${args[0]} exited with ${exitCode}`));
+      return yield* Effect.fail(new Error(`docker ${args[0]} exited with ${exitCode}`));
     }
     return stdout;
   }).pipe(Effect.scoped);
@@ -339,9 +339,10 @@ type MemberClient = ContractRouterClient<typeof apiContract>;
  */
 function signIn(state: State) {
   return Effect.tryPromise({
-    try: async (): Promise<MemberClient> => {
+    try: async (signal): Promise<MemberClient> => {
       const url = hubUrl(state.port);
       const response = await fetch(`${url}/api/auth/sign-in/email`, {
+        signal,
         method: "POST",
         // Better Auth refuses a sign-in from fetch without an origin it trusts, as it guards against
         // cross-site requests; the hub trusts its own URL.
@@ -368,15 +369,21 @@ function signIn(state: State) {
 /** The keys a fresh hub needs, made as the Compose deployment's users make them: one for Runners, one for jobs. */
 function createKeys(client: MemberClient) {
   return Effect.tryPromise({
-    try: async () => {
-      const runners = await client.apiKeys.create({
-        name: "agent-batch dev runners",
-        permissions: { runner: ["register"] },
-      });
-      const jobs = await client.apiKeys.create({
-        name: "agent-batch dev jobs",
-        permissions: { job: ["create", "read", "pause", "resume", "cancel", "delete"] },
-      });
+    try: async (signal) => {
+      const runners = await client.apiKeys.create(
+        {
+          name: "agent-batch dev runners",
+          permissions: { runner: ["register"] },
+        },
+        { signal },
+      );
+      const jobs = await client.apiKeys.create(
+        {
+          name: "agent-batch dev jobs",
+          permissions: { job: ["create", "read", "pause", "resume", "cancel", "delete"] },
+        },
+        { signal },
+      );
       return { registrationKey: runners.key, apiKey: jobs.key };
     },
     catch: ensureError,
@@ -385,7 +392,10 @@ function createKeys(client: MemberClient) {
 
 /** When the hub last heard from each Runner it knows, by its own clock. */
 function listRunnersLastSeen(client: MemberClient) {
-  return Effect.tryPromise({ try: () => client.runners.list(), catch: ensureError }).pipe(
+  return Effect.tryPromise({
+    try: (signal) => client.runners.list(undefined, { signal }),
+    catch: ensureError,
+  }).pipe(
     Effect.map((runners) => new Map(runners.map((runner) => [runner.id, runner.lastSeenAt]))),
   );
 }
@@ -559,10 +569,11 @@ async function runUntilStopped(work: Effect.Effect<void, unknown>) {
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   for (const signal of signals) process.on(signal, onSignal);
   try {
-    await Effect.runPromise(work, { signal: controller.signal });
-  } catch (error) {
-    // Stopping is how the command ends; only a failure before it is one.
-    if (!controller.signal.aborted) throw error;
+    const exit = await Effect.runPromiseExit(work, { signal: controller.signal });
+    // A signal during cleanup must not hide a failure that already happened.
+    if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+      throw Cause.squash(exit.cause);
+    }
   } finally {
     for (const signal of signals) process.off(signal, onSignal);
   }
@@ -625,7 +636,13 @@ export function devCommands(version: string) {
             yield* compose(["down", "--remove-orphans", "--volumes"], { errorsOnly: true });
             // Compose succeeds when a volume is still in use, and keeps it; its password is in the
             // state, so the state goes only with the volumes.
-            const left = yield* composeOutput(["volumes", "--quiet"]);
+            const left = yield* dockerOutput([
+              "volume",
+              "ls",
+              "--quiet",
+              "--filter",
+              `label=com.docker.compose.project=${PROJECT}`,
+            ]);
             if (left.trim() !== "") {
               return yield* Effect.fail(
                 new Error(

@@ -63,6 +63,7 @@ async function startDev(port: number) {
 
 /** Stops `dev` as Ctrl-C does and resolves with its exit code. */
 async function stopDev(dev: ChildProcess) {
+  if (dev.exitCode !== null || dev.signalCode !== null) return dev.exitCode;
   const exited = once(dev, "exit");
   dev.kill("SIGINT");
   const [code] = await exited;
@@ -83,10 +84,7 @@ async function dockerIds(kind: "ps" | "volume", ...args: string[]) {
 
 /** Calls a job command as a user would with no settings of their own. */
 async function getJob(id: string) {
-  return run(CLI, ["jobs", "get", "--id", id], { env }).then(
-    () => ({ exitCode: 0, stderr: "" }),
-    (error: { code: number; stderr: string }) => ({ exitCode: error.code, stderr: error.stderr }),
-  );
+  return run(CLI, ["jobs", "get", "--id", id], { env });
 }
 
 // The data folder follows `XDG_DATA_HOME` on Linux only; elsewhere the test would use the user's own.
@@ -107,10 +105,14 @@ describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")("agent
 
     const dev = await startDev(port);
     // A job the hub does not have: the key the command found was accepted, so the hub says so.
-    const missing = await getJob("00000000-0000-7000-8000-000000000000");
-    expect(missing.exitCode).toBe(1);
-    expect(missing.stderr).toContain(`agent-batch dev runs at http://localhost:${port}`);
-    expect(missing.stderr).toContain('"status":404');
+    const missing = getJob("00000000-0000-7000-8000-000000000000");
+    await expect(missing).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining(`agent-batch dev runs at http://localhost:${port}`),
+    });
+    await expect(missing).rejects.toMatchObject({
+      stderr: expect.stringContaining('"status":404'),
+    });
     const { stdout: exports } = await run(CLI, ["dev", "env"], { env });
 
     expect(await stopDev(dev)).toBe(0);
@@ -120,7 +122,9 @@ describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")("agent
     // The next start finds the same database, so the key it made still works.
     const again = await startDev(port);
     expect((await run(CLI, ["dev", "env"], { env })).stdout).toBe(exports);
-    expect((await getJob("00000000-0000-7000-8000-000000000000")).stderr).toContain('"status":404');
+    await expect(getJob("00000000-0000-7000-8000-000000000000")).rejects.toMatchObject({
+      stderr: expect.stringContaining('"status":404'),
+    });
     expect(await stopDev(again)).toBe(0);
   });
 });

@@ -29,7 +29,7 @@ From nothing to a finished job on one machine with Docker Engine 25 or later and
      "inputFiles": { "notes.txt": { "content": "one\ntwo\nthree\n" } }
    }
    EOF
-   ID=$(npx agent-batch jobs submit --input job.json | jq -er .id)
+   ID=$(npx --yes agent-batch jobs submit --input job.json | jq -er .id)
    ```
 
    The command makes the job a Batch of one. Submitting again with the same custom ID returns the same job, so the command retries a submission whose answer did not arrive. Many jobs that run one agent go into one Batch, created with `batches create` and added to with `batches add-jobs`, 100 at a time: its first jobs, its Canary, run before the rest, and it pauses itself when too many of its jobs fail.
