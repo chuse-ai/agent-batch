@@ -230,9 +230,6 @@ catalogs:
     '@types/proper-lockfile':
       specifier: ^4.1.4
       version: 4.1.4
-    '@types/write-file-atomic':
-      specifier: ^4.0.3
-      version: 4.0.3
     '@types/ws':
       specifier: ^8.18.2
       version: 8.18.2
@@ -329,9 +326,6 @@ catalogs:
     wrangler:
       specifier: ^4.151.3
       version: 4.151.3
-    write-file-atomic:
-      specifier: ^7.0.1
-      version: 7.0.1
     ws:
       specifier: ^8.22.0
       version: 8.22.0
@@ -525,6 +519,9 @@ importers:
       '@standard-schema/utils':
         specifier: 'catalog:'
         version: 0.3.0
+      atomically:
+        specifier: 'catalog:'
+        version: 2.1.1
       contract:
         specifier: workspace:*
         version: link:../../packages/contract
@@ -540,9 +537,6 @@ importers:
       proper-lockfile:
         specifier: 'catalog:'
         version: 4.1.2
-      write-file-atomic:
-        specifier: 'catalog:'
-        version: 7.0.1
       ws:
         specifier: 'catalog:'
         version: 8.22.0
@@ -556,9 +550,6 @@ importers:
       '@types/proper-lockfile':
         specifier: 'catalog:'
         version: 4.1.4
-      '@types/write-file-atomic':
-        specifier: 'catalog:'
-        version: 4.0.3
       '@types/ws':
         specifier: 'catalog:'
         version: 8.18.2
@@ -2389,9 +2380,6 @@ packages:
 
   '@types/ssh2@1.15.6':
     resolution: {integrity: sha512-oGdxhBqcRTwSTKFm+9EiKzkNVYRLEFkcW44lhguvBalGJbWfGnDt/ezwSUZc+SF9m9bMc3VyklNAtp7zICjS5w==}
-
-  '@types/write-file-atomic@4.0.3':
-    resolution: {integrity: sha512-qdo+vZRchyJIHNeuI1nrpsLw+hnkgqP/8mlaN6Wle/NKhydHmUN9l4p3ZE8yP90AJNJW4uB8HQhedb4f1vNayQ==}
 
   '@types/ws@8.18.2':
     resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
@@ -5127,10 +5115,6 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  write-file-atomic@7.0.1:
-    resolution: {integrity: sha512-OTIk8iR8/aCRWBqvxrzxR0hgxWpnYBblY1S5hDWBQfk/VFmJwzmJgQFN3WsoUKHISv2eAwe+PpbUzyL1CKTLXg==}
-    engines: {node: ^20.17.0 || >=22.9.0}
-
   write-file-atomic@8.0.0:
     resolution: {integrity: sha512-dYwyZredl67GyLLIHJnRM3h2PcOmN5SkcgC7eM5DPDEOEl6dLFqVrMg3F1Ea32usj4VSVZtd2H4MtKTNOf6nPg==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
@@ -6955,10 +6939,6 @@ snapshots:
   '@types/ssh2@1.15.6':
     dependencies:
       '@types/node': 18.19.130
-
-  '@types/write-file-atomic@4.0.3':
-    dependencies:
-      '@types/node': 22.20.5
 
   '@types/ws@8.18.2':
     dependencies:
@@ -9898,10 +9878,6 @@ snapshots:
       strip-ansi: 7.2.0
 
   wrappy@1.0.2: {}
-
-  write-file-atomic@7.0.1:
-    dependencies:
-      signal-exit: 4.1.0
 
   write-file-atomic@8.0.0:
     dependencies:

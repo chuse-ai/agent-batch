@@ -5,9 +5,9 @@ import type {
   CredentialStore,
 } from "@earendil-works/pi-ai";
 import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
+import { writeFile } from "atomically";
 import { Effect, FileSystem, Predicate, Schedule } from "effect";
 import lockfile from "proper-lockfile";
-import writeFileAtomic from "write-file-atomic";
 
 // Pi keeps a sign-in's tokens in a `CredentialStore` it is given and refreshes them itself, inside
 // `modify`, saving the new tokens before `modify` returns. OpenAI's refresh tokens work once, so two
@@ -99,7 +99,7 @@ export function fileCredentialStore(file: string): CredentialStore {
               // overwrite the newer tokens it saved.
               if (lost) return yield* Effect.fail(lost);
               yield* Effect.tryPromise({
-                try: () => writeFileAtomic(file, JSON.stringify(next, null, 2), { mode: 0o600 }),
+                try: () => writeFile(file, JSON.stringify(next, null, 2), { mode: 0o600 }),
                 catch: (error) => error,
               });
             }
