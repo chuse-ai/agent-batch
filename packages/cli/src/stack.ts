@@ -696,7 +696,7 @@ function start(version: string, flags: StartFlags) {
   }).pipe(Effect.scoped);
 }
 
-function manageProviderCredential(
+function runCredentialCommand(
   version: string,
   command: "login" | "logout",
   input: { provider?: string; withApiKey?: boolean },
@@ -912,7 +912,7 @@ export function stackCommands(version: string) {
           ),
         }),
       )
-      .handler(({ input }) => runToEnd(manageProviderCredential(version, "login", input))),
+      .handler(({ input }) => runToEnd(runCredentialCommand(version, "login", input))),
     logout: os
       .meta({
         description:
@@ -931,7 +931,7 @@ export function stackCommands(version: string) {
           ),
         }),
       )
-      .handler(({ input }) => runToEnd(manageProviderCredential(version, "logout", input))),
+      .handler(({ input }) => runToEnd(runCredentialCommand(version, "logout", input))),
     env: os
       .meta({
         description:
