@@ -44,7 +44,7 @@ Accuracy measures the model on these tasks, not agent-batch.
 | D, host CPU-s per job, one job per container | 7.3        | 10.5–10.9                        | 1.45×             |
 | B, C and D with 3 jobs per container in turn |            |                                  | 2×, 2.6× and 1.2× |
 
-A container costs about 75–80 MiB for its own Runner before its job does anything, and about 3 CPU-seconds to start and run whatever the job. So the gap is widest when jobs mostly wait on the model and narrows towards the jobs' own work when they compute: D, bound by its own scripts, gains least. Containers also failed worse at the edge: one too many hung the host for about 30 minutes instead of failing a job.
+A container costs about 75–80 MiB for its own Runner before its job does anything, and about 3 CPU-seconds to start and run, measured with one B, C or D job per container. So the gap is widest when jobs mostly wait on the model and narrows towards the jobs' own work when they compute: D, bound by its own scripts, gains least. Containers also failed worse at the edge: one too many hung the host for about 30 minutes instead of failing a job.
 
 ## Throughput and density
 

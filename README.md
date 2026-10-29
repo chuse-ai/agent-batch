@@ -149,7 +149,7 @@ The first title said II; the responsibilities said senior.
 Two postings you can watch. Four hundred you count. With four hundred, this happens:
 
 1. By default, the first 5 jobs run before the others. This is the Canary. If any fails, the Batch pauses before the rest start, so a prompt that breaks every job is caught after five, not four hundred.
-2. After the Canary, if more than 10% of jobs fail, the Batch pauses. This is the failure breaker.
+2. After the Canary, if more than 10% of the jobs that have ended since it began failed, the Batch pauses. This is the failure breaker. It judges from the first jobs to end, so a run of early failures pauses a large Batch quickly.
 3. `batches resume --id "$BATCH"` carries on where it stopped; `batches pause`, `cancel` and `get` work the same way, as do single jobs, and ended jobs can be deleted.
 
 The hub records every job's events (what the agent did), activity, usage in tokens and cost, and result. A Batch counts its jobs by status, and jobs can be listed by status, label, Batch and custom ID:
@@ -166,7 +166,7 @@ Jobs can be added continuously (`add-jobs`, `jobs submit`) and read continuously
 
 Underneath, it is a plain job queue whose worker happens to think: an HTTP API on Postgres (Node or Docker, or Cloudflare Workers with Postgres through Hyperdrive), and Runners that connect out to it. The repository is `chuse-ai/agent-batch`: TypeScript on Effect, oRPC, Hono and Zod, with Pi and sandbox-runtime inside. The CLI, the npm package `agent-batch`, only calls the hub's HTTP API.
 
-So can anything else. Your hub serves an OpenAPI 3.1 document at `/spec.json` and a browsable reference at `/`:
+So can anything else. Your hub serves an OpenAPI 3.2 document at `/spec.json` and a browsable reference at `/`:
 
 ```sh
 eval "$(npx agent-batch stack env)"   # exports AGENT_BATCH_URL and AGENT_BATCH_API_KEY
