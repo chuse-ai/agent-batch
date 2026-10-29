@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="620" height="330" viewBox="0 0 620 330" role="img" aria-label="Memory held by 400 agents: 400 GB as 400 one-gigabyte sandboxes, against 4 GB for one Runner. Each square is 1 GB.">
-<text x="24" y="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#1f2328">400 agents in 1 GB sandboxes</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="330" viewBox="0 0 620 330" role="img" aria-label="Memory held by 400 jobs: 400 GB as 400 one-gigabyte sandboxes, against 4 GB for one Runner. Each square is 1 GB.">
+<text x="24" y="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#1f2328">400 jobs in 1 GB sandboxes</text>
 <text x="24" y="50" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#59636e">400 GB, held while they wait</text>
 <rect x="24" y="64" width="10" height="10" rx="2" fill="#8f8a7e"/>
 <rect x="36" y="64" width="10" height="10" rx="2" fill="#8f8a7e"/>
@@ -401,7 +401,7 @@
 <rect x="228" y="292" width="10" height="10" rx="2" fill="#8f8a7e"/>
 <rect x="240" y="292" width="10" height="10" rx="2" fill="#8f8a7e"/>
 <rect x="252" y="292" width="10" height="10" rx="2" fill="#8f8a7e"/>
-<text x="360" y="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#1f2328">400 agents on one Runner</text>
+<text x="360" y="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#1f2328">400 jobs on one Runner</text>
 <text x="360" y="50" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#59636e">a 4 GB server</text>
 <rect x="360" y="64" width="10" height="10" rx="2" fill="#d9520a"/>
 <rect x="372" y="64" width="10" height="10" rx="2" fill="#d9520a"/>

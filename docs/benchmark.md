@@ -1,10 +1,10 @@
 # Benchmark: one Runner against one container per job
 
-How many agent jobs one small server holds, and what each costs in CPU, when the agent loops share a Runner process instead of each getting a container. Measured on 2026-10-25 and 26 with the Runner from agent-batch 0.2.0, plus a setting that pointed its model calls at the replay server described below. Later releases raised the Runner's throughput, so these figures are conservative for current versions.
+How many agent jobs one small server holds, and what each costs in CPU, when the agent loops share a Runner process instead of each getting a container. Measured on 2026-10-25 and 26 with the Runner from agent-batch 0.2.0, its model calls pointed at the replay server described below. Later releases raised the Runner's throughput, so these figures are conservative for current versions.
 
 ## Setup
 
-- **Server:** a Hetzner CAX11: arm64 (Neoverse-N1), 2 vCPU, 4 GB RAM, Debian 13, about $0.011 an hour. One Runner, with real commands in its per-job OS sandboxes.
+- **Server:** a Hetzner CAX11: arm64 (Neoverse-N1), 2 vCPU, 4 GB RAM, Debian 13, about €7 a month. One Runner, with real commands in its per-job OS sandboxes.
 - **Hub:** on another machine, so the server's figures are the Runner's alone.
 - **Model:** each workload's jobs were run once against a real model (`gpt-6-luna`, 8 jobs at once) and recorded. In the benchmark a replay server on another machine answered every model call with the recorded response at the recorded timing, or slowed down to stand for a slower model. Tools and sandboxes ran for real. A real endpoint cannot be the load source: the one used was full at about 8 jobs at once, and at 1,000 at once its answers changed. Accuracy was measured against the real model at a modest level; the framework's cost, by replay.
 - **Baseline:** the Runner's own image as one container per job (`RUNNER_MAX_JOBS=1`, `--memory 1g`) on the same server. One job per container is the fair comparison; the tables also give 3 jobs per container in turn, which spreads a container's start cost.
@@ -29,7 +29,7 @@ Each workload ramped up to its break point, then a coarse search found its limit
 | C        | about 400                                 | CPU from about 100; memory near full at 400 | 6.8 MiB                             | 0.70–0.88                                 | 2.2 jobs/s at 100     | 90%          |
 | D        | about 12                                  | CPU                                         | up to 320 MiB while its script runs | 7.3–7.8                                   | 0.2 jobs/s            | 75%          |
 
-Accuracy measures the model on these tasks, not agent-batch. At A's limit the server cost about $0.00003 per agent-hour and $0.0005 per 1,000 jobs; that is server cost only, not model tokens.
+Accuracy measures the model on these tasks, not agent-batch.
 
 ## Against one container per job
 
@@ -48,7 +48,7 @@ A container costs about 75–80 MiB for its own Runner before its job does anyth
 
 ## Throughput and density
 
-At the recorded model speed the host's CPU caps throughput early, so holding more jobs helps only until the CPU is full (A: 5.3 jobs/s at 50 allowed, 6.8 at 200, 4.6 at 400). With a slower model, jobs mostly wait, and the number of jobs to hold is throughput times job duration: replayed 20 times slower, A's throughput kept rising to 2.9 jobs/s at 400 open. Density matters for slow models and long jobs; CPU per job matters for fast ones. Cost per agent-hour falls whenever the model slows, which is why cost per 1,000 jobs is given beside it.
+At the recorded model speed the host's CPU caps throughput early, so holding more jobs helps only until the CPU is full (A: 5.3 jobs/s at 50 allowed, 6.8 at 200, 4.6 at 400). With a slower model, jobs mostly wait, and the number of jobs to hold is throughput times job duration: replayed 20 times slower, A's throughput kept rising to 2.9 jobs/s at 400 open. Density matters for slow models and long jobs; CPU per job matters for fast ones.
 
 ## Limits of these numbers
 

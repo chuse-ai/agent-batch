@@ -11,7 +11,7 @@ The repository is a pnpm workspace run with Vite+ (`vp`). From a clone:
 - `vp run ready` checks everything is ready.
 - `vp run -r test` runs the tests.
 - `vp run -r build` builds the monorepo.
-- `vp run dev` runs the development server.
+- `vp run dev` in `apps/hub` runs the hub's development server; in `apps/runner` or `packages/cli` it rebuilds the package on every change.
 
 Inside the clone, npm refuses `npx agent-batch` because the workspace declares pnpm as its package manager; run the published CLI from another directory.
 

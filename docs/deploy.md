@@ -68,7 +68,7 @@ The hub and a Runner from their published images on one machine, as a deployment
 
    Another model goes in `RUNNER_MODEL_ID` the same way, such as `anthropic/claude-haiku-5.5` or `openai/gpt-6-luna` for real work.
 
-4. **Submit jobs** as in [the README's first job](../README.md#an-everyday-chore-done-by-an-agent), with `export AGENT_BATCH_URL=http://localhost:8787`; `docker compose logs runner` shows any error that keeps the Runner from connecting.
+4. **Submit jobs** as in [the README's first job](../README.md#an-everyday-chore-done-by-an-agent), from writing `job.json` on, with `export AGENT_BATCH_URL=http://localhost:8787`; `docker compose logs runner` shows any error that keeps the Runner from connecting.
 
 ## Calling the API directly
 
