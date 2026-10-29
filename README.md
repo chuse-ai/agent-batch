@@ -1,154 +1,223 @@
 # agent-batch
 
-Run one-off agent jobs unattended on your own machines, each with a validated result contract.
+[![npm](https://img.shields.io/npm/v/agent-batch)](https://www.npmjs.com/package/agent-batch) [![License: MIT](https://img.shields.io/npm/l/agent-batch)](LICENSE)
 
-The hub runs on Cloudflare Workers or Node/Docker; Runners execute jobs on the machines you provision. Automatic cloud overflow is planned. See [release scope and limitations](docs/release-scope.md).
+> Map one agent over many inputs, on machines you own, and get back JSON that matches your schema
 
-## Quickstart
+agent-batch runs real agents on unattended jobs. Give it one agent definition and a few hundred inputs, and each job comes back as JSON checked against your schema, or as a failure with its reason. The agent is [Pi](https://github.com/earendil-works/pi), working with real files and real shell commands in a sandbox of its own. The first five jobs run before the rest, and a Batch pauses itself when too many fail, so you can go to bed.
 
-From nothing to a finished job on one machine with Docker Engine 29 or later and Compose 5 or later, Node 22.19 or later and `jq`: `agent-batch stack start` runs a hub, a Runner and the hub's Postgres from the images released with it, and jobs go through the same `agent-batch` command. To run them for other machines, see [Deploying with Docker Compose](#deploying-with-docker-compose). On Ubuntu 24.04, first let the Runner's job sandboxes create user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, and a file in `/etc/sysctl.d` to keep it; on Ubuntu 25.04 and later they cannot run yet (see [the Runner's README](apps/runner/README.md)).
+It does this without giving every job its own sandbox, so you don't pay for agents to wait on the model. Four hundred jobs in their own 1 GB sandboxes hold 400 GB of memory; on one Runner, for jobs that mostly wait on the model, they fit in a 4 GB server.
 
-1. **Start the hub and a Runner**, using OpenRouter's free models by default. On first use, the command offers provider login and saves it in the Runner's volume; provider keys are hidden as you type. It returns once the hub is healthy and the Runner has started, and keeps running in the background, even after you close the terminal.
+Try it on your machine with Docker and Node: `npx agent-batch stack start`, then [the first job](#an-everyday-chore-done-by-an-agent).
 
-   ```sh
-   npx --yes agent-batch stack start
-   ```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/memory-dark.svg">
+  <img alt="Memory held by 400 jobs: 400 one-gigabyte sandboxes against 4 GB for one Runner, each square 1 GB, to scale" src="docs/images/memory-light.svg">
+</picture>
 
-   Choose another model with `--provider` and `--model`, as Pi names them, such as `--provider anthropic --model claude-sonnet-5-5`. `npx agent-batch stack login --provider <provider>` adds or replaces that provider's credential independently. It offers a provider API key or account sign-in where Pi supports them. To supply a key from your environment instead, forward its variable by name: `OPENROUTER_API_KEY="$MY_KEY" npx agent-batch stack start --env OPENROUTER_API_KEY`, where `MY_KEY` already holds the key, so it stays out of your shell history.
+Open source, MIT, TypeScript. Early: versions are 0.x.
 
-   `npx agent-batch stack stop` keeps the containers, data and credentials for the next start. `npx agent-batch stack delete` removes the database and Runner volumes, including saved logins, without a prompt.
+## An everyday chore, done by an agent
 
-   On its first start it creates the hub's owner and an API key for jobs. `agent-batch` commands use that hub and key while `AGENT_BATCH_URL` and `AGENT_BATCH_API_KEY` are unset, and `npx agent-batch stack env` prints both for other clients, such as `curl`.
+The usual way to count the lines of a file:
 
-2. **Submit a job**: the agent it runs, with the Result contract its result must match, the input it works on, Input files the agent finds in its Workspace's `inputs/` folder, and a custom ID. The job's `id` goes into `ID` for the steps that follow.
-
-   ```sh
-   cat > job.json <<'EOF'
-   {
-     "customId": "quickstart-1",
-     "agent": { "resultContract": { "schema": { "type": "integer" } } },
-     "input": "Count the lines of inputs/notes.txt and submit the count.",
-     "inputFiles": { "notes.txt": { "content": "one\ntwo\nthree\n" } }
-   }
-   EOF
-   ID=$(npx --yes agent-batch jobs submit --input job.json | jq -er .id)
-   ```
-
-   The command makes the job a Batch of one. Submitting again with the same custom ID returns the same job, so the command retries a submission whose answer did not arrive. Many jobs that run one agent go into one Batch, created with `batches create` and added to with `batches add-jobs`, 100 at a time: its first jobs, its Canary, run before the rest, and it pauses itself when too many of its jobs fail.
-
-3. **Wait for it.** The command prints the job once it ends, and exits with 1 unless it succeeded.
-
-   ```sh
-   npx agent-batch jobs wait --id "$ID"
-   ```
-
-   A job stays `queued` until a Runner has room for it; the Runner's log, which `npx agent-batch stack logs --follow` prints, shows any error that keeps it from connecting.
-
-   What it did is in its events, a page at a time: read again `after` the last event's `id` while `hasMore` is true, and stop once a page without more has a final `status`.
-
-   ```sh
-   npx agent-batch jobs events --id "$ID" --after 0
-   ```
-
-4. **Read its result, and control jobs.** A job that succeeded has its `result`, which matches its Result contract: here, `3`.
-
-   ```sh
-   npx agent-batch jobs get --id "$ID"
-   ```
-
-   Jobs can also be paused, resumed, carrying on where they stopped, and cancelled, and deleted once they have ended; a refused control says why, and the reference at `/` says when each applies. `npx agent-batch --help` lists every command.
-
-   ```sh
-   npx agent-batch jobs cancel --id "$ID"   # likewise pause, resume and delete
-   ```
-
-`npx agent-batch stack status` shows whether the stack is running, the hub's URL and health, the image versions in use, and the Runner's authentication source. `npx agent-batch stack logs` prints its logs without following them.
-
-To upgrade, run `npx agent-batch stack stop`, back up the volumes if the data matters, then run `npx --yes agent-batch@<new-version> stack start` with the new CLI version. Saved logins survive replacement; if you used `--env`, supply those variables again when recreating the Runner.
-
-## Deploying with Docker Compose
-
-The hub and a Runner from their published images on one machine, as a deployment that other machines' Runners and callers can reach once the hub's address is opened to them (see `compose.yaml`). It needs Docker Engine 29 or later and Compose 5 or later, `curl`, `jq` and `openssl`, and on Ubuntu the host setting above. Use current patch releases of [Docker Engine](https://docs.docker.com/engine/install/) and [Compose](https://docs.docker.com/compose/install/).
-
-1. **Start the hub.** It creates its owner from these settings on its first start and serves the API at `http://localhost:8787`. To upgrade later, rerun only the `curl` line from the current README, then `docker compose up -d`.
-
-   <!-- x-release-please-start-version -->
-
-   ```sh
-   curl -fsSLO https://raw.githubusercontent.com/chuse-ai/agent-batch/v0.5.0/compose.yaml
-   cat > .env <<EOF
-   BETTER_AUTH_SECRET=$(openssl rand -base64 32)
-   POSTGRES_PASSWORD=$(openssl rand -hex 24)
-   ADMIN_EMAIL=you@example.com
-   ADMIN_PASSWORD=choose-a-password
-   EOF
-   # Returns once the hub has migrated its database and created its owner; if the hub itself fails, `docker compose logs hub` says why
-   docker compose up --wait hub
-   HUB=http://localhost:8787
-   ```
-
-   <!-- x-release-please-end -->
-
-2. **Create keys.** Creating API keys takes a signed-in member, and the command cannot sign in yet, so this step uses `curl`. Each key comes back once, as `key`: the one Runners register with goes into `.env`, and the one for jobs into `AGENT_BATCH_API_KEY`.
-
-   ```sh
-   curl -sS --fail-with-body -c cookies -H 'content-type: application/json' \
-     -d '{"email":"you@example.com","password":"choose-a-password"}' "$HUB/api/auth/sign-in/email"
-   # The key Runners register with, kept in .env for the Runner
-   key=$(curl -sS --fail-with-body -b cookies -H 'content-type: application/json' \
-     -d '{"name":"runners","permissions":{"runner":["register"]}}' "$HUB/api-keys" | jq -er .key) &&
-     echo "RUNNER_REGISTRATION_KEY=$key" >> .env
-   # A key for submitting and controlling jobs, for the command
-   AGENT_BATCH_API_KEY=$(curl -sS --fail-with-body -b cookies -H 'content-type: application/json' \
-     -d '{"name":"jobs","permissions":{"job":["create","read","pause","resume","cancel","delete"]}}' "$HUB/api-keys" | jq -er .key) &&
-     export AGENT_BATCH_API_KEY
-   ```
-
-3. **Start a Runner** with the model every job runs on and its provider's key; it registers with the key step 2 put in `.env`:
-
-   ```sh
-   cat >> .env <<EOF
-   RUNNER_MODEL_PROVIDER=openrouter
-   RUNNER_MODEL_ID=openrouter/free
-   OPENROUTER_API_KEY=<your key>
-   EOF
-   docker compose up --wait runner
-   ```
-
-   Another model goes in `RUNNER_MODEL_ID` the same way, such as `anthropic/claude-haiku-5.5` or `openai/gpt-6-luna` for real work.
-
-4. **Submit jobs** as in the [quickstart](#quickstart), from step 2, with `export AGENT_BATCH_URL=http://localhost:8787`; `docker compose logs runner` shows any error that keeps the Runner from connecting.
-
-## API
-
-The hub serves its OpenAPI document at `/spec.json`, generated from the contract, and a browsable reference of it at `/`, which shows each call with a `curl` example. Each call takes an API key in the `x-api-key` header holding the permissions the document lists for it, a member's session cookie, or either; errors are RFC 9457 Problem Details. To wait for a job, read it until its status is final, waiting longer between reads, as the command does.
-
-## Development
-
-- Check everything is ready:
-
-```bash
-vp run ready
+```console
+$ printf 'one\ntwo\nthree\n' > notes.txt
+$ wc -l notes.txt
+3 notes.txt
 ```
 
-- Run the tests:
+The same chore, done by an agent in a sandbox on your machine. The answer is known in advance, so you can check the run yourself. You need Docker, Node and `jq` (versions, and a step for Ubuntu 24.04, in [the host notes](#host-notes)).
 
-```bash
-vp run -r test
+```sh
+npx agent-batch stack start
 ```
 
-- Build the monorepo:
+That runs a hub, a Runner and Postgres in the background, and on first run offers to sign you in to a model provider. The default is OpenRouter's free models, which still need an OpenRouter sign-in or key. Then the job:
 
-```bash
-vp run -r build
+```sh
+cat > job.json <<'EOF'
+{
+  "customId": "quickstart-1",
+  "agent": { "resultContract": { "schema": { "type": "integer" } } },
+  "input": "Count the lines of inputs/notes.txt and submit the count.",
+  "inputFiles": { "notes.txt": { "content": "one\ntwo\nthree\n" } }
+}
+EOF
+ID=$(npx agent-batch jobs submit --input job.json | jq -er .id)
+npx agent-batch jobs wait --id "$ID"             # prints the job when it ends; exits 1 unless it succeeded
+npx agent-batch jobs get --id "$ID" | jq .result # 3
 ```
 
-- Run the development server:
+What happened: the agent found `notes.txt` in its Workspace's `inputs/` folder, counted, and could only finish by calling `submit_result`. The result was checked against the Result contract, the JSON Schema in the agent definition. Had it submitted `"3"` instead of `3`, the validation error would have gone back to the agent to fix; had it given up, the job would have failed with `noResult`. A job never succeeds with nothing in it. The schema checks the shape, not the facts: `4` is also an integer, so read some results.
 
-```bash
-vp run dev
+If you did not see `3`: `npx agent-batch jobs events --id "$ID"` prints what the agent did, and `npx agent-batch stack logs --follow` prints the stack. Submit `job.json` a second time and you get the same job back, because the `customId` is the same. `npx agent-batch stack stop` keeps your data; `npx agent-batch stack delete` removes it and does not ask.
+
+Now change the input: put your own file in `inputFiles`, change the schema to whatever you want back, give it a new `customId`, and submit. That is the whole programming model; everything below is doing it many times at once.
+
+## Why 400 fit in 4 GB
+
+An agent job is mostly an `await`: the loop sends a prompt, waits on the model, runs a command, waits again. You would not give every `fetch` in a Node program its own virtual machine, yet agents are often run in parallel by giving each one its own sandbox. A container or VM per agent costs memory and seconds of CPU before the agent does anything: about 75–80 MiB even for a bare container running a Runner, and whatever you provision for a hosted sandbox, commonly 1 GB or more. Then it sits there while the agent waits on the model. An agent loop that is mostly `await` needs a few MiB. So in a Runner, the loops (the agent is [Pi](https://github.com/earendil-works/pi)) run many to a process, and each job's shell commands and file access go into a lightweight per-job sandbox (Anthropic's [sandbox-runtime](https://github.com/anthropics/sandbox-runtime): bubblewrap on Linux, Seatbelt on macOS), with no network for job commands by default.
+
+```text
+one Runner process (Node, on your machine)
+├─ job 1    agent loop · waiting on the model
+├─ job 2    agent loop · waiting on the model
+├─ job 3    agent loop · running `wc -l inputs/notes.txt` ──► its own OS sandbox, no network
+├─ ...
+└─ job 400  agent loop · waiting on the model
 ```
 
-## Contributing
+| Measured on one Hetzner CAX11, 2026-10-25/26                                          | One Runner                                                                                                                                                                                                                                                                                                                                         | One container per job            |
+| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| Extraction jobs open at once (read a messy invoice, CV or ticket; submit JSON)        | **350–425**, 12–14× more                                                                                                                                                                                                                                                                                                                           | about 30, then the host thrashed |
+| Memory per open job                                                                   | 6.5 MiB                                                                                                                                                                                                                                                                                                                                            | about 90 MiB                     |
+| CPU per job, CPU-heavy jobs (data scripts over large CSVs, code fixes with test runs) | **1.45–4.9× less**; 1.45× for the heaviest, where the jobs' own work dominates                                                                                                                                                                                                                                                                     | baseline                         |
+| Conditions                                                                            | Arm, 2 vCPU, 4 GB RAM, about €7 a month. The Runner from 0.2.0, with real commands in real sandboxes. Model responses replayed from real recordings: at 20× their recorded latency for the jobs held open, standing for a slow model; at their recorded timing for CPU. 425 needs systemd's `TasksMax` raised. Server cost only, not model tokens. | same server, same Runner image   |
 
-Issues are welcome; outside pull requests are not accepted for now. See [CONTRIBUTING.md](CONTRIBUTING.md).
+One container too many hung the host for about 30 minutes instead of failing a job. These are particular workloads on one machine, not a capacity guarantee. Method and results: [docs/benchmark.md](docs/benchmark.md).
+
+<!-- recording: a terminal, about 30 seconds, no narration, labelled "Hetzner CAX11, 2 vCPU, 4 GB". A Batch of a few hundred text jobs is added with the CLI; the 5 Canary jobs end first; then `jobs list --status running` and `--status succeeded` are re-run every few seconds and the counts move from running to succeeded; one `jobs get | jq .result` prints a validated JSON object. -->
+
+A Runner runs 8 jobs at a time by default. That is the concurrency limit, and it is a setting:
+
+```sh
+RUNNER_MAX_JOBS=100 npx agent-batch stack start --env RUNNER_MAX_JOBS
+```
+
+`--env` replaces the list of forwarded variables, so name every one you forward, such as `--env RUNNER_MAX_JOBS --env OPENROUTER_API_KEY`.
+
+## `inputs.map(agent)`: job postings
+
+Keep the agent, change the input. A Batch is many jobs sharing one agent definition; your first job was already a Batch of one. Say you have job postings and want, for each, what it really requires and how senior it is.
+
+The agent, once:
+
+```sh
+cat > agent.json <<'EOF'
+{
+  "agent": {
+    "instructions": "Read the job posting in inputs/posting.txt. Submit the requirements it treats as mandatory, the ones it treats as optional, and the seniority it is really asking for, judged from the responsibilities rather than the title.",
+    "resultContract": {
+      "schema": {
+        "type": "object",
+        "required": ["mustHave", "niceToHave", "seniority"],
+        "properties": {
+          "mustHave": { "type": "array", "items": { "type": "string" } },
+          "niceToHave": { "type": "array", "items": { "type": "string" } },
+          "seniority": { "type": "string", "enum": ["junior", "mid", "senior", "lead"] }
+        }
+      }
+    },
+    "runTimeoutSeconds": 300,
+    "modelBudgetUsd": 0.05
+  }
+}
+EOF
+BATCH=$(npx agent-batch batches create --input agent.json | jq -er .id)
+```
+
+Then one job per posting, each with its own text and custom ID, up to 100 per call:
+
+```sh
+cat > postings.json <<'EOF'
+[
+  { "customId": "posting-0001", "input": "Posting 0001.",
+    "inputFiles": { "posting.txt": { "content": "Software Engineer II, Example Corp\nYou will own the billing service end to end and mentor two engineers. Required: 5+ years TypeScript, Postgres. Nice: Effect, Cloudflare Workers.\n" } } },
+  { "customId": "posting-0002", "input": "Posting 0002.",
+    "inputFiles": { "posting.txt": { "content": "Junior Developer, Example GmbH\nYou will fix bugs in our Node services with a senior engineer reviewing every change. Required: JavaScript. Nice: Docker.\n" } } }
+]
+EOF
+jq --arg id "$BATCH" '{id: $id, jobs: .}' postings.json \
+  | npx agent-batch batches add-jobs --input - | jq -r '.jobs[].job.id' > ids
+for id in $(cat ids); do
+  npx agent-batch jobs wait --id "$id" | jq -c 'if .status == "succeeded" then .result else {id, status} end'
+done
+```
+
+Each line is one posting's result, already checked against the schema, or a failed job's ID and status. A run gave:
+
+```json
+{"mustHave":["5+ years of TypeScript experience","Postgres"],"seniority":"senior","niceToHave":["Effect","Cloudflare Workers"]}
+{"mustHave":["JavaScript"],"seniority":"junior","niceToHave":["Docker"]}
+```
+
+The first title said II; the responsibilities said senior.
+
+`--input <file>`, or `-` for stdin, gives any command its whole input as JSON; `npx agent-batch <command> --help` and the hub's reference at `/` list every field.
+
+## Stop watching your agents
+
+Two postings you can watch. Four hundred you count. With four hundred, this happens:
+
+1. By default, the first 5 jobs run before the others. This is the Canary. If any fails, the Batch pauses before the rest start, so a prompt that breaks every job is caught after five, not four hundred.
+2. After the Canary, if more than 10% of the jobs that have ended since it began failed, the Batch pauses. This is the failure breaker. It judges from the first jobs to end, so a run of early failures pauses a large Batch quickly.
+3. `batches resume --id "$BATCH"` carries on where it stopped; `batches pause`, `cancel` and `get` work the same way, as do single jobs, and ended jobs can be deleted.
+
+The hub records every job's events (what the agent did), activity, usage in tokens and cost, and result. A Batch counts its jobs by status, and jobs can be listed by status, label, Batch and custom ID:
+
+```sh
+npx agent-batch batches get --id "$BATCH" | jq -c .jobCounts   # {"queued":0,"running":0,...,"succeeded":2,...}
+npx agent-batch jobs list --batch-id "$BATCH" --status failed
+npx agent-batch jobs list --batch-id "$BATCH" --status succeeded   # listed jobs carry no result: read one with jobs get
+```
+
+Jobs can be added continuously (`add-jobs`, `jobs submit`) and read continuously (`jobs wait`, `jobs list`). A job's journal is on disk, so a restarted Runner recovers its jobs where they stopped. A prompt that gives wrong but valid answers passes the Canary. Read some results.
+
+## Read it before you run it
+
+Underneath, it is a plain job queue whose worker happens to think: an HTTP API on Postgres (Node or Docker, or Cloudflare Workers with Postgres through Hyperdrive), and Runners that connect out to it. The repository is `chuse-ai/agent-batch`: TypeScript on Effect, oRPC, Hono and Zod, with Pi and sandbox-runtime inside. The CLI, the npm package `agent-batch`, only calls the hub's HTTP API.
+
+So can anything else. Your hub serves an OpenAPI 3.2 document at `/spec.json` and a browsable reference at `/`:
+
+```sh
+eval "$(npx agent-batch stack env)"   # exports AGENT_BATCH_URL and AGENT_BATCH_API_KEY
+curl -sS -H "x-api-key: $AGENT_BATCH_API_KEY" "$AGENT_BATCH_URL/spec.json" | jq '.paths | keys'
+curl -sS -H "x-api-key: $AGENT_BATCH_API_KEY" "$AGENT_BATCH_URL/jobs?status=succeeded"
+```
+
+### Job commands never see your model key
+
+Model-provider credentials live in the Runner, outside every job sandbox. The Runner calls the model; the job's commands run in bubblewrap or Seatbelt with no network, and the provider key is not in their environment. Ask an agent to look:
+
+```sh
+cat > look.json <<'EOF'
+{
+  "customId": "look-1",
+  "agent": { "resultContract": { "schema": { "type": "object", "required": ["names", "networkWorks"],
+    "properties": { "names": { "type": "array", "items": { "type": "string" } }, "networkWorks": { "type": "boolean" } } } } },
+  "input": "Run `env` and submit the names of the environment variables you see, names only. Then run `node -e \"fetch('https://example.com').then(r => console.log(r.status))\"` and submit whether it printed a status."
+}
+EOF
+ID=$(npx agent-batch jobs submit --input look.json | jq -er .id)
+npx agent-batch jobs wait --id "$ID" | jq -c '.result | {networkWorks, keys: [.names[] | select(test("KEY|TOKEN|SECRET"))]}'
+```
+
+A run whose Runner held an OpenAI key printed `{"networkWorks":false,"keys":[]}`; the same `fetch` run in the Runner's own container printed `200`.
+
+The model is per Runner. `stack start --provider anthropic --model claude-sonnet-5-5` picks any provider and model Pi supports; `stack login --provider P` adds a provider's sign-in (`--with-api-key` reads a key from stdin); `--env NAME` forwards a host variable, such as a provider key, to the Runner. For several models, run several Runners.
+
+## When not to use agent-batch
+
+- You want to talk to the agent. Jobs run unattended and end; there is no chat.
+- You want one answer to one request, right now. Submitting and reading are separate steps, and there is no push or callback.
+- The job needs the web, a PDF or a photo. Job commands have no network, and input files are inline text; paste text.
+- People who must not see each other's work share the machine. The sandbox is around each job's commands; agent-batch is for one organization, not hostile multi-tenant use.
+- Every job wants a different model. The model is per Runner; run a Runner per model.
+- Your jobs must move between hosts. A job's journal and Workspace stay with the Runner that took it, and each data directory takes one Runner process.
+
+Full list: [docs/release-scope.md](docs/release-scope.md).
+
+## Host notes
+
+agent-batch needs Docker Engine 29+ with Compose 5+, and Node 22.19+. On Ubuntu 24.04, run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` before `stack start`, so the sandboxes can start, and add a file in `/etc/sysctl.d` to keep it. Ubuntu 25.04 and later are not supported yet. Logins, status, logs and upgrading: [docs/deploy.md](docs/deploy.md).
+
+## More than one machine
+
+`stack start` is for one machine. For a hub that Runners on other machines connect to, the repository's [`compose.yaml`](compose.yaml) runs the hub, Postgres and a Runner from the published images, `ghcr.io/chuse-ai/agent-batch-hub` and `ghcr.io/chuse-ai/agent-batch-runner` (linux/amd64 and arm64). Today you create API keys there with `curl` against the hub, because the CLI cannot sign in yet. Steps: [docs/deploy.md](docs/deploy.md#several-machines-docker-compose).
+
+## Working on agent-batch
+
+Issues are welcome, including ones about this page. Outside pull requests are not accepted for now; [CONTRIBUTING.md](CONTRIBUTING.md) explains and has the development commands. `npx agent-batch --help` lists every command.
+
+agent-batch is made by FluteBlade at chuse. MIT licence.
