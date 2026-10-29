@@ -1,5 +1,7 @@
 # agent-batch
 
+[![npm](https://img.shields.io/npm/v/agent-batch)](https://www.npmjs.com/package/agent-batch) [![License: MIT](https://img.shields.io/npm/l/agent-batch)](LICENSE)
+
 > Map one agent over many inputs, on machines you own, and get back JSON that matches your schema
 
 agent-batch runs real agents on unattended jobs. Give it one agent definition and a few hundred inputs, and each job comes back as JSON checked against your schema, or as a failure with its reason. The agent is [Pi](https://github.com/earendil-works/pi), working with real files and real shell commands in a sandbox of its own. The first five jobs run before the rest, and a Batch pauses itself when too many fail, so you can go to bed.
