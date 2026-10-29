@@ -4,7 +4,7 @@
 
 agent-batch runs real agents on unattended jobs. Give it one agent definition and a few hundred inputs, and each job comes back as JSON checked against your schema, or as a failure with its reason. The agent is [Pi](https://github.com/earendil-works/pi), working with real files and real shell commands in a sandbox of its own. The first five jobs run before the rest, and a Batch pauses itself when too many fail, so you can go to bed.
 
-It does this without a sandbox per agent. An agent job is mostly an `await`: the loop sends a prompt, waits on the model, runs a command, waits again. You would not give every `fetch` in a Node program its own virtual machine, yet agents are often run in parallel by giving each one its own sandbox of 1 GB or more, paid for while the agent waits. In agent-batch the agent loops share a Runner process, and only their commands go into a per-job OS sandbox. Four hundred jobs in their own 1 GB sandboxes hold 400 GB of memory; on one Runner, for jobs that mostly wait on the model, they fit in a 4 GB server.
+It does this without giving every job its own sandbox, so you don't pay for agents to wait on the model. Four hundred jobs in their own 1 GB sandboxes hold 400 GB of memory; on one Runner, for jobs that mostly wait on the model, they fit in a 4 GB server.
 
 Try it on your machine with Docker and Node: `npx agent-batch stack start`, then [the first job](#an-everyday-chore-done-by-an-agent).
 
@@ -55,7 +55,7 @@ Now change the input: put your own file in `inputFiles`, change the schema to wh
 
 ## Why 400 fit in 4 GB
 
-A container or VM per agent costs memory and seconds of CPU before the agent does anything: about 75–80 MiB even for a bare container running a Runner, and whatever you provision for a hosted sandbox, commonly 1 GB or more. Then it sits there while the agent waits on the model. An agent loop that is mostly `await` needs a few MiB. So in a Runner, the loops (the agent is [Pi](https://github.com/earendil-works/pi)) run many to a process, and each job's shell commands and file access go into a lightweight per-job sandbox (Anthropic's [sandbox-runtime](https://github.com/anthropics/sandbox-runtime): bubblewrap on Linux, Seatbelt on macOS), with no network for job commands by default.
+An agent job is mostly an `await`: the loop sends a prompt, waits on the model, runs a command, waits again. You would not give every `fetch` in a Node program its own virtual machine, yet agents are often run in parallel by giving each one its own sandbox. A container or VM per agent costs memory and seconds of CPU before the agent does anything: about 75–80 MiB even for a bare container running a Runner, and whatever you provision for a hosted sandbox, commonly 1 GB or more. Then it sits there while the agent waits on the model. An agent loop that is mostly `await` needs a few MiB. So in a Runner, the loops (the agent is [Pi](https://github.com/earendil-works/pi)) run many to a process, and each job's shell commands and file access go into a lightweight per-job sandbox (Anthropic's [sandbox-runtime](https://github.com/anthropics/sandbox-runtime): bubblewrap on Linux, Seatbelt on macOS), with no network for job commands by default.
 
 ```text
 one Runner process (Node, on your machine)
