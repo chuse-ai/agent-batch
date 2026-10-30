@@ -413,17 +413,20 @@ const runner = Command.make("runner", { healthcheck }, (flags) =>
   ]),
 );
 
-NodeRuntime.runMain(
-  Command.run(runner, { version: packageJson.version }).pipe(
-    Effect.catchTag("ConfigError", (error) =>
-      refuse(`The Runner is not configured: ${settingsProblems(error)}`),
-    ),
-    Effect.provide(
-      NodeChildProcessSpawner.layer.pipe(
-        Layer.provideMerge(
-          Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeTerminal.layer, NodeStdio.layer),
-        ),
-      ),
+/**
+ * The Runner's command line, reading its arguments from `Stdio`. Exported for its tests, which run
+ * it in-process with their own arguments, as starting a process for each list of arguments is slow.
+ */
+export const runnerCli = Command.run(runner, { version: packageJson.version }).pipe(
+  Effect.catchTag("ConfigError", (error) =>
+    refuse(`The Runner is not configured: ${settingsProblems(error)}`),
+  ),
+  Effect.provide(
+    NodeChildProcessSpawner.layer.pipe(
+      Layer.provideMerge(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeTerminal.layer)),
     ),
   ),
 );
+
+// Started as the entry point only, so the tests can import the command line without running it.
+if (import.meta.main) NodeRuntime.runMain(runnerCli.pipe(Effect.provide(NodeStdio.layer)));

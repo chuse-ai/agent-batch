@@ -752,7 +752,7 @@ export function runToEnd(
         if (Exit.isSuccess(exit)) resolve();
         else if (Cause.hasInterruptsOnly(exit.cause)) Runtime.defaultTeardown(exit, onExit);
         else {
-          // Set before trpc-cli exits, as `bin.ts`'s exit keeps a code already set: 124 for a
+          // Set before trpc-cli exits, as `runAgentBatchCli` keeps a code already set: 124 for a
           // timed-out wait, say, rather than trpc-cli's 1.
           process.exitCode = Runtime.getErrorExitCode(Cause.squash(exit.cause));
           reject(ensureError(Cause.squash(exit.cause)));
