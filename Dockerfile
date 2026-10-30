@@ -65,16 +65,16 @@ RUN vp run --no-cache runner#build && vp run --no-cache runner#notices \
   && cp "$node" /tmp/node && cp "$(dirname "$node")/../LICENSE" /tmp/node-LICENSE
 
 # --- the Runner's runtime: Debian's current stable, slim, as the hub's distroless base is, with the
-# programs each job's sandbox needs (ADR 0027), poppler-utils for jobs that read PDFs, and
-# libatomic1, which Node's official Linux builds link from Node 25 on (nodejs/node#60790,
-# voidzero-dev/vite-plus#3219). It runs as a named user with a home
-# and the data directory, as Node's official image runs as its `node` user, uid 1000; `nobody` has
+# programs each job's sandbox needs (ADR 0027), poppler-utils for jobs that read PDFs, with the
+# encoding data libpoppler recommends for CJK and Cyrillic text (poppler-data), and libatomic1,
+# which Node's official Linux builds link from Node 25 on (nodejs/node#60790,
+# voidzero-dev/vite-plus#3219). It runs as a named user with a home and the data directory, as Node's official image runs as its `node` user, uid 1000; `nobody` has
 # neither. The container needs `--security-opt seccomp=unconfined --security-opt
 # systempaths=unconfined`, and `apparmor=unconfined` where the host has AppArmor, as BuildKit's
 # rootless image does ---
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS runner
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends bubblewrap socat ripgrep poppler-utils libatomic1 \
+  && apt-get install -y --no-install-recommends bubblewrap socat ripgrep poppler-utils poppler-data libatomic1 \
   && rm -rf /var/lib/apt/lists/* \
   && useradd --uid 1000 --create-home runner \
   && install -d -o runner -g runner /data
