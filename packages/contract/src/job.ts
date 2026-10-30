@@ -128,9 +128,10 @@ export const blobRefSchema = z.object({
 
 /**
  * An Input file: its path in the job's `inputs` folder and the stored content it holds, named by
- * digest and size, as uploaded before the job.
+ * digest and size, as uploaded before the job. A request names it, so it is strict (see
+ * `apiContract`), while `blobRefSchema` also answers.
  */
-export const inputFileSchema = z.extend(blobRefSchema, { path: filePathSchema });
+export const inputFileSchema = z.strictObject({ ...blobRefSchema.shape, path: filePathSchema });
 
 /**
  * Files written into the job's `inputs` folder before its agent starts, as sandbox APIs take them: a

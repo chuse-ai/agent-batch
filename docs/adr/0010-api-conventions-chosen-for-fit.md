@@ -8,6 +8,8 @@ A single resource is returned bare. A list is returned in pages, each a page obj
 
 A list of jobs is read newest first, the same way: `after` takes the ID of the last job the caller has, and the page holds the jobs created before it, `limit` of them (1 to 100, 50 by default), saying `hasMore` when there are more, as Stripe's `starting_after` takes an object's ID. Job IDs are UUIDv7s, ordered by when they were made, so the ID alone orders the list, and a page stays correct when the job it starts after is deleted or new jobs come meanwhile; those show on a new first page. Filters, such as a label or a status, narrow the list without changing its order.
 
+A request body's fields are checked strictly: a field the API does not define, such as one renamed or misspelled, is refused with 400 naming it and its path, as OpenAI's, Anthropic's and Stripe's APIs refuse it, since a dropped field would run the request as if it were absent, such as a job without the files its caller meant to give it. Answers are not checked that way, so the hub can add fields to them without breaking a caller that validates them. Reconsider for query strings, which keep oRPC's default of ignoring parameters the API does not define, if callers are misled by a misspelled one.
+
 ## Considered options
 
 snake_case field names, as in Cloudflare's account-level REST API, Wrangler configuration, and the OpenAI and Anthropic APIs, would look familiar to some callers, but the same job would then be snake_case over HTTP and camelCase in JavaScript, with camelCase schema keywords nested inside snake_case fields. Our callers send jobs, not model requests, so they gain little from matching the model APIs.

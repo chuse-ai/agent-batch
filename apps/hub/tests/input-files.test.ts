@@ -248,7 +248,8 @@ test("an upload whose bytes are not those its digest names stores nothing", asyn
   expect(await storedOf([claimed, "else"])).toEqual([]);
   await expect(
     client.batches.addJobs({
-      id: (await client.batches.create({ agent: SUBMISSION })).id,
+      id: (await client.batches.create({ agent: { outputContract: SUBMISSION.outputContract } }))
+        .id,
       jobs: [
         { customId: "a", files: [{ path: "a.txt", digest: digestOf(claimed), sizeBytes: 30 }] },
       ],

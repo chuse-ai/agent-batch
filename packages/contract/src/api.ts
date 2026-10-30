@@ -177,7 +177,7 @@ export type BlockedBy = NonNullable<Job["blockedBy"]>;
  * It is set once, as the Canary tests it.
  */
 export const agentSchema = z
-  .object({
+  .strictObject({
     instructions: z.optional(
       instructionsSchema.check(
         z.describe(
@@ -185,9 +185,14 @@ export const agentSchema = z
         ),
       ),
     ),
-    outputContract: outputContractSchema.check(
-      z.describe("What each job's output must be: `schema`, a JSON Schema the output must match."),
-    ),
+    // Strict here, as a request names it; the Runner protocol's copy is not.
+    outputContract: z
+      .strictObject(outputContractSchema.shape)
+      .check(
+        z.describe(
+          "What each job's output must be: `schema`, a JSON Schema the output must match.",
+        ),
+      ),
     runTimeoutSeconds: z.optional(
       runTimeoutSecondsSchema.check(
         z.describe(
@@ -222,7 +227,7 @@ const breakerSchema = z.union([
 
 /** A Batch as a caller creates it. */
 export const batchCreationSchema = z
-  .object({
+  .strictObject({
     customId: z.optional(
       customIdSchema.check(
         z.describe(
@@ -243,7 +248,7 @@ export const batchCreationSchema = z
       ._default(
         z.union([
           z.boolean(),
-          z.object({
+          z.strictObject({
             canary: z.optional(canarySchema),
             maxFailurePercent: z.optional(maxFailurePercentSchema),
           }),
@@ -261,7 +266,7 @@ export type BatchCreation = z.infer<typeof batchCreationSchema>;
 
 /** A job as a caller adds it to a Batch, whose agent it runs. */
 export const jobSubmissionSchema = z
-  .object({
+  .strictObject({
     customId: customIdSchema.check(
       z.describe(
         "Your own ID for the job, unique in its Batch. Adding a job again with the same `customId` and the same content returns the job already added, so an add can be retried safely and a whole Batch added again to add only the jobs it lacks; with other content it is refused. A new job needs a new ID.",
@@ -455,6 +460,13 @@ const blobCheckSchema = z.discriminatedUnion("stored", [
 /**
  * The hub's public HTTP API, for people and their programs. Callers sign in as a member or send an
  * API key in `x-api-key`. A Runner's own calls are `runnerHttpContract`'s.
+ *
+ * Every object a request body carries is strict, so a field the API does not know, such as one
+ * renamed or misspelled, is refused with 400 naming it, rather than dropped and the request taken
+ * as if it were absent, as OpenAI's, Anthropic's and Stripe's APIs refuse it. Answers stay open, so
+ * the hub may add fields to them without breaking callers that check them. The inputs a path or
+ * query string alone carries, and the upload's headers, which carry far more than the API reads,
+ * keep oRPC's default.
  */
 export const apiContract = {
   runners: {
@@ -492,7 +504,7 @@ export const apiContract = {
       .errors({ BAD_REQUEST: {}, FORBIDDEN: {} })
       .meta(openapi({ method: "POST", path: "/api-keys" }), ...byMember)
       .input(
-        z.object({
+        z.strictObject({
           name: z.string(),
           permissions: permissionsSchema,
           expiresIn: z.optional(
@@ -528,9 +540,9 @@ export const apiContract = {
         ...byKey({ job: ["create"] }),
       )
       .input(
-        z.object({
+        z.strictObject({
           files: z
-            .array(blobRefSchema)
+            .array(z.strictObject(blobRefSchema.shape))
             .check(
               z.minLength(1),
               z.maxLength(MAX_FILES_PER_CHECK),
@@ -605,7 +617,8 @@ export const apiContract = {
         ...byKey({ job: ["create"] }),
       )
       .input(
-        z.extend(batchRefSchema, {
+        z.strictObject({
+          ...batchRefSchema.shape,
           jobs: z
             .array(jobSubmissionSchema)
             .check(
@@ -704,7 +717,7 @@ export const apiContract = {
         ...byKeyOrMember({ job: ["resume"] }),
       )
       .input(
-        z.object({
+        z.strictObject({
           ...jobRefSchema.shape,
           runTimeoutSeconds: z.optional(
             runTimeoutSecondsSchema.check(
