@@ -49,7 +49,7 @@ What an agent is told on every job, after the Runner's own instructions.
 _Avoid_: system prompt
 
 **Input**:
-What a job gives its Batch's agent to work on, as text, beside its Input files.
+What a job gives its Batch's agent to work on, as text, beside its Input files; a job with Input files of its own may give none.
 _Avoid_: prompt, query
 
 **Custom ID**:
@@ -73,11 +73,11 @@ A Batch's rule that pauses it when its jobs fail: on a failure in its Canary, or
 _Avoid_: fail-fast
 
 **Input file**:
-A file written into a job's workspace before its agent starts, such as a document, data or a script to run: the job's own, and its Batch's agent's, which every job of the Batch gets.
+A file written into a job's workspace before its agent starts, such as a document, data or a script to run, at its path in the `inputs` folder; its content is a Blob uploaded before the job.
 _Avoid_: attachment, input data
 
 **Blob**:
-Verified, immutable file content, identified by the SHA-256 of its original bytes, which Input files can share.
+Verified, immutable file content, identified by its digest, the SHA-256 of its original bytes, which Input files can share. An Organization may name a Blob in its jobs while it uploaded it in the last seven days or one of its jobs uses it.
 _Avoid_: object, upload, content
 
 **Output**:
@@ -127,5 +127,5 @@ Where a job's commands run and its files live, such as an OS sandbox of the job'
 _Avoid_: backend
 
 **Run**:
-One stretch of a job running on a runner. It begins with one message, the job's input or a resume's note, when the hub places the job there or resumes it, and ends at a decided stop, when the job pauses or ends, or when the hub drops it; a restart of its runner does not end it. Its ID fences what the runner reports, so nothing a past run does touches the next.
+One stretch of a job running on a runner. It begins with one message, the job's input (or a note pointing to its files when it has none) or a resume's note, when the hub places the job there or resumes it, and ends at a decided stop, when the job pauses or ends, or when the hub drops it; a restart of its runner does not end it. Its ID fences what the runner reports, so nothing a past run does touches the next.
 _Avoid_: execution, invocation

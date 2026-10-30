@@ -14,6 +14,7 @@ import type { default as JobEventChunkTable } from "./JobEventChunk.js";
 import type { default as JobProgressTable } from "./JobProgress.js";
 import type { default as MemberTable } from "./Member.js";
 import type { default as OrganizationTable } from "./Organization.js";
+import type { default as OrganizationBlobTable } from "./OrganizationBlob.js";
 import type { default as RateLimitTable } from "./RateLimit.js";
 import type { default as RunnerTable } from "./Runner.js";
 import type { default as SessionTable } from "./Session.js";
@@ -39,6 +40,8 @@ export default interface AgentBatchSchema {
   batch: BatchTable;
 
   uploadChunk: UploadChunkTable;
+
+  organizationBlob: OrganizationBlobTable;
 
   jobProgress: JobProgressTable;
 

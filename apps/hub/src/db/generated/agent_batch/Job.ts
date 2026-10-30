@@ -25,7 +25,7 @@ export default interface JobTable {
 
   status: ColumnType<JobStatus, JobStatus, JobStatus>;
 
-  input: ColumnType<string, string, string>;
+  input: ColumnType<string | null, string | null, string | null>;
 
   customId: ColumnType<string, string, string>;
 

@@ -6,16 +6,16 @@ import type { ColumnType, Selectable, Insertable, Updateable } from "kysely";
 
 import type { BatchId } from "./Batch.js";
 import type { BlobSha256 } from "./Blob.js";
-import type { InputFileName } from "./InputFile.js";
+import type { InputFilePath } from "./InputFile.js";
 
 /** Identifier type for agent_batch.batchInputFile */
-export type BatchInputFileName = Brand.Branded<string, "agent_batch.batchInputFile">;
+export type BatchInputFilePath = Brand.Branded<string, "agent_batch.batchInputFile">;
 
 /** Represents the table agent_batch.batchInputFile */
 export default interface BatchInputFileTable {
   batchId: ColumnType<BatchId, BatchId, BatchId>;
 
-  name: ColumnType<InputFileName, InputFileName, InputFileName>;
+  path: ColumnType<InputFilePath, InputFilePath, InputFilePath>;
 
   sha256: ColumnType<BlobSha256, BlobSha256, BlobSha256>;
 }

@@ -24,7 +24,7 @@ afterAll(() => system.stop());
 
 const SUBMISSION = {
   input: "Count to a million.",
-  inputFiles: {},
+  files: [],
   outputContract: { schema: { type: "integer" } },
 } satisfies OneJob;
 

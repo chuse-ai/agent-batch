@@ -81,40 +81,94 @@ export const modelBudgetUsdSchema = z.number().check(z.positive());
 /** File systems limit a file name to 255 bytes of UTF-8; `valid-filename` counts UTF-16 units. */
 const MAX_NAME_BYTES = 255;
 
-/** An Input file's name: one file name, without folders, valid wherever a Runner writes it. */
-export const fileNameSchema = textSchema.check(
-  z.refine(isValidFilename),
-  z.refine((name) => new TextEncoder().encode(name).length <= MAX_NAME_BYTES),
+/** Linux's `PATH_MAX`, in bytes, the most a path under `inputs/` may take. */
+const MAX_PATH_BYTES = 4096;
+
+const utf8Length = (text: string) => new TextEncoder().encode(text).length;
+
+/**
+ * An Input file's path in the job's `inputs` folder: file names, valid wherever a Runner writes
+ * them, separated by `/`, such as `invoice.pdf` or `claims/42/photo.jpg`. Relative, so neither a
+ * leading `/`, an empty name, `.` nor `..` (which `valid-filename` refuses) can leave the folder.
+ */
+export const filePathSchema = textSchema.check(
+  z.refine(
+    (path) =>
+      utf8Length(path) <= MAX_PATH_BYTES &&
+      path.split("/").every((name) => isValidFilename(name) && utf8Length(name) <= MAX_NAME_BYTES),
+    `Must be a relative path of file names valid on Linux, macOS and Windows, separated by \`/\`, each of at most ${MAX_NAME_BYTES} bytes, of at most ${MAX_PATH_BYTES} bytes in all`,
+  ),
 );
 
-/** An Input file's content, given inline as UTF-8 text. */
-export const inputFileSchema = z.object({ content: textSchema });
+/** Each path that `path` lies in, nearest last: `a` and `a/b` for `a/b/c`. */
+function foldersOf(path: string): string[] {
+  const names = path.split("/");
+  return names.slice(1).map((_, index) => names.slice(0, index + 1).join("/"));
+}
+
+/** The most bytes an Input file may hold, as one upload's request carries it whole. */
+export const MAX_FILE_BYTES = 100 * 1024 * 1024;
 
 /**
- * Files written into the job's Workspace before its agent starts, by file name, as GitHub's Gists
- * take them: the agent finds them all in one folder, and no two can share a name. Zod reports a bad
- * key without the key's own messages, so the record says what a name must be.
+ * Stored content's identity: `sha256:` and the SHA-256 of its bytes as lowercase hex, the algorithm
+ * written in the value, as OCI's digests and Git LFS's pointers write it.
  */
-export const inputFilesSchema = z.record(fileNameSchema, inputFileSchema, {
-  error: (issue) =>
-    issue.code === "invalid_key"
-      ? `Must be a file name that is valid on Linux, macOS and Windows, of at most ${MAX_NAME_BYTES} bytes`
-      : undefined,
+export const digestSchema = z
+  .string()
+  .check(z.regex(/^sha256:[0-9a-f]{64}$/, "Must be `sha256:` and 64 lowercase hexadecimal digits"));
+
+/** How many bytes a file holds: at most `MAX_FILE_BYTES`. */
+export const fileSizeBytesSchema = z.int().check(z.nonnegative(), z.maximum(MAX_FILE_BYTES));
+
+/** Stored content as a caller names it: its digest and its size in bytes. */
+export const contentRefSchema = z.object({
+  digest: digestSchema.check(z.describe("The content's digest, such as `sha256:9f86d0…`.")),
+  sizeBytes: fileSizeBytesSchema.check(z.describe("The content's size in bytes.")),
 });
 
-/** A SHA-256 digest as lowercase hex, as the hub names an Input file's blob. */
-export const sha256Schema = z.hash("sha256").check(z.lowercase());
+/**
+ * An Input file: its path in the job's `inputs` folder and the stored content it holds, named by
+ * digest and size, as uploaded before the job.
+ */
+export const inputFileSchema = z.extend(contentRefSchema, { path: filePathSchema });
 
 /**
- * An Input file as the hub lists it to a Runner: its name, the SHA-256 and size of its original
+ * Files written into the job's `inputs` folder before its agent starts, as sandbox APIs take them: a
+ * list of paths and contents, so a path, folders included, is a value rather than a key. No two may
+ * collide, as the same path or as a file and a folder.
+ */
+export const inputFilesSchema = z.array(inputFileSchema).check(
+  z.superRefine((files, context) => {
+    const first = new Map<string, number>();
+    files.forEach(({ path }, index) => {
+      if (!first.has(path)) first.set(path, index);
+    });
+    files.forEach(({ path }, index) => {
+      const same = first.get(path);
+      const folder = foldersOf(path).find((name) => first.has(name));
+      const message =
+        same !== undefined && same < index
+          ? `Must be unique, as files[${same}] has it`
+          : folder !== undefined
+            ? `Must not be in a folder that files[${first.get(folder)}] is as a file`
+            : undefined;
+      if (message !== undefined) {
+        context.addIssue({ code: "custom", message, path: [index, "path"], input: path });
+      }
+    });
+  }),
+);
+
+/**
+ * An Input file as the hub lists it to a Runner: its path, the digest and size of its original
  * bytes, which the Runner checks what it downloads against, and how many original bytes each of its
  * chunks holds but the last, which holds the rest. The hub compresses each chunk as one zstd frame,
  * and the Runner downloads a file a chunk at a time, so chunk `n` starts at byte `n * chunkBytes`.
  * The hub stores each file with the chunk size it chose then, so it can choose another for new files.
  */
 export const listedInputFileSchema = z.object({
-  name: fileNameSchema,
-  sha256: sha256Schema,
+  path: filePathSchema,
+  digest: digestSchema,
   originalSizeBytes: z.int().check(z.nonnegative()),
   chunkBytes: z.int32().check(z.positive()),
 });

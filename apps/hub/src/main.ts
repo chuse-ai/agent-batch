@@ -1,10 +1,11 @@
 import path from "node:path";
 
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
-import { Config, Effect, Layer, Option, Redacted } from "effect";
+import { Config, Effect, Layer, Option, Redacted, Schedule } from "effect";
 import ensureError from "ensure-error";
 
 import { createApp, decideRunnerUpgrade } from "./app.ts";
+import { sweepUnusedContent } from "./blobs.ts";
 import { migrateDatabase } from "./db/migrate.ts";
 import { NodeRunnerSockets, nodeServices } from "./node/layers.ts";
 import { startServer, stopServer } from "./node/server.ts";
@@ -68,6 +69,19 @@ function hubServer(port: number) {
   );
 }
 
+/**
+ * The sweep of content nothing uses, at start and every hour after, as the Workers hub's Cron
+ * Trigger runs it there; a sweep that fails is logged, and the next one tries again.
+ */
+const sweeper = Layer.effectDiscard(
+  Effect.forkScoped(
+    sweepUnusedContent.pipe(
+      Effect.catchCause(Effect.logError),
+      Effect.repeat(Schedule.spaced("1 hour")),
+    ),
+  ),
+);
+
 Effect.gen(function* () {
   const settings = yield* nodeSettings;
   const databaseUrl = Redacted.value(settings.databaseUrl);
@@ -83,7 +97,9 @@ Effect.gen(function* () {
     catch: ensureError,
   });
   return yield* Layer.launch(
-    hubServer(settings.port).pipe(Layer.provide(nodeServices(settings.hub, databaseUrl))),
+    Layer.mergeAll(hubServer(settings.port), sweeper).pipe(
+      Layer.provide(nodeServices(settings.hub, databaseUrl)),
+    ),
   );
 }).pipe(
   Effect.catchTag("ConfigError", (error) =>

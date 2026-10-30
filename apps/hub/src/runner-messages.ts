@@ -759,19 +759,19 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                       instructions: eb.ref("batch.instructions"),
                       input: eb.ref("wanted.input"),
                       outputContract: eb.ref("batch.outputContract"),
-                      // The files, the agent's and the job's own, by name, SHA-256, size and chunk
+                      // The files, the agent's and the job's own, by path, SHA-256, size and chunk
                       // size, without their bytes, which the Runner downloads a chunk at a time.
-                      inputFiles: jsonArrayFrom(
+                      files: jsonArrayFrom(
                         eb
                           .selectFrom((files) =>
                             files
                               .selectFrom("batchInputFile")
-                              .select(["batchInputFile.name", "batchInputFile.sha256"])
+                              .select(["batchInputFile.path", "batchInputFile.sha256"])
                               .whereRef("batchInputFile.batchId", "=", "wanted.batchId")
                               .unionAll(
                                 files
                                   .selectFrom("inputFile")
-                                  .select(["inputFile.name", "inputFile.sha256"])
+                                  .select(["inputFile.path", "inputFile.sha256"])
                                   .whereRef("inputFile.jobId", "=", "wanted.id"),
                               )
                               .as("file"),
@@ -779,10 +779,10 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                           .innerJoin("blob", "blob.sha256", "file.sha256")
                           .innerJoin("upload", "upload.sha256", "file.sha256")
                           .select((fileEb) => [
-                            "file.name",
-                            fileEb
-                              .fn<string>("encode", ["blob.sha256", fileEb.val("hex")])
-                              .as("sha256"),
+                            "file.path",
+                            sql<string>`'sha256:' || encode(${fileEb.ref("blob.sha256")}, 'hex')`.as(
+                              "digest",
+                            ),
                             "blob.originalSizeBytes",
                             "upload.chunkBytes",
                           ]),

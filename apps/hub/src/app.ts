@@ -8,10 +8,12 @@ import { SmartCoercionHandlerPlugin } from "@orpc/json-schema";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { OpenAPIReferenceHandlerPlugin } from "@orpc/openapi/plugins";
 import { implement, ValidationError } from "@orpc/server";
+import { RequestLimitHandlerPlugin } from "@orpc/server/plugins";
 import { ZodToJsonSchemaConverter } from "@orpc/zod";
 import {
   apiContract,
   getAccess,
+  MAX_FILE_BYTES,
   NotFound,
   PROTOCOL_UNSUPPORTED,
   RUNNER_CONNECT_PATH,
@@ -40,11 +42,12 @@ import {
 } from "./auth/auth.ts";
 import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
 import { addJobs, cancelBatch, createBatch, getBatch, controlBatch } from "./batches.ts";
+import { checkBlobs, uploadBlob } from "./blobs.ts";
 import {
   ApikeyId,
   BatchId,
   EventId,
-  InputFileName,
+  InputFilePath,
   JobId,
   RunnerId,
   UploadChunkIndex,
@@ -211,6 +214,24 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
         );
       }),
     },
+    blobs: {
+      check: os.blobs.check.effect(function* ({ input, errors }) {
+        const files = yield* checkBlobs(input.files).pipe(
+          Effect.catchTag("InvalidInput", ({ problems }) =>
+            Effect.fail(invalidInput(errors, input, problems)),
+          ),
+        );
+        return { files };
+      }),
+      upload: os.blobs.upload.effect(function* ({ input, errors }) {
+        const { params, headers, body } = input;
+        return yield* uploadBlob(params.digest, Number(headers["content-length"]), body).pipe(
+          Effect.catchTag("InvalidInput", ({ problems }) =>
+            Effect.fail(invalidInput(errors, { params, headers }, problems)),
+          ),
+        );
+      }),
+    },
     batches: {
       create: os.batches.create.effect(function* ({ input, context, errors }) {
         const key = yield* callerKey(context.caller);
@@ -301,13 +322,13 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
       getInputFileChunk: os.runnerProtocol.getInputFileChunk.effect(function* ({ input, context }) {
         const key = yield* callerKey(context.caller);
         const runnerId = yield* findRunnerByKey(ApikeyId(key.id));
-        // The IDs and the name enter the hub here.
+        // The IDs and the path enter the hub here.
         const chunk =
           runnerId &&
           (yield* readInputFileChunk(
             runnerId,
             JobId(input.id),
-            InputFileName(input.name),
+            InputFilePath(input.path),
             UploadChunkIndex(input.index),
           ));
         if (!chunk) return yield* Effect.fail(new NotFound());
@@ -316,12 +337,30 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
     },
   });
 
+/**
+ * The most bytes a JSON request's body may hold: oRPC reads it whole and parses it before the
+ * handler runs, and a Workers isolate has 128 MB for every request it serves. Provisional, until a
+ * limit on a request is set; an upload's body, read as it arrives, has its own.
+ */
+const MAX_BODY_BYTES = 16 * 1024 * 1024;
+
+// A query string's values arrive as text; this turns them into what the input's schema expects,
+// such as `after=42` into a number.
+const coercion = new SmartCoercionHandlerPlugin({ converters: [new ZodToJsonSchemaConverter()] });
+
+// The same router behind two handlers, as oRPC's request limit is one per handler: uploads, whose
+// body the hub reads as it arrives, may be as large as a file, and everything else as large as a
+// JSON body.
+const uploads = new OpenAPIHandler(router, {
+  customErrorResponseBodyEncoder: toProblemDetails,
+  plugins: [new RequestLimitHandlerPlugin({ maxBodySize: MAX_FILE_BYTES }), coercion],
+});
+
 const api = new OpenAPIHandler(router, {
   customErrorResponseBodyEncoder: toProblemDetails,
   plugins: [
-    // A query string's values arrive as text; this turns them into what the input's schema
-    // expects, such as `after=42` into a number.
-    new SmartCoercionHandlerPlugin({ converters: [new ZodToJsonSchemaConverter()] }),
+    new RequestLimitHandlerPlugin({ maxBodySize: MAX_BODY_BYTES }),
+    coercion,
     // The OpenAPI document at `/spec.json` and a browsable reference of it at `/`, oRPC's defaults.
     // The document names the session cookie of the hub's deployment, so it is generated from the
     // request's services. The reference page runs on the origin where members sign in, so its
@@ -459,9 +498,10 @@ export function createApp<Bindings extends object>(platform: HubPlatform<Binding
       c.env,
       Effect.contextWith((services: Context.Context<HubServices>) =>
         Effect.promise(() =>
-          api.handle(c.req.raw, {
-            context: { "effect/context": services, headers: c.req.raw.headers },
-          }),
+          (c.req.method === "PUT" && c.req.path.startsWith("/blobs/") ? uploads : api).handle(
+            c.req.raw,
+            { context: { "effect/context": services, headers: c.req.raw.headers } },
+          ),
         ),
       ),
     );

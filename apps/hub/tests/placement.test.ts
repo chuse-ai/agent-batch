@@ -21,7 +21,7 @@ const SUBMISSION = {
       required: ["greeting"],
     },
   },
-} satisfies Omit<OneJob, "inputFiles">;
+} satisfies Omit<OneJob, "files">;
 
 /** The output the scripted agent submits, which matches the Output contract. */
 const OUTPUT = { greeting: "Hello." };
