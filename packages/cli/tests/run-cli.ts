@@ -73,18 +73,26 @@ export async function runCli(
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   let stopped = false;
   let ticking: Promise<boolean> | undefined;
-  async function restore() {
-    if (stopped) return;
+  let restored: Promise<void> | undefined;
+  // The run's end and the test's end, as by Vitest's timeout, both restore; whichever comes second
+  // waits for the first.
+  function restore() {
     stopped = true;
-    // A tick may still be advancing timers when the command or Vitest's timeout ends the run.
-    await ticking;
-    process.exitCode = exitCode;
-    vi.useRealTimers();
-    for (const write of writes) write.mockRestore();
-    process.chdir(cwd);
-    vi.unstubAllEnvs();
-    // A request the hub never answers ends with the run.
-    hub.closeAllConnections();
+    restored ??= (async () => {
+      try {
+        // A tick may still be advancing timers when the run ends.
+        await ticking;
+      } finally {
+        process.exitCode = exitCode;
+        vi.useRealTimers();
+        for (const write of writes) write.mockRestore();
+        process.chdir(cwd);
+        vi.unstubAllEnvs();
+        // A request the hub never answers ends with the run.
+        hub.closeAllConnections();
+      }
+    })();
+    return restored;
   }
   onTestFinished(restore);
   try {
