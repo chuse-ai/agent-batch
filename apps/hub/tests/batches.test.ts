@@ -212,6 +212,13 @@ test("jobs are listed by label, status, Batch and custom ID, newest first, with 
     await response.json(),
   );
   expect(page.jobs.map((listed) => listed.customId)).toEqual(["y"]);
+
+  // A misspelled filter is refused, not ignored to answer with every job.
+  const misspelled = await system.hub.fetch(`/jobs?statuses=queued&batchId=${batch.id}`, {
+    headers: { "x-api-key": await system.newJobsKey() },
+  });
+  expect(misspelled.status).toBe(400);
+  expect(await misspelled.json()).toMatchObject({ detail: expect.stringContaining('"statuses"') });
   await client.batches.cancel({ id: batch.id });
 });
 

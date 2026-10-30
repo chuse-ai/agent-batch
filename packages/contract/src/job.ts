@@ -11,7 +11,7 @@ import * as z from "zod/mini";
 export const jobIdSchema = z.uuid();
 
 /** A job as a call names it. */
-export const jobRefSchema = z.object({ id: jobIdSchema.check(z.describe("The job's ID.")) });
+export const jobRefSchema = z.strictObject({ id: jobIdSchema.check(z.describe("The job's ID.")) });
 
 /**
  * Text as a job keeps it. JSON can carry a lone UTF-16 surrogate, which is not Unicode text and which

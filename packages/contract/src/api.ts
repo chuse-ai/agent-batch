@@ -364,7 +364,7 @@ export const addedJobsSchema = z
 export type AddedJobs = z.infer<typeof addedJobsSchema>;
 
 /** A Batch as a call names it. */
-export const batchRefSchema = z.object({ id: z.uuid().check(z.describe("The Batch's ID.")) });
+export const batchRefSchema = z.strictObject({ id: z.uuid().check(z.describe("The Batch's ID.")) });
 
 /**
  * A job as a list reports it: without its content, so without its output, its failure's message
@@ -461,12 +461,12 @@ const blobCheckSchema = z.discriminatedUnion("stored", [
  * The hub's public HTTP API, for people and their programs. Callers sign in as a member or send an
  * API key in `x-api-key`. A Runner's own calls are `runnerHttpContract`'s.
  *
- * Every object a request body carries is strict, so a field the API does not know, such as one
- * renamed or misspelled, is refused with 400 naming it, rather than dropped and the request taken
- * as if it were absent, as OpenAI's, Anthropic's and Stripe's APIs refuse it. Answers stay open, so
- * the hub may add fields to them without breaking callers that check them. The inputs a path or
- * query string alone carries, and the upload's headers, which carry far more than the API reads,
- * keep oRPC's default.
+ * Every input object is strict, so a parameter the API does not know, in the body or a read's query
+ * string, such as one renamed or misspelled, is refused with 400 naming it, rather than ignored and
+ * the request taken as if it were absent (ADR 0010). oRPC merges a read's query string into its
+ * input and a write's body, so a write's query string never reaches the schema. Answers stay open,
+ * so the hub may add fields to them without breaking callers that check them, and so do the
+ * upload's headers, which carry far more than the API reads.
  */
 export const apiContract = {
   runners: {
@@ -485,7 +485,7 @@ export const apiContract = {
         }),
         ...byMember,
       )
-      .input(z.object({ id: z.string() }))
+      .input(z.strictObject({ id: z.string() }))
       .output(
         z.object({
           endedJobs: z.array(jobIdSchema).check(z.describe("The jobs the removal ended.")),
@@ -526,7 +526,7 @@ export const apiContract = {
     revoke: api
       .errors({ FORBIDDEN: {}, [NotFound.code]: NotFound })
       .meta(openapi({ method: "DELETE", path: "/api-keys/{id}" }), ...byMember)
-      .input(z.object({ id: z.string() })),
+      .input(z.strictObject({ id: z.string() })),
   },
   blobs: {
     check: forOrganization
@@ -775,7 +775,7 @@ export const apiContract = {
         ...byKeyOrMember({ job: ["read"] }),
       )
       .input(
-        z.object({
+        z.strictObject({
           ...jobRefSchema.shape,
           after: z._default(
             z
@@ -814,7 +814,7 @@ export const apiContract = {
         ...byKeyOrMember({ job: ["read"] }),
       )
       .input(
-        z.object({
+        z.strictObject({
           status: z.optional(
             z
               .array(jobStatusSchema)
