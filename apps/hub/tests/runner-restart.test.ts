@@ -67,7 +67,7 @@ test(
       const { id } = yield* Effect.promise(() =>
         submitJob(client, {
           input: "Mark the file once.",
-          resultContract: {
+          outputContract: {
             schema: {
               type: "object",
               properties: { lines: { type: "integer" } },
@@ -83,7 +83,7 @@ test(
       yield* Effect.promise(() =>
         expect
           .poll(() => client.jobs.get({ id }), { timeout: 20_000 })
-          .toMatchObject({ status: "succeeded", result: { lines: 1 } }),
+          .toMatchObject({ status: "succeeded", output: { lines: 1 } }),
       );
       // The job's events record its recovery by the restarted Runner, between its start and end.
       const { events } = yield* Effect.promise(() => client.jobs.events({ id }));

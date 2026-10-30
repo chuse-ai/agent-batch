@@ -1,6 +1,6 @@
 # agent-batch
 
-Runs many one-off AI agent jobs unattended, each returning a result that meets a declared contract, on the organization's provisioned Runners.
+Runs many one-off AI agent jobs unattended, each returning an output that meets a declared contract, on the organization's provisioned Runners.
 
 ## Language
 
@@ -41,7 +41,7 @@ Jobs that run one agent, added to it over one or more requests, and released, pa
 _Avoid_: group, campaign, members (a member is a person)
 
 **Agent**:
-What every job of a Batch runs: its instructions, Result contract, limits and shared Input files, set when the Batch is created and never changed. A Runner's own instructions, model and tools complete it.
+What every job of a Batch runs: its instructions, Output contract, limits and shared Input files, set when the Batch is created and never changed. A Runner's own instructions, model and tools complete it.
 _Avoid_: template
 
 **Instructions**:
@@ -80,9 +80,17 @@ _Avoid_: attachment, input data
 Verified, immutable file content, identified by the SHA-256 of its original bytes, which Input files can share.
 _Avoid_: object, upload, content
 
-**Result contract**:
-The JSON Schema a job's result must satisfy before the job counts as succeeded. It governs the result only.
-_Avoid_: output contract, output format, response schema
+**Output**:
+The value a job's agent submits and its Output contract accepts, which makes the job succeeded: not the agent's messages, the command output in its tool results, or the files it leaves in its Workspace.
+_Avoid_: result, answer
+
+**Output contract**:
+What a job's output must satisfy before the job counts as succeeded: its Output schema. It governs the output only.
+_Avoid_: result contract, output format
+
+**Output schema**:
+The JSON Schema in an Output contract that a job's output must match.
+_Avoid_: response schema
 
 **Event**:
 One item of what a job did: a message, tool call or tool result from the job's agent, or something the Runner records about the job, such as its start, recovery or end; a job's events are kept in order, across its runs and after it ends.

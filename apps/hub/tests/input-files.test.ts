@@ -23,7 +23,7 @@ afterAll(() => system.stop());
 const SUBMISSION = {
   input: "Read the report.",
   inputFiles: {},
-  resultContract: { schema: {} },
+  outputContract: { schema: {} },
 } satisfies OneJob;
 
 /** Text of more than two chunks, with characters of several bytes across the chunks' boundaries. */
@@ -100,7 +100,7 @@ test("one add stores and serves every Input file across many jobs", async () => 
   const client = await system.clientWithNewJobsKey();
   const shared = { content: "Shared across the add." };
   const batch = await client.batches.create({
-    agent: { resultContract: { schema: {} }, inputFiles: { "shared.txt": shared } },
+    agent: { outputContract: { schema: {} }, inputFiles: { "shared.txt": shared } },
     breaker: false,
   });
   const jobs = Array.from({ length: 100 }, (_, index) => ({
@@ -182,7 +182,7 @@ test("deleting a job deletes the content of its Input files that no other job us
 });
 
 test("the Runner puts a job's Input files in its Workspace as they were submitted", async () => {
-  system.model.setResponses([callTool("submit_result", { value: "done" })]);
+  system.model.setResponses([callTool("submit_output", { value: "done" })]);
   const client = await system.clientWithNewJobsKey();
   await system.startRunner();
   try {

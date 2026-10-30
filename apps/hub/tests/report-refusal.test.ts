@@ -17,7 +17,7 @@ afterAll(() => system.stop());
 const SUBMISSION = {
   input: "Count to three.",
   inputFiles: {},
-  resultContract: { schema: { type: "integer" } },
+  outputContract: { schema: { type: "integer" } },
 } satisfies OneJob;
 
 /** A Runner's own entry, first in its job's journal. */
@@ -28,7 +28,7 @@ function entry(kind: string, data: unknown) {
 // Node 22's JSON.stringify overflows on the 5,000-level fixture before it reaches the hub.
 // Let the protocol client serialize this marker, then replace its quoted JSON string with
 // the nested JSON text before sending, so the test exercises the hub's depth check.
-const NESTED_RESULT = "__nested_result__";
+const NESTED_OUTPUT = "__nested_output__";
 
 /** A Runner's side of the protocol over `socket`. */
 function protocolClient(socket: WebSocket, depth: number | undefined) {
@@ -37,7 +37,7 @@ function protocolClient(socket: WebSocket, depth: number | undefined) {
       depth === undefined
         ? text
         : text.replace(
-            JSON.stringify(NESTED_RESULT),
+            JSON.stringify(NESTED_OUTPUT),
             '{"child":'.repeat(depth) + "0" + "}".repeat(depth),
           ),
     ),
@@ -50,13 +50,13 @@ function protocolClient(socket: WebSocket, depth: number | undefined) {
 }
 
 test.each([
-  { problem: "missing result", depth: undefined },
-  { problem: "result nested 65 containers deep", depth: 65 },
-  { problem: "result nested 5,000 containers deep", depth: 5_000 },
+  { problem: "missing output", depth: undefined },
+  { problem: "output nested 65 containers deep", depth: 65 },
+  { problem: "output nested 5,000 containers deep", depth: 5_000 },
 ])("a $problem refuses only that job's report", async ({ depth }) => {
   const client = await system.clientWithNewJobsKey();
-  const result = JSON.parse('{"child":'.repeat(64) + "0" + "}".repeat(64));
-  const good = await submitJob(client, { ...SUBMISSION, resultContract: { schema: {} } });
+  const output = JSON.parse('{"child":'.repeat(64) + "0" + "}".repeat(64));
+  const good = await submitJob(client, { ...SUBMISSION, outputContract: { schema: {} } });
   const bad = await submitJob(client, SUBMISSION);
   const { socket } = await system.connectRunner();
   const runner = protocolClient(socket, depth);
@@ -83,7 +83,7 @@ test.each([
           events: [
             entry(JOB_SUCCEEDED, {
               timestamp: Date.now(),
-              result,
+              output,
             }),
           ],
         },
@@ -94,7 +94,7 @@ test.each([
           events: [
             entry(JOB_SUCCEEDED, {
               timestamp: Date.now(),
-              ...(depth === undefined ? {} : { result: NESTED_RESULT }),
+              ...(depth === undefined ? {} : { output: NESTED_OUTPUT }),
             }),
           ],
         },
@@ -112,7 +112,7 @@ test.each([
           : expect.stringContaining("JSON must not nest more than 64 containers"),
     },
   ]);
-  expect(await client.jobs.get({ id: good.id })).toMatchObject({ status: "succeeded", result });
+  expect(await client.jobs.get({ id: good.id })).toMatchObject({ status: "succeeded", output });
   expect((await client.jobs.get({ id: bad.id })).status).toBe("queued");
   socket.close(1000);
 });

@@ -33,7 +33,7 @@ import {
   insertUsageRecords,
   limitProblems,
   readJobs,
-  resultContractProblems,
+  outputContractProblems,
   type Submitter,
   UNFINISHED,
   USAGE_COPIED_COLUMNS,
@@ -173,13 +173,13 @@ export function getBatch(batchId: BatchId) {
 
 /**
  * What is wrong with `agent` that the contract's schemas cannot check, with paths from the
- * creation: its Result contract's schema, and limits above the hub's maximums.
+ * creation: its Output contract's schema, and limits above the hub's maximums.
  */
 function agentProblems(agent: Agent, settings: HubSettings["jobLimits"]) {
   return [
-    ...resultContractProblems(agent.resultContract.schema).map((message) => ({
+    ...outputContractProblems(agent.outputContract.schema).map((message) => ({
       message,
-      path: ["agent", "resultContract", "schema"],
+      path: ["agent", "outputContract", "schema"],
     })),
     ...limitProblems(agent, settings).map(({ message, path }) => ({
       message,
@@ -225,7 +225,7 @@ export function createBatch(
             customId,
             contentHash,
             instructions: agent.instructions,
-            resultContract: agent.resultContract,
+            outputContract: agent.outputContract,
             runTimeoutSeconds: agent.runTimeoutSeconds ?? settings.runTimeoutSecondsDefault,
             modelBudgetUsd: agent.modelBudgetUsd ?? settings.modelBudgetUsdDefault,
             labels: creation.labels,

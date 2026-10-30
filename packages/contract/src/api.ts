@@ -14,7 +14,7 @@ import {
   labelValueSchema,
   MAX_LABELS,
   modelBudgetUsdSchema,
-  resultContractSchema,
+  outputContractSchema,
   runTimeoutSecondsSchema,
 } from "./job.ts";
 import { api, byKey, byKeyOrMember, byMember, forOrganization, NotFound } from "./procedure.ts";
@@ -70,7 +70,7 @@ export type JobStatus = z.infer<typeof jobStatusSchema>;
 /** The statuses a job ends in: once a job reaches one, nothing more happens to it unless it is resumed. */
 export const FINAL_JOB_STATUSES: readonly JobStatus[] = ["succeeded", "failed", "cancelled"];
 
-/** Any JSON value, such as a job's result: what its Result contract's schema accepts. */
+/** Any JSON value, such as a job's output: what its Output contract's schema accepts. */
 export type { JsonValue } from "type-fest";
 
 /** What a job reports whatever its status. */
@@ -116,7 +116,7 @@ const jobBaseSchema = z.object({
    * A control the job's Runner has not yet acted on, beside the last `status` it confirmed: present
    * only while it waits. A pause or cancel waits for a job its Runner may be running, until
    * the Runner stops the job, which is then `paused` or ends `cancelled`, or the job ends first,
-   * with its own status and result. A cancel replaces a waiting pause. A delete waits for the job's
+   * with its own status and output. A cancel replaces a waiting pause. A delete waits for the job's
    * Runner to delete its files from its host.
    */
   pendingControl: z.optional(
@@ -144,7 +144,7 @@ const jobBaseSchema = z.object({
 });
 
 /**
- * A job as the hub reports it: once it has succeeded, with its `result`, and once it has failed,
+ * A job as the hub reports it: once it has succeeded, with its `output`, and once it has failed,
  * with its `failure`. Only a caller pauses or cancels a job, so `paused` and `cancelled` carry no
  * reason.
  */
@@ -153,8 +153,8 @@ export const jobSchema = z
     z.extend(jobBaseSchema, { status: z.enum(["queued", "running", "paused", "cancelled"]) }),
     z.extend(jobBaseSchema, {
       status: z.literal("succeeded"),
-      /** The job's result. Absent once the job is deleted, as its content is. */
-      result: z.optional(z.unknown()),
+      /** The job's output. Absent once the job is deleted, as its content is. */
+      output: z.optional(z.unknown()),
     }),
     z.extend(jobBaseSchema, {
       status: z.literal("failed"),
@@ -181,8 +181,8 @@ export const agentSchema = z
         ),
       ),
     ),
-    resultContract: resultContractSchema.check(
-      z.describe("What each job's result must be: `schema`, a JSON Schema the result must match."),
+    outputContract: outputContractSchema.check(
+      z.describe("What each job's output must be: `schema`, a JSON Schema the output must match."),
     ),
     runTimeoutSeconds: z.optional(
       runTimeoutSecondsSchema.check(
@@ -365,7 +365,7 @@ export type AddedJobs = z.infer<typeof addedJobsSchema>;
 export const batchRefSchema = z.object({ id: z.uuid().check(z.describe("The Batch's ID.")) });
 
 /**
- * A job as a list reports it: without its content, so without its result, its failure's message
+ * A job as a list reports it: without its content, so without its output, its failure's message
  * and its activity. Read the job for those.
  */
 const listedJobBaseSchema = z.omit(jobBaseSchema, { activity: true });
@@ -425,7 +425,7 @@ export const CustomIdReused = error("UNPROCESSABLE_CONTENT");
 // Calls a member's role does not allow fail with `FORBIDDEN`, and invalid ones with `BAD_REQUEST`.
 // Where Better Auth decides, the hub passes its `FORBIDDEN` through, declared without a factory;
 // removing a Runner raises `Forbidden` itself. The hub raises `BAD_REQUEST` itself only for what the
-// contract's schemas cannot check, such as a Result contract's schema.
+// contract's schemas cannot check, such as an Output contract's schema.
 
 /**
  * The hub's public HTTP API, for people and their programs. Callers sign in as a member or send an
@@ -502,7 +502,7 @@ export const apiContract = {
           method: "POST",
           path: "/batches",
           description:
-            "Creates a Batch, without jobs, and answers with it: the `agent` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with `POST /batches/{id}/jobs`. The hub checks the Result contract's schema, refusing one that is invalid, describes a list or refers outside itself. A `customId` makes the creation safe to retry: the same `customId` with the same `agent`, `labels` and `breaker` answers with the Batch already created, and with any of them different is refused.",
+            "Creates a Batch, without jobs, and answers with it: the `agent` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with `POST /batches/{id}/jobs`. The hub checks the Output contract's schema, refusing one that is invalid, describes a list or refers outside itself. A `customId` makes the creation safe to retry: the same `customId` with the same `agent`, `labels` and `breaker` answers with the Batch already created, and with any of them different is refused.",
         }),
         ...byKey({ job: ["create"] }),
       )
@@ -649,7 +649,7 @@ export const apiContract = {
           method: "POST",
           path: "/jobs/{id}/cancel",
           description:
-            "Cancels a job and answers with the job. A job not yet sent to a Runner, or paused, ends `cancelled` at once. Otherwise the cancel waits for its Runner, shown as `pendingControl`, replacing a waiting pause, and the job ends `cancelled` once the Runner has stopped it, keeping its events and costs. A job that has ended, or ends before its Runner stops it, keeps the status and result it ended with.",
+            "Cancels a job and answers with the job. A job not yet sent to a Runner, or paused, ends `cancelled` at once. Otherwise the cancel waits for its Runner, shown as `pendingControl`, replacing a waiting pause, and the job ends `cancelled` once the Runner has stopped it, keeping its events and costs. A job that has ended, or ends before its Runner stops it, keeps the status and output it ended with.",
         }),
         ...byKeyOrMember({ job: ["cancel"] }),
       )
@@ -663,7 +663,7 @@ export const apiContract = {
           method: "DELETE",
           path: "/jobs/{id}",
           description:
-            "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with `deletedAt` and a waiting `delete`, and then as not found. Its Usage record stays, and so does its Batch, with the agent's instructions, Result contract and Input files. An unfinished job is refused: cancel it first.",
+            "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with `deletedAt` and a waiting `delete`, and then as not found. Its Usage record stays, and so does its Batch, with the agent's instructions, Output contract and Input files. An unfinished job is refused: cancel it first.",
         }),
         ...byKeyOrMember({ job: ["delete"] }),
       )
@@ -713,7 +713,7 @@ export const apiContract = {
           method: "GET",
           path: "/jobs",
           description:
-            "Lists jobs, newest first, in pages of at most `limit`. Filters combine: a job is listed when it has one of the `status` values given, every label in `labels`, and the `batchId` and `customId` given. Read the next page with the same filters and `after` set to the last job's `id`, while the page says `hasMore`. A listed job has no `result`, failure `message` or `activity`: read the job for those.",
+            "Lists jobs, newest first, in pages of at most `limit`. Filters combine: a job is listed when it has one of the `status` values given, every label in `labels`, and the `batchId` and `customId` given. Read the next page with the same filters and `after` set to the last job's `id`, while the page says `hasMore`. A listed job has no `output`, failure `message` or `activity`: read the job for those.",
           // Repeated `status=…` parameters, a single one included, read as a list.
           queryStyles: { status: "array" },
         }),

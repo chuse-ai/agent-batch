@@ -10,7 +10,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Creates a Batch, without jobs, and answers with it: the \`agent\` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with \`POST /batches/{id}/jobs\`. The hub checks the Result contract's schema, refusing one that is invalid, describes a list or refers outside itself. A \`customId\` makes the creation safe to retry: the same \`customId\` with the same \`agent\`, \`labels\` and \`breaker\` answers with the Batch already created, and with any of them different is refused.",
+          "description": "Creates a Batch, without jobs, and answers with it: the \`agent\` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with \`POST /batches/{id}/jobs\`. The hub checks the Output contract's schema, refusing one that is invalid, describes a list or refers outside itself. A \`customId\` makes the creation safe to retry: the same \`customId\` with the same \`agent\`, \`labels\` and \`breaker\` answers with the Batch already created, and with any of them different is refused.",
           "name": "create",
           "options": [
             {
@@ -361,7 +361,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Cancels a job and answers with the job. A job not yet sent to a Runner, or paused, ends \`cancelled\` at once. Otherwise the cancel waits for its Runner, shown as \`pendingControl\`, replacing a waiting pause, and the job ends \`cancelled\` once the Runner has stopped it, keeping its events and costs. A job that has ended, or ends before its Runner stops it, keeps the status and result it ended with.",
+          "description": "Cancels a job and answers with the job. A job not yet sent to a Runner, or paused, ends \`cancelled\` at once. Otherwise the cancel waits for its Runner, shown as \`pendingControl\`, replacing a waiting pause, and the job ends \`cancelled\` once the Runner has stopped it, keeping its events and costs. A job that has ended, or ends before its Runner stops it, keeps the status and output it ended with.",
           "name": "cancel",
           "options": [
             {
@@ -390,7 +390,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with \`deletedAt\` and a waiting \`delete\`, and then as not found. Its Usage record stays, and so does its Batch, with the agent's instructions, Result contract and Input files. An unfinished job is refused: cancel it first.",
+          "description": "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with \`deletedAt\` and a waiting \`delete\`, and then as not found. Its Usage record stays, and so does its Batch, with the agent's instructions, Output contract and Input files. An unfinished job is refused: cancel it first.",
           "name": "delete",
           "options": [
             {
@@ -469,7 +469,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Lists jobs, newest first, in pages of at most \`limit\`. Filters combine: a job is listed when it has one of the \`status\` values given, every label in \`labels\`, and the \`batchId\` and \`customId\` given. Read the next page with the same filters and \`after\` set to the last job's \`id\`, while the page says \`hasMore\`. A listed job has no \`result\`, failure \`message\` or \`activity\`: read the job for those.",
+          "description": "Lists jobs, newest first, in pages of at most \`limit\`. Filters combine: a job is listed when it has one of the \`status\` values given, every label in \`labels\`, and the \`batchId\` and \`customId\` given. Read the next page with the same filters and \`after\` set to the last job's \`id\`, while the page says \`hasMore\`. A listed job has no \`output\`, failure \`message\` or \`activity\`: read the job for those.",
           "name": "list",
           "options": [
             {

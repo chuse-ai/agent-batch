@@ -42,7 +42,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await schema
     .createType("jobFailureReason")
     .asEnum([
-      "noResult",
+      "noOutput",
       "runTimedOut",
       "modelBudgetExceeded",
       "modelFailed",
@@ -139,7 +139,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     // each limit it left out. Its Input files are `batchInputFile`'s.
     // What the agent is told beside the Runner's own instructions; null when the agent has none.
     .addColumn("instructions", "text")
-    .addColumn("resultContract", "jsonb", (col) => col.notNull())
+    .addColumn("outputContract", "jsonb", (col) => col.notNull())
     // Each job takes these limits when it is added; a job's resume may give it others.
     .addColumn("runTimeoutSeconds", "integer", (col) =>
       col.notNull().check(sql`"runTimeoutSeconds" > 0`),
@@ -231,7 +231,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("submitterMemberId", "text", (col) => col.notNull())
     .addColumn("createdAt", "timestamptz", (col) => col.notNull())
     // The job's current run (ADR 0026): its Runner, when its agent's loop started and ended, and its
-    // result. The loop's times are the Runner's clock, as its reports give them, since a report may
+    // output. The loop's times are the Runner's clock, as its reports give them, since a report may
     // arrive a sync interval late; an end the hub makes itself, as when it cancels a job no Runner
     // was sent, is the hub's clock.
     .addColumn("runnerId", "text")
@@ -242,7 +242,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("placedAt", "timestamptz")
     .addColumn("startedAt", "timestamptz")
     .addColumn("endedAt", "timestamptz")
-    .addColumn("result", "jsonb")
+    // Null until the job succeeds: an output of JSON `null` is stored as the jsonb value `null`.
+    .addColumn("output", "jsonb")
     // A control the job's Runner has not yet acted on: which, and when it was asked for, by the
     // hub's clock. The job's summary reads both as `pendingControl`, and each sync of the job's
     // Runner reads which as the placement's intent. Both are null while none waits: a control the hub

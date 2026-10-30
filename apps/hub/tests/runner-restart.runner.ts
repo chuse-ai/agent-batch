@@ -8,7 +8,7 @@ import { callTool, scriptedModel, untilAborted } from "./scripted-model.ts";
 // the hub's URL, the key Runners register with, the data directory, and the phase, which sets what
 // its scripted model does: before the kill, the agent appends a line to a file, and the model call
 // after that tells the test, on file descriptor 3, that it is waiting; after the kill, the job is
-// recovered and the agent submits the file's line count as its result.
+// recovered and the agent submits the file's line count as its output.
 
 const [hubUrl, registrationKey, dataDir, phase] = process.argv.slice(2);
 if (!hubUrl || !registrationKey || !dataDir) {
@@ -32,10 +32,10 @@ faux.setResponses(
             throw new Error("The job started over instead of carrying on");
           }
           return callTool("bash", {
-            command: `printf '{"lines":%d}' "$(wc -l < marks.txt)" > result.json`,
+            command: `printf '{"lines":%d}' "$(wc -l < marks.txt)" > output.json`,
           });
         },
-        callTool("submit_result", { path: "result.json" }),
+        callTool("submit_output", { path: "output.json" }),
       ],
 );
 await startRunner({ hubUrl, registrationKey, dataDir, models, model });

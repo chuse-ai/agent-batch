@@ -13,7 +13,7 @@ const system = startSystem();
 beforeAll(() => system.start());
 afterAll(() => system.stop());
 
-const AGENT = { resultContract: { schema: { type: "integer" } } };
+const AGENT = { outputContract: { schema: { type: "integer" } } };
 
 /** A job with the custom ID `customId`. */
 function jobNamed(customId: string, extra: Partial<JobInput> = {}): JobInput {
@@ -358,7 +358,7 @@ test("outside a Canary, the breaker pauses the Batch when more than maxFailurePe
     return added.job.id;
   }
 
-  await run("1", [callTool("submit_result", { value: 1 })], "succeeded");
+  await run("1", [callTool("submit_output", { value: 1 })], "succeeded");
   // One of two failed: not more than half.
   const failed = await run("2", [reply("I cannot.")], "failed");
   // Its resume withdraws its failure, so failing again leaves one of two.
@@ -435,8 +435,8 @@ test("a Batch without a breaker releases every job at once and never pauses itse
 
 test("a Batch's summary counts its jobs by status and adds up their cost, those deleted left out", async () => {
   system.model.setResponses([
-    callTool("submit_result", { value: 1 }),
-    callTool("submit_result", { value: 2 }),
+    callTool("submit_output", { value: 1 }),
+    callTool("submit_output", { value: 2 }),
   ]);
   const client = await system.clientWithNewJobsKey();
   const batch = await client.batches.create({ agent: AGENT, breaker: false });

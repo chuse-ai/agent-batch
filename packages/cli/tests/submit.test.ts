@@ -60,7 +60,7 @@ test("jobs submit retries an add whose connection dropped with the custom ID it 
       "submit",
       "--json",
       JSON.stringify({
-        agent: { resultContract: { schema: { type: "integer" } } },
+        agent: { outputContract: { schema: { type: "integer" } } },
         input: "Count to ten.",
       }),
     ],

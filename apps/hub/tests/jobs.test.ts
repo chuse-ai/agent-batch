@@ -11,7 +11,7 @@ beforeAll(() => system.start());
 afterAll(() => system.stop());
 
 const AGENT = {
-  resultContract: {
+  outputContract: {
     schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
   },
 };
@@ -127,17 +127,17 @@ test("a key adds and reads jobs only with the permission for each", async () => 
   });
 });
 
-test("an invalid Result contract or Input file name is refused with 400", async () => {
+test("an invalid Output contract or Input file name is refused with 400", async () => {
   const { key, client } = await withKey({ job: ["create"] });
   const schemas = [
     { type: 5 },
-    // A list of results is submitted as jobs.
+    // A list of outputs is submitted as jobs.
     { type: "array", items: { type: "string" } },
     { type: "object", properties: { a: { $ref: "https://example.com/schema" } } },
   ];
   for (const schema of schemas) {
     await expect(
-      client.batches.create({ agent: { resultContract: { schema } } }),
+      client.batches.create({ agent: { outputContract: { schema } } }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   }
   const batch = await client.batches.create({ agent: AGENT });
@@ -153,10 +153,10 @@ test("an invalid Result contract or Input file name is refused with 400", async 
 
   // The answer names the problem, so a caller can correct the request.
   const response = await post(key, "/batches", {
-    agent: { resultContract: { schema: schemas[2] } },
+    agent: { outputContract: { schema: schemas[2] } },
   });
   expect(await response.json()).toMatchObject({
     status: 400,
-    detail: expect.stringContaining("agent.resultContract.schema"),
+    detail: expect.stringContaining("agent.outputContract.schema"),
   });
 });

@@ -21,7 +21,7 @@ afterAll(() => system.stop());
 const SUBMISSION = {
   input: "Greet the reader.",
   inputFiles: {},
-  resultContract: {
+  outputContract: {
     schema: {
       type: "object",
       properties: { greeting: { type: "string" } },
@@ -45,7 +45,7 @@ async function readAll(client: ApiClient, id: string, limit: number) {
 test("a finished job's events, read in pages, run from its start to its end without gaps or repeats", async () => {
   system.model.setResponses([
     callTool("write", { path: "out/greeting.txt", content: "Hello" }),
-    callTool("submit_result", { value: { greeting: "Hello" } }),
+    callTool("submit_output", { value: { greeting: "Hello" } }),
   ]);
   const client = await system.clientWithNewJobsKey();
   const { id } = await submitJob(client, SUBMISSION);
@@ -60,7 +60,7 @@ test("a finished job's events, read in pages, run from its start to its end with
   expect(entryKinds(events)[0]).toBe("agent-batch.job.started");
   expect(events.at(-1)).toMatchObject({
     type: "entry",
-    record: { kind: "agent-batch.job.succeeded", data: { result: { greeting: "Hello" } } },
+    record: { kind: "agent-batch.job.succeeded", data: { output: { greeting: "Hello" } } },
   });
 });
 

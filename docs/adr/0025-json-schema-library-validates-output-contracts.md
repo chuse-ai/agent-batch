@@ -1,8 +1,8 @@
-# json-schema-library checks Result contracts on the hub and results on the Runner
+# json-schema-library checks Output contracts on the hub and outputs on the Runner
 
 > Measurement scope: the figures below record development probes with the stated suite or workload. They are not release benchmarks or guarantees for other versions, hosts or workloads.
 
-A Result contract is a JSON Schema a caller submits at runtime, so it is data, not code we write. The hub checks the schema when a job is submitted, and the Runner will validate each result against it (ADR 0009). Both use json-schema-library, so a schema the hub accepts is read the same way when results are checked.
+An Output contract is a JSON Schema a caller submits at runtime, so it is data, not code we write. The hub checks the schema when a job is submitted, and the Runner will validate each output against it (ADR 0009). Both use json-schema-library, so a schema the hub accepts is read the same way when outputs are checked.
 
 It was chosen on four grounds. It interprets schemas without generating code, which Workers forbid (`eval` and `new Function` are unavailable), and which would turn caller-supplied schemas into code. On the official JSON Schema Test Suite for 2020-12 it passed 1,249 of 1,266 required tests (remote references and vocabularies left out), more than any other validator measured. It checks the schema itself, reporting problems such as `type: 5` in `schemaErrors` rather than throwing. And it never fetches a schema over the network; a reference it cannot resolve is an error.
 

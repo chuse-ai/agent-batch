@@ -9,7 +9,7 @@ import { type OneJob, startSystem, submitJob, untilStatus } from "./harness.ts";
 import { callTool, lastToolResult, providerError, reply, untilAborted } from "./scripted-model.ts";
 
 // What a job's agent works with and how it ends the job, driven by a scripted model: the Input files
-// in its Workspace, and `submit_result`, which takes only a result matching the Result contract.
+// in its Workspace, and `submit_output`, which takes only an output matching the Output contract.
 
 const system = startSystem();
 
@@ -22,7 +22,7 @@ afterAll(() => system.stop());
 const SUBMISSION = {
   input: "Summarise the quarter.",
   inputFiles: { "q3.md": { content: "Revenue grew 4%." } },
-  resultContract: {
+  outputContract: {
     schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
   },
 } satisfies OneJob;
@@ -37,16 +37,16 @@ async function runJob(submission: OneJob) {
   return client.jobs.get({ id });
 }
 
-test("the agent finds the Input files in inputs/ and submits a result read from them", async () => {
+test("the agent finds the Input files in inputs/ and submits an output read from them", async () => {
   system.model.setResponses([
     callTool("read", { path: "inputs/q3.md" }),
     (context) =>
-      callTool("submit_result", { value: { summary: lastToolResult(context.messages).text } }),
+      callTool("submit_output", { value: { summary: lastToolResult(context.messages).text } }),
   ]);
 
   expect(await runJob(SUBMISSION)).toMatchObject({
     status: "succeeded",
-    result: { summary: expect.stringContaining("Revenue grew 4%.") },
+    output: { summary: expect.stringContaining("Revenue grew 4%.") },
   });
 });
 
@@ -55,12 +55,12 @@ test("every job of a Batch is told the same instructions, the Runner's then the 
   const told: Message[][] = [];
   const submit: FauxResponseFactory = (context) => {
     told.push(context.messages);
-    return callTool("submit_result", { value: { summary: "Le chiffre a crû de 4 %." } });
+    return callTool("submit_output", { value: { summary: "Le chiffre a crû de 4 %." } });
   };
   system.model.setResponses([submit, submit]);
   const client = await system.clientWithNewJobsKey();
   const batch = await client.batches.create({
-    agent: { instructions: "Answer in French.", resultContract: SUBMISSION.resultContract },
+    agent: { instructions: "Answer in French.", outputContract: SUBMISSION.outputContract },
     breaker: false,
   });
   const inputs = ["Summarise the quarter.", "Summarise the year."];
@@ -85,52 +85,52 @@ test("every job of a Batch is told the same instructions, the Runner's then the 
   ).toEqual(expect.arrayContaining(inputs.map((input) => expect.stringContaining(input))));
 });
 
-test("a result that does not match the Result contract goes back to the agent, which corrects it", async () => {
+test("an output that does not match the Output contract goes back to the agent, which corrects it", async () => {
   let rejection: ReturnType<typeof lastToolResult> | undefined;
   system.model.setResponses([
-    callTool("submit_result", { value: { summary: 4 } }),
+    callTool("submit_output", { value: { summary: 4 } }),
     (context) => {
       rejection = lastToolResult(context.messages);
-      return callTool("submit_result", { value: { summary: "Revenue grew 4%." } });
+      return callTool("submit_output", { value: { summary: "Revenue grew 4%." } });
     },
   ]);
 
   expect(await runJob(SUBMISSION)).toMatchObject({
     status: "succeeded",
-    result: { summary: "Revenue grew 4%." },
+    output: { summary: "Revenue grew 4%." },
   });
   expect(rejection).toMatchObject({
     isError: true,
-    text: expect.stringContaining("Result contract"),
+    text: expect.stringContaining("Output contract"),
   });
 });
 
-test("the agent can submit the result as a JSON file it wrote in its Workspace", async () => {
+test("the agent can submit the output as a JSON file it wrote in its Workspace", async () => {
   system.model.setResponses([
-    callTool("write", { path: "out/result.json", content: '{"summary":"Revenue grew 4%."}' }),
-    callTool("submit_result", { path: "out/result.json" }),
+    callTool("write", { path: "out/output.json", content: '{"summary":"Revenue grew 4%."}' }),
+    callTool("submit_output", { path: "out/output.json" }),
   ]);
 
   expect(await runJob(SUBMISSION)).toMatchObject({
     status: "succeeded",
-    result: { summary: "Revenue grew 4%." },
+    output: { summary: "Revenue grew 4%." },
   });
 });
 
-test("a result nested too deeply goes back to the agent, which submits one at the limit", async () => {
-  const result = JSON.parse("[".repeat(64) + "0" + "]".repeat(64));
+test("an output nested too deeply goes back to the agent, which submits one at the limit", async () => {
+  const output = JSON.parse("[".repeat(64) + "0" + "]".repeat(64));
   let rejection: ReturnType<typeof lastToolResult> | undefined;
   system.model.setResponses([
-    callTool("submit_result", { value: [result] }),
+    callTool("submit_output", { value: [output] }),
     (context) => {
       rejection = lastToolResult(context.messages);
-      return callTool("submit_result", { value: result });
+      return callTool("submit_output", { value: output });
     },
   ]);
 
-  expect(await runJob({ ...SUBMISSION, resultContract: { schema: {} } })).toMatchObject({
+  expect(await runJob({ ...SUBMISSION, outputContract: { schema: {} } })).toMatchObject({
     status: "succeeded",
-    result,
+    output,
   });
   expect(rejection).toMatchObject({
     isError: true,
@@ -138,11 +138,11 @@ test("a result nested too deeply goes back to the agent, which submits one at th
   });
 });
 
-test("an agent that stops without an accepted result fails the job", async () => {
+test("an agent that stops without an accepted output fails the job", async () => {
   system.model.setResponses([reply("The quarter went well.")]);
 
   expect(await runJob(SUBMISSION)).toEqual(
-    expect.objectContaining({ status: "failed", failure: { reason: "noResult" } }),
+    expect.objectContaining({ status: "failed", failure: { reason: "noOutput" } }),
   );
 });
 
@@ -165,7 +165,7 @@ test("reading a running job shows its model call, then its running tool call, an
       // Runs until the test writes `release` into the Workspace.
       return callTool("bash", { command: "until [ -e release ]; do sleep 0.1; done" });
     },
-    callTool("submit_result", { value: { summary: "A good quarter." } }),
+    callTool("submit_output", { value: { summary: "A good quarter." } }),
   ]);
   const client = await system.clientWithNewJobsKey();
   const before = Date.now();

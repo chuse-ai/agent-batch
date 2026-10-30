@@ -81,9 +81,9 @@ export type OneJob = AgentInput &
  * the job's agent, and the job added to it; returns the job as the add answers it.
  */
 export async function submitJob(client: ApiClient, job: OneJob) {
-  const { instructions, resultContract, runTimeoutSeconds, modelBudgetUsd, ...own } = job;
+  const { instructions, outputContract, runTimeoutSeconds, modelBudgetUsd, ...own } = job;
   const agent = {
-    resultContract,
+    outputContract,
     ...(instructions === undefined ? {} : { instructions }),
     ...(runTimeoutSeconds === undefined ? {} : { runTimeoutSeconds }),
     ...(modelBudgetUsd === undefined ? {} : { modelBudgetUsd }),

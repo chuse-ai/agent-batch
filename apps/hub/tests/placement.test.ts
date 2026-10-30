@@ -14,7 +14,7 @@ afterAll(() => system.stop());
 
 const SUBMISSION = {
   input: "Say hello.",
-  resultContract: {
+  outputContract: {
     schema: {
       type: "object",
       properties: { greeting: { type: "string" } },
@@ -23,21 +23,21 @@ const SUBMISSION = {
   },
 } satisfies Omit<OneJob, "inputFiles">;
 
-/** The result the scripted agent submits, which matches the Result contract. */
-const RESULT = { greeting: "Hello." };
+/** The output the scripted agent submits, which matches the Output contract. */
+const OUTPUT = { greeting: "Hello." };
 
-test("a job submitted while a runner is connected succeeds, and its result is read from the hub", async () => {
+test("a job submitted while a runner is connected succeeds, and its output is read from the hub", async () => {
   const runnerId = await system.startRunner();
   await expect.poll(() => system.findRunner(runnerId)).toBeDefined();
   const client = await system.clientWithNewJobsKey();
   const before = Date.now();
-  system.model.setResponses([callTool("submit_result", { value: RESULT })]);
+  system.model.setResponses([callTool("submit_output", { value: OUTPUT })]);
 
   const { id } = await submitJob(client, SUBMISSION);
 
   await expect
     .poll(() => client.jobs.get({ id }), { timeout: 10_000 })
-    .toMatchObject({ status: "succeeded", result: RESULT });
+    .toMatchObject({ status: "succeeded", output: OUTPUT });
   const job = await client.jobs.get({ id });
   assert(job.startedAt !== null && job.endedAt !== null, "a succeeded job has its loop's times");
   expect(job.startedAt.getTime()).toBeGreaterThanOrEqual(before - 1_000);
@@ -60,7 +60,7 @@ test("a job submitted while a runner is connected succeeds, and its result is re
 test("a job submitted while no runner is connected stays queued, and runs once one connects", async () => {
   await system.stopRunner();
   const client = await system.clientWithNewJobsKey();
-  system.model.setResponses([callTool("submit_result", { value: RESULT })]);
+  system.model.setResponses([callTool("submit_output", { value: OUTPUT })]);
 
   const { id } = await submitJob(client, SUBMISSION);
   await setTimeout(1_000);
@@ -69,7 +69,7 @@ test("a job submitted while no runner is connected stays queued, and runs once o
   await system.startRunner();
   await expect
     .poll(() => client.jobs.get({ id }), { timeout: 10_000 })
-    .toMatchObject({ status: "succeeded", result: RESULT });
+    .toMatchObject({ status: "succeeded", output: OUTPUT });
 });
 
 test("a Runner started again with fewer slots than its jobs recovers only as many, and is given no new job meanwhile", async () => {
@@ -86,17 +86,17 @@ test("a Runner started again with fewer slots than its jobs recovers only as man
   const third = await submitJob(client, SUBMISSION);
   await system.stopRunner();
 
-  // The job recovered first submits its result only once the test, having checked the rest,
+  // The job recovered first submits its output only once the test, having checked the rest,
   // releases it.
   const { promise: released, resolve: release } = Promise.withResolvers<void>();
   const restarted = calls();
   system.model.setResponses([
     async () => {
       await released;
-      return callTool("submit_result", { value: RESULT });
+      return callTool("submit_output", { value: OUTPUT });
     },
-    callTool("submit_result", { value: RESULT }),
-    callTool("submit_result", { value: RESULT }),
+    callTool("submit_output", { value: OUTPUT }),
+    callTool("submit_output", { value: OUTPUT }),
   ]);
   await system.startRunner({ maxJobs: 1 });
   await expect.poll(() => calls() - restarted, { timeout: 10_000 }).toBe(1);
@@ -116,6 +116,6 @@ test("a Runner started again with fewer slots than its jobs recovers only as man
   for (const { id } of [first, second, third]) {
     await expect
       .poll(() => client.jobs.get({ id }), { timeout: 10_000 })
-      .toMatchObject({ status: "succeeded", result: RESULT });
+      .toMatchObject({ status: "succeeded", output: OUTPUT });
   }
 }, 30_000);

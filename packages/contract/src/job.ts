@@ -121,11 +121,11 @@ export const listedInputFileSchema = z.object({
 export type ListedInputFile = z.infer<typeof listedInputFileSchema>;
 
 /**
- * The result a job must produce: a JSON Schema (2020-12 unless `$schema` says otherwise) describing
+ * The output a job must produce: a JSON Schema (2020-12 unless `$schema` says otherwise) describing
  * a single value, not a list, and referring to nothing outside itself.
  */
-export const resultContractSchema = z.object({ schema: z.record(z.string(), z.unknown()) });
-export type ResultContract = z.infer<typeof resultContractSchema>;
+export const outputContractSchema = z.object({ schema: z.record(z.string(), z.unknown()) });
+export type OutputContract = z.infer<typeof outputContractSchema>;
 
 /** What one job gives its Batch's agent to work on: the agent's first input, after its instructions. */
 export const inputSchema = textSchema.check(z.minLength(1));

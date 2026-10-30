@@ -25,12 +25,12 @@ afterAll(() => system.stop());
 const SUBMISSION = {
   input: "Count to a million.",
   inputFiles: {},
-  resultContract: { schema: { type: "integer" } },
+  outputContract: { schema: { type: "integer" } },
 } satisfies OneJob;
 
 test("a job without limits gets the hub's defaults, and one above its maximums is refused", async () => {
   const client = await system.clientWithNewJobsKey();
-  system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
+  system.model.setResponses([callTool("submit_output", { value: 1_000_000 })]);
   const job = await submitJob(client, SUBMISSION);
   expect(job).toMatchObject({ runTimeoutSeconds: 30 * 60, modelBudgetUsd: 1 });
   // Its model call is made before the next test gives the model other responses.
@@ -53,14 +53,14 @@ test("a job whose run passes its timeout fails, and a resume with a longer one c
     runTimeoutSeconds: 1,
   });
 
-  system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
+  system.model.setResponses([callTool("submit_output", { value: 1_000_000 })]);
   expect(await client.jobs.resume({ id, runTimeoutSeconds: 10 * 60 })).toMatchObject({
     status: "queued",
     runTimeoutSeconds: 10 * 60,
   });
   await untilStatus(client, id, "succeeded");
   const succeeded = await client.jobs.get({ id });
-  expect(succeeded).toMatchObject({ result: 1_000_000 });
+  expect(succeeded).toMatchObject({ output: 1_000_000 });
   expect(succeeded).not.toHaveProperty("failure");
 });
 
@@ -93,7 +93,7 @@ test("a job whose model cost reaches its budget fails, and only a higher budget 
     client.jobs.resume({ id, modelBudgetUsd: failed.usage.cost.totalUsd }),
   ).rejects.toMatchObject({ code: "CONFLICT" });
 
-  system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
+  system.model.setResponses([callTool("submit_output", { value: 1_000_000 })]);
   expect(await client.jobs.resume({ id, modelBudgetUsd: 1 })).toMatchObject({
     status: "queued",
     modelBudgetUsd: 1,

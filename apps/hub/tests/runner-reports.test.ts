@@ -21,7 +21,7 @@ import * as z from "zod/mini";
 import { entryKinds } from "./entries.ts";
 import { callTool, scriptedModel } from "./scripted-model.ts";
 
-/** Whether `report` carries the job's success, the end the Runner writes for its accepted result. */
+/** Whether `report` carries the job's success, the end the Runner writes for its accepted output. */
 function carriesSuccess(report: JobReport) {
   return entryKinds(report.events).includes("agent-batch.job.succeeded");
 }
@@ -35,13 +35,13 @@ const RUN = {
   jobId: randomUUID(),
   runId: randomUUID(),
   intent: "run" as const,
-  job: { instructions: null, input: "hello", inputFiles: [], resultContract: { schema: {} } },
+  job: { instructions: null, input: "hello", inputFiles: [], outputContract: { schema: {} } },
   runTimeoutSeconds: 1800,
   modelBudgetUsd: 1,
 };
 
 /**
- * Runs a Runner whose job submits a result at once against a stand-in hub that lists the job at
+ * Runs a Runner whose job submits an output at once against a stand-in hub that lists the job at
  * `position` on every sync and answers each report as `answer` says: the desired state, or nothing
  * to drop the connection unanswered. Resolves once `done` holds after an answer, with how many
  * calls the job's model received.
@@ -89,7 +89,7 @@ async function runAgainstStandIn(
   const address = hub.address();
   if (address === null || typeof address === "string") throw new Error("no port");
   const { faux, models, model } = scriptedModel();
-  faux.setResponses([callTool("submit_result", { value: {} })]);
+  faux.setResponses([callTool("submit_output", { value: {} })]);
   const runner = await startRunner({
     hubUrl: `http://127.0.0.1:${address.port}`,
     registrationKey: "unused",

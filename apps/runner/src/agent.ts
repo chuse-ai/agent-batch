@@ -65,8 +65,8 @@ import type { JobEnvironments } from "./sandbox.ts";
 // Runs a job's agent with pi-durable: one Harness and SQLite journal per job, so purging a job
 // deletes its file (pi-durable cannot delete a conversation) and the journal holds exactly the
 // job's entries in order. The agent has pi-durable's coding tools on the job's Workspace, in
-// the job's sandbox (ADR 0027), and `submit_result`, which checks the result against the Result
-// contract, as the hub checks the contract itself (ADR 0025), and ends the run once a result is
+// the job's sandbox (ADR 0027), and `submit_output`, which checks the output against the Output
+// contract, as the hub checks the contract itself (ADR 0025), and ends the run once an output is
 // accepted (ADR 0009).
 
 /** The model every job on this Runner runs on, as Pi names it (ADR 0013). */
@@ -99,12 +99,12 @@ export interface AgentSettings {
 const CONTINUATION_NOTE = "Carry on with the job from where you stopped.";
 
 /**
- * The result `submit_result` accepted first, committed in its own transaction before the call's
+ * The output `submit_output` accepted first, committed in its own transaction before the call's
  * result, so a restart keeps it even when the call itself was cut off; absent until one is accepted,
- * since `null` is itself a result.
+ * since `null` is itself an output.
  */
-const AcceptedResult = defineDoc<{ result?: JsonValue }>({
-  kind: "agent-batch.result",
+const AcceptedOutput = defineDoc<{ output?: JsonValue }>({
+  kind: "agent-batch.output",
   version: 1,
   scope: "conversation",
   history: "latest",
@@ -173,21 +173,21 @@ function instructions(job: JobContent) {
  * directory, where commands run and relative paths resolve, rather than its path, which names the job.
  */
 const RUNNER_INSTRUCTIONS = `You are running a job unattended; nobody will answer questions. Your Workspace, where your files are and your commands run, is the current directory; the job's Input files, if any, are in its \`inputs\` folder. For temporary files, use the directory in $TMPDIR, not /tmp.
-When the work is complete, call submit_result once with the complete result: as \`value\`, or, for a large result or one a script produced, as the \`path\` of a JSON file in the Workspace. The result is checked against the job's Result contract; if it is rejected, correct it and submit again. A reply in prose does not complete the job.`;
+When the work is complete, call submit_output once with the complete output: as \`value\`, or, for a large output or one a script produced, as the \`path\` of a JSON file in the Workspace. The output is checked against the job's Output contract; if it is rejected, correct it and submit again. A reply in prose does not complete the job.`;
 
-function submitResultTool(schema: Record<string, unknown>) {
+function submitOutputTool(schema: Record<string, unknown>) {
   const contract = compileSchema(schema);
   return defineTool({
-    name: "submit_result",
-    description: `Submit the job's result, which ends the job. Give exactly one of \`value\`, the result itself, or \`path\`, a JSON file in the Workspace holding it. The result must match this JSON Schema:\n${JSON.stringify(schema)}`,
+    name: "submit_output",
+    description: `Submit the job's output, which ends the job. Give exactly one of \`value\`, the output itself, or \`path\`, a JSON file in the Workspace holding it. The output must match this JSON Schema:\n${JSON.stringify(schema)}`,
     parameters: Type.Object({
-      value: Type.Optional(Type.Unknown({ description: "The result" })),
+      value: Type.Optional(Type.Unknown({ description: "The output" })),
       path: Type.Optional(
-        Type.String({ description: "A JSON file in the Workspace holding the result" }),
+        Type.String({ description: "A JSON file in the Workspace holding the output" }),
       ),
     }),
     execute: async (args, api, context) => {
-      // Presence, not truthiness: `false`, `0` and `null` are results.
+      // Presence, not truthiness: `false`, `0` and `null` are outputs.
       const given = ["value" in args, "path" in args].filter(Boolean).length;
       if (given !== 1) throw new Error("Give exactly one of `value` and `path`");
       let value: JsonValue;
@@ -208,23 +208,23 @@ function submitResultTool(schema: Record<string, unknown>) {
       }
       const storable = z.safeParse(jsonTextSchema, value);
       if (!storable.success) {
-        throw new Error(`The result cannot be stored:\n${z.prettifyError(storable.error)}`);
+        throw new Error(`The output cannot be stored:\n${z.prettifyError(storable.error)}`);
       }
       const { valid, errors } = contract.validate(value);
       if (!valid) {
         const problems = errors.map((error) => `- ${error.message}`).join("\n");
-        throw new Error(`The result does not match the Result contract:\n${problems}`);
+        throw new Error(`The output does not match the Output contract:\n${problems}`);
       }
-      // The first accepted result is the job's, as when the model submits twice in one round.
+      // The first accepted output is the job's, as when the model submits twice in one round.
       const first = await api.commit(async (tx) => {
-        const accepted = await tx.doc(AcceptedResult, api.conversationId);
-        if ("result" in accepted) return false;
-        accepted.result = value;
+        const accepted = await tx.doc(AcceptedOutput, api.conversationId);
+        if ("output" in accepted) return false;
+        accepted.output = value;
         return true;
       }, context);
       const text = first
-        ? "Result accepted."
-        : "A result was already accepted; this one is ignored.";
+        ? "Output accepted."
+        : "An output was already accepted; this one is ignored.";
       return { output: [{ type: "text", text }], control: { terminate: true } };
     },
   });
@@ -239,7 +239,7 @@ function submitResultTool(schema: Record<string, unknown>) {
  * hub places a started job on no other Runner, and not here again while it runs. A job whose
  * run has ended is not recovered.
  *
- * Gives back an Effect that runs the job's agent until it submits an accepted result or ends
+ * Gives back an Effect that runs the job's agent until it submits an accepted output or ends
  * without one, and records the job's end in the journal. Interrupting it, as a Runner that stops, a
  * run the hub drops, a pause and a cancel do, aborts none of the job's work: the caller's
  * scope then closes the journal and then the sandbox, which cuts the work off and leaves it pending
@@ -276,15 +276,15 @@ export function openJob(
     registry.install(
       defineExtension({
         name: "agent-batch",
-        tools: [submitResultTool(job.resultContract.schema)],
+        tools: [submitOutputTool(job.outputContract.schema)],
         hooks: [
-          // An accepted result ends the run only when every call of its round asks to; the job
-          // ends once the round's other calls are done, without another model turn. The result is
+          // An accepted output ends the run only when every call of its round asks to; the job
+          // ends once the round's other calls are done, without another model turn. The output is
           // read from the journal, so a round a restarted Runner finishes ends the run too.
           hook(GenerationTask, {
             afterTools: async (_assistant, _results, api) => {
-              const accepted = await api.snapshot(AcceptedResult, api.conversationId, context);
-              if (!accepted || !("result" in accepted)) return;
+              const accepted = await api.snapshot(AcceptedOutput, api.conversationId, context);
+              if (!accepted || !("output" in accepted)) return;
               // Not awaited: the abort waits for this task, which is waiting for this hook. It
               // fails only when the journal closes first, as when the Runner stops, or when the
               // abort cannot be committed; the job's outcome is read from the journal either way.
@@ -445,9 +445,9 @@ export function openJob(
       // Once the job has finished, pi has failed or a limit is reached, all of its work stops. An
       // interrupt leaves the work pending instead. A limit stops the job as its own end does,
       // not as a pause does: the work it cut off is aborted and settled, and the job fails naming
-      // the limit, unless the agent's result was accepted meanwhile. The timeout counts from here,
+      // the limit, unless the agent's output was accepted meanwhile. The timeout counts from here,
       // so time spent waiting for a slot or while the Runner was down counts nothing. Each gives
-      // why the job failed, should its agent have no accepted result.
+      // why the job failed, should its agent have no accepted output.
       const failure: Failure = yield* Effect.raceAllFirst([
         answered.pipe(Effect.map(failureOf)),
         Effect.sleep(Duration.seconds(options.runTimeoutSeconds)).pipe(
@@ -461,17 +461,17 @@ export function openJob(
         ),
       );
       const accepted = yield* Effect.promise(() =>
-        harness.snapshot(AcceptedResult, root.id, context),
+        harness.snapshot(AcceptedOutput, root.id, context),
       );
-      // An agent that stopped without an accepted result fails the job at once; reminding it
+      // An agent that stopped without an accepted output fails the job at once; reminding it
       // first is planned.
-      // JSON holds no `undefined`, so a result that is absent was never accepted.
-      const result = accepted?.result;
+      // JSON holds no `undefined`, so an output that is absent was never accepted.
+      const output = accepted?.output;
       const timestamp = Date.now();
       yield* Effect.promise(() =>
-        result === undefined
+        output === undefined
           ? submitClosing(root, options.runId, JobFailed, { timestamp, ...failure })
-          : submitClosing(root, options.runId, JobSucceeded, { timestamp, result }),
+          : submitClosing(root, options.runId, JobSucceeded, { timestamp, output }),
       );
     }).pipe(
       // Unless interrupted, the sandbox goes once the agent stops, and with it every process the
@@ -487,13 +487,13 @@ export function openJob(
 }
 
 /**
- * Why a job whose agent stopped without an accepted result failed, from how pi settled the input
- * its run answered: `noResult` when the agent answered it; `modelFailed` for pi's `model_error`,
+ * Why a job whose agent stopped without an accepted output failed, from how pi settled the input
+ * its run answered: `noOutput` when the agent answered it; `modelFailed` for pi's `model_error`,
  * which a compaction the model call needed also gives, with the provider's text; and `runFaulted`
  * for any other reason, with pi's reason and text.
  */
 function failureOf(settled: SettledSubmissionRecord): Failure {
-  if (settled.status === "done") return { reason: "noResult" };
+  if (settled.status === "done") return { reason: "noOutput" };
   const { reason, detail } = settled;
   const text =
     detail === undefined ? undefined : typeof detail === "string" ? detail : JSON.stringify(detail);
@@ -526,7 +526,7 @@ export type Stop = Extract<Intent, "pause" | "cancel">;
  * nothing until asked to, aborts that work, which pi settles without running it, writing the
  * cut-off answer and tool calls into the conversation with their usage, and writes the run's
  * closing, the job's pause or its cancel, so that it is the journal's last entry. A job whose
- * accepted result the interrupted agent had not yet recorded as its end succeeded, since completion
+ * accepted output the interrupted agent had not yet recorded as its end succeeded, since completion
  * ends a run (ADR 0009); a run that has already closed keeps its closing. Gives back the
  * journal, open until the caller's scope closes, or nothing when the job has no journal on this
  * Runner: a job its Runner never started has nothing to record.
@@ -561,12 +561,12 @@ export function recordStop(
     // Background work, such as a compaction, is aborted too, as at the job's own end.
     yield* Effect.promise(() => root.abort(context, { background: true }));
     // Read once the work is settled, so nothing runs to change it.
-    const result = (yield* Effect.promise(() => journal.snapshot(AcceptedResult, root.id, context)))
-      ?.result;
+    const output = (yield* Effect.promise(() => journal.snapshot(AcceptedOutput, root.id, context)))
+      ?.output;
     const timestamp = Date.now();
     yield* Effect.promise(() => {
-      if (result !== undefined) {
-        return submitClosing(root, runId, JobSucceeded, { timestamp, result });
+      if (output !== undefined) {
+        return submitClosing(root, runId, JobSucceeded, { timestamp, output });
       }
       return intent === "cancel"
         ? submitClosing(root, runId, JobCancelled, { timestamp })
