@@ -18,8 +18,9 @@ import {
   MAX_FILE_BYTES,
   MAX_LABELS,
   modelBudgetUsdSchema,
-  outputContractSchema,
   runTimeoutSecondsSchema,
+  strictBlobRefSchema,
+  strictOutputContractSchema,
 } from "./job.ts";
 import { api, byKey, byKeyOrMember, byMember, forOrganization, NotFound } from "./procedure.ts";
 import { failureSchema, jobActivitySchema, jobEventSchema } from "./runner-protocol.ts";
@@ -185,14 +186,9 @@ export const agentSchema = z
         ),
       ),
     ),
-    // Strict here, as a request names it; the Runner protocol's copy is not.
-    outputContract: z
-      .strictObject(outputContractSchema.shape)
-      .check(
-        z.describe(
-          "What each job's output must be: `schema`, a JSON Schema the output must match.",
-        ),
-      ),
+    outputContract: strictOutputContractSchema.check(
+      z.describe("What each job's output must be: `schema`, a JSON Schema the output must match."),
+    ),
     runTimeoutSeconds: z.optional(
       runTimeoutSecondsSchema.check(
         z.describe(
@@ -461,13 +457,11 @@ const blobCheckSchema = z.discriminatedUnion("stored", [
  * The hub's public HTTP API, for people and their programs. Callers sign in as a member or send an
  * API key in `x-api-key`. A Runner's own calls are `runnerHttpContract`'s.
  *
- * Every input object is strict, so a parameter the API does not know, in the body or a read's query
- * string, such as one renamed or misspelled, is refused with 400 naming it, rather than ignored and
- * the request taken as if it were absent (ADR 0010). oRPC merges a read's query string into its
- * input and a write's body, so a write's query string never reaches the schema, nor does that of
- * a read without input; none of these calls takes query parameters. Answers stay open,
- * so the hub may add fields to them without breaking callers that check them, and so do the
- * upload's headers, which carry far more than the API reads.
+ * Inputs are strict: a parameter the API does not define, in a body or a read's query string, is
+ * refused with 400 naming it (ADR 0010). A write's query string, and that of a read without input,
+ * go unchecked: oRPC hands none of them to the schema but the upload's, which its outer object
+ * drops; none of these calls takes query parameters. Answers and the upload's headers stay open,
+ * so the hub can add fields without breaking callers.
  */
 export const apiContract = {
   runners: {
@@ -543,7 +537,7 @@ export const apiContract = {
       .input(
         z.strictObject({
           files: z
-            .array(z.strictObject(blobRefSchema.shape))
+            .array(strictBlobRefSchema)
             .check(
               z.minLength(1),
               z.maxLength(MAX_FILES_PER_CHECK),
@@ -567,7 +561,7 @@ export const apiContract = {
       )
       .input(
         z.object({
-          params: z.object({ digest: digestSchema }),
+          params: z.strictObject({ digest: digestSchema }),
           headers: z.object({
             // Coerced from the header's text by the hub's coercion plugin.
             "content-length": fileSizeBytesSchema.check(z.describe("The file's size in bytes.")),
@@ -618,8 +612,7 @@ export const apiContract = {
         ...byKey({ job: ["create"] }),
       )
       .input(
-        z.strictObject({
-          ...batchRefSchema.shape,
+        z.extend(batchRefSchema, {
           jobs: z
             .array(jobSubmissionSchema)
             .check(
@@ -718,8 +711,7 @@ export const apiContract = {
         ...byKeyOrMember({ job: ["resume"] }),
       )
       .input(
-        z.strictObject({
-          ...jobRefSchema.shape,
+        z.extend(jobRefSchema, {
           runTimeoutSeconds: z.optional(
             runTimeoutSecondsSchema.check(
               z.describe(
@@ -776,8 +768,7 @@ export const apiContract = {
         ...byKeyOrMember({ job: ["read"] }),
       )
       .input(
-        z.strictObject({
-          ...jobRefSchema.shape,
+        z.extend(jobRefSchema, {
           after: z._default(
             z
               .int()

@@ -125,13 +125,14 @@ export const blobRefSchema = z.object({
   digest: digestSchema.check(z.describe("The content's digest, such as `sha256:9f86d0…`.")),
   sizeBytes: fileSizeBytesSchema.check(z.describe("The content's size in bytes.")),
 });
+/** `blobRefSchema` in a request, which refuses fields it does not define (ADR 0010). */
+export const strictBlobRefSchema = z.strictObject(blobRefSchema.shape);
 
 /**
  * An Input file: its path in the job's `inputs` folder and the stored content it holds, named by
- * digest and size, as uploaded before the job. A request names it, so it is strict (see
- * `apiContract`), while `blobRefSchema` also answers.
+ * digest and size, as uploaded before the job.
  */
-export const inputFileSchema = z.strictObject({ ...blobRefSchema.shape, path: filePathSchema });
+export const inputFileSchema = z.extend(strictBlobRefSchema, { path: filePathSchema });
 
 /**
  * Files written into the job's `inputs` folder before its agent starts, as sandbox APIs take them: a
@@ -181,6 +182,8 @@ export type ListedInputFile = z.infer<typeof listedInputFileSchema>;
  */
 export const outputContractSchema = z.object({ schema: z.record(z.string(), z.unknown()) });
 export type OutputContract = z.infer<typeof outputContractSchema>;
+/** `outputContractSchema` in a request, which refuses fields it does not define (ADR 0010). */
+export const strictOutputContractSchema = z.strictObject(outputContractSchema.shape);
 
 /** What one job gives its Batch's agent to work on: the agent's first input, after its instructions. */
 export const inputSchema = textSchema.check(z.minLength(1));
