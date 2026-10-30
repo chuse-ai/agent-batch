@@ -283,12 +283,15 @@ function commandsOf(router: object, path: readonly string[] = []): Commands {
   const commands: Commands = {};
   for (const [name, value] of Object.entries(router)) {
     if (typeof value !== "object" || value === null) continue;
+    // The commands mirror the API where that makes sense; the `blobs` calls are low-level content
+    // transfer, which `batches submit` does for the caller, hashing local files and uploading the
+    // missing ones, so they have no commands.
+    if (path.length === 0 && name === "blobs") continue;
     const at = [...path, name];
     if (value instanceof ProcedureContract) {
       // The command line authenticates with an API key only, so a call only a member makes has no
-      // command; nor does an upload, whose body is a file's bytes, which a command's JSON input
-      // cannot carry.
-      if (getAccess(value)?.key && getOpenAPIMeta(value)?.requestBodyHint !== "octet-stream") {
+      // command.
+      if (getAccess(value)?.key) {
         commands[name] = command(value, at);
       }
     } else {
