@@ -78,12 +78,12 @@ function jobOf(id: string, customId: string, status: Record<string, unknown>) {
 /**
  * A hub answering `batches submit`: it holds the Blobs with the digests in `stored` and those
  * uploaded to it, keeps each upload's bytes and each add's jobs, creates one Batch, and answers
- * each job's read with `ended(customId)`, every job having ended by the first read of the Batch,
- * which it never answers when `stalled`.
+ * each job's read with `ended(customId)`, or with 503 when `jobsUnreadable`, every job having ended
+ * by the first read of the Batch, which it never answers when `stalled`.
  */
 async function fakeHub(
   ended: (customId: string) => Record<string, unknown>,
-  { stalled = false, stored = [] as string[] } = {},
+  { stalled = false, jobsUnreadable = false, stored = [] as string[] } = {},
 ) {
   const batchId = crypto.randomUUID();
   const held = new Set(stored);
@@ -139,6 +139,7 @@ async function fakeHub(
     const jobId = request.url?.match(/^\/jobs\/([^/]+)$/)?.[1];
     const customId = jobId === undefined ? undefined : ids.get(jobId);
     if (request.method === "GET" && jobId !== undefined && customId !== undefined) {
+      if (jobsUnreadable) return response.writeHead(503).end();
       return answer(response, jobOf(jobId, customId, ended(customId)));
     }
     response.writeHead(404).end();
@@ -304,6 +305,22 @@ test("batches submit --wait --output-dir saves each job's line in order, those t
   expect(await lines("error.jsonl")).toEqual([{ customId: "b.pdf", status: "failed", failure }]);
 });
 
+test("batches submit --wait --output-dir prints the Batch even when its jobs' lines cannot be saved, and exits 1", async () => {
+  const cwd = await folderWith({ "a.pdf": "a" });
+  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }), { jobsUnreadable: true });
+
+  const { exitCode, stdout } = await submit(hub.url, cwd, [
+    "--each",
+    "a.pdf",
+    "--wait",
+    "--output-dir",
+    "outputs",
+  ]);
+
+  expect(exitCode).toBe(1);
+  expect(JSON.parse(stdout)).toMatchObject({ jobCounts: { succeeded: 1 } });
+});
+
 test("batches submit --output-dir refuses a folder already holding a result file before sending anything", async () => {
   const cwd = await folderWith({ "a.pdf": "a", "outputs/error.jsonl": "" });
   const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
@@ -341,7 +358,8 @@ test("batches submit --wait-timeout ends the command when it passes, with 124, e
   expect(stderr).not.toContain("Stopped waiting; the Batch carries on.");
 });
 
-// A duration with no unit is refused, so seconds given as a number never wait a thousandth as long.
+// `ms` reads a number without a unit as milliseconds, so one meant as seconds is refused rather than
+// waiting a thousandth as long.
 test("batches submit refuses a --wait-timeout without a unit before sending anything", async () => {
   const cwd = await folderWith({ "a.pdf": "a" });
   const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
@@ -355,6 +373,6 @@ test("batches submit refuses a --wait-timeout without a unit before sending anyt
   ]);
 
   expect(refused.exitCode).not.toBe(0);
-  expect(refused.stderr).toContain("A duration needs a unit, such as 30m or 1h30m");
+  expect(refused.stderr).toContain("A duration needs a unit, such as 30m or 1.5h");
   expect(hub.adds).toEqual([]);
 });

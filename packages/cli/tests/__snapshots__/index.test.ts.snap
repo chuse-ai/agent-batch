@@ -298,7 +298,7 @@ exports[`the commands and their flags 1`] = `
             },
             {
               "attributeName": "waitTimeout",
-              "description": "How long --wait waits at most, such as 30m or 1h30m; 0 for no limit",
+              "description": "How long --wait waits at most, such as 30m or 1.5h; 0 for no limit",
               "flags": "--wait-timeout [string]",
               "name": "wait-timeout",
               "negate": false,

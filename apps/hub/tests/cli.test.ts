@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -114,7 +114,7 @@ const listInputs: FauxResponseFactory = ({ messages }) =>
       });
 
 // `--wait` reads every 10 seconds, so the jobs, still running at the first read, end by the second.
-test("batches submit --each uploads each file and folder as a job's Input files, and --wait prints their outputs in order", async () => {
+test("batches submit --each uploads each file and folder as a job's Input files, and --wait --output-dir saves their outputs in order", async () => {
   system.model.setResponses([listInputs, listInputs, listInputs, listInputs]);
   const dir = await mkdtemp(path.join(tmpdir(), "agent-batch-cli-"));
   await mkdir(path.join(dir, "claim/photos"), { recursive: true });
@@ -134,12 +134,19 @@ test("batches submit --each uploads each file and folder as a job's Input files,
       "--output-schema",
       "schema.json",
       "--wait",
+      "--output-dir",
+      "outputs",
     ]),
   );
+  const saved = (await readFile(path.join(dir, "outputs/output.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line): unknown => JSON.parse(line));
   await rm(dir, { recursive: true });
 
   expect(exitCode).toBe(0);
-  expect(lines).toEqual([
+  expect(lines).toMatchObject([{ jobCounts: { succeeded: 2 } }]);
+  expect(saved).toEqual([
     {
       customId: "notes.txt",
       status: "succeeded",

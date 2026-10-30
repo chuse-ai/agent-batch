@@ -39,10 +39,12 @@ import {
   Config,
   Duration,
   Effect,
+  Exit,
   FileSystem,
   Option,
   Path,
   Redacted,
+  Result,
   Runtime,
   Schedule,
   Schema,
@@ -51,14 +53,16 @@ import {
   Struct,
 } from "effect";
 import { Ndjson } from "effect/encoding";
+import { sumAll } from "effect/Number";
+import { CommandLine } from "effect/process";
 import ensureError from "ensure-error";
 import isNetworkError from "is-network-error";
 import { logUpdateStderr } from "log-update";
-import parseDuration from "parse-duration";
+import ms from "ms";
 import { createCli, os } from "trpc-cli";
 import * as z from "zod/mini";
 
-import { runToEnd, shellWords, stackCommands, savedHub } from "./stack.ts";
+import { runToEnd, stackCommands, savedHub } from "./stack.ts";
 
 // The `agent-batch` command: one command per call of the hub's public API that an API key can
 // make, derived from the contract, so the commands cannot drift from the API, plus `jobs submit`,
@@ -621,7 +625,7 @@ function uploadMissing(client: ApiClient, files: readonly HashedFile[]) {
     const missing = checked.flat().flatMap(([file, answer]) => (answer.stored ? [] : [file]));
     if (missing.length === 0) return;
     const onTerminal = personWatches();
-    const total = missing.reduce((sum, { sizeBytes }) => sum + sizeBytes, 0);
+    const total = sumAll(missing.map(({ sizeBytes }) => sizeBytes));
     let done = 0;
     let doneBytes = 0;
     // Sizes in MiB to a tenth, such as `5.0 MiB`.
@@ -726,12 +730,12 @@ function jobsFromJsonl(file: string) {
 }
 
 /** The line `batches submit --wait --output-dir` saves for a job: its output, or why it failed. */
-function outputLine(customId: string, job: Job) {
+function jobLine(customId: string, job: Job) {
   if (job.status === "succeeded") return { customId, status: job.status, output: job.output };
   if (job.status === "failed") return { customId, status: job.status, failure: job.failure };
   return { customId, status: job.status };
 }
-type OutputLine = ReturnType<typeof outputLine>;
+type JobLine = ReturnType<typeof jobLine>;
 
 /** A wait that `--wait-timeout` ended, which exits 124, as `timeout` and `openai batches wait` do. */
 class WaitTimedOut extends Error {
@@ -776,47 +780,76 @@ function showProgress(client: ApiClient, batch: Batch) {
 }
 
 /**
- * Prepares the folder `--output-dir` names before anything is sent, as openai-cli does: creates it
- * if absent, its parent being there already, and refuses it if it holds either file already, so a
- * finished wait never overwrites one.
+ * The file `name` in the folder `dir`, the folder as the person gave it, as openai-cli names the
+ * files it saves, so `./outputs` gives `./outputs/output.jsonl`.
+ */
+function fileIn(path: Path.Path, dir: string, name: string) {
+  return `${dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`}${name}`;
+}
+
+/**
+ * Prepares the folder `--output-dir` names before anything is sent, as openai-cli does: makes it
+ * if absent, for its owner alone, and refuses it if it holds either file already, so a finished
+ * wait never overwrites one.
  */
 const prepareOutputDir = Effect.fnUntraced(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (!(yield* fs.exists(dir))) {
-    yield* fs
-      .makeDirectory(dir)
-      .pipe(
-        Effect.mapError(() => new Error(`${dir} cannot be made; its parent folder must exist`)),
-      );
-  } else if ((yield* fs.stat(dir)).type !== "Directory") {
+  yield* fs.makeDirectory(dir, { mode: 0o700 }).pipe(
+    Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.void),
+    Effect.mapError(() => new Error(`Could not create ${dir}. Check its parent and permissions.`)),
+  );
+  if ((yield* fs.stat(dir)).type !== "Directory") {
     yield* Effect.fail(new Error(`${dir} is not a folder`));
   }
   for (const name of ["output.jsonl", "error.jsonl"]) {
-    const file = path.join(dir, name);
-    if (yield* fs.exists(file)) {
-      yield* Effect.fail(new Error(`${file} already exists; choose a new --output-dir`));
-    }
+    const file = fileIn(path, dir, name);
+    // `lstat`, so a link counts as the file being there, even a link to nothing.
+    const there = yield* fs.lstat(file).pipe(
+      Effect.as(true),
+      Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(false)),
+    );
+    if (there) yield* Effect.fail(new Error(`${file} already exists; choose a new --output-dir`));
   }
 });
 
 /**
- * Saves the line of each job, in order, in `dir`: those that succeeded in `output.jsonl`, the rest
- * in `error.jsonl`, leaving out a file that would hold none, as openai-cli does. Where a person
- * watches, stderr says which it saved, in openai-cli's words.
+ * Reads the line of each of `jobs` and saves them, in order, in `dir`: those that succeeded in
+ * `output.jsonl`, the rest in `error.jsonl`, leaving out a file that would hold none, as openai-cli
+ * does. Where a person watches, stderr says which it saved.
  */
-const saveOutputs = Effect.fnUntraced(function* (dir: string, lines: readonly OutputLine[]) {
+const saveJobLines = Effect.fnUntraced(function* (
+  client: ApiClient,
+  dir: string,
+  jobs: readonly (readonly [string, Job])[],
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  // One read per job, a few at a time, until the API reads a Batch's outputs a page at a time.
+  const lines = yield* Effect.forEach(
+    jobs,
+    ([customId, added]) =>
+      hubCall((signal) => client.jobs.get({ id: added.id }, { signal })).pipe(
+        Effect.retry(retryTransient),
+        Effect.map((read) => jobLine(customId, read)),
+      ),
+    { concurrency: AT_ONCE },
+  );
+  const [succeeded, rest] = Array.partition(lines, (line) =>
+    line.status === "succeeded" ? Result.succeed(line) : Result.fail(line),
+  );
   for (const [name, kept] of [
-    ["output", lines.filter((line) => line.status === "succeeded")],
-    ["error", lines.filter((line) => line.status !== "succeeded")],
+    ["output", succeeded],
+    ["error", rest],
   ] as const) {
-    const file = path.join(dir, `${name}.jsonl`);
+    const file = fileIn(path, dir, `${name}.jsonl`);
     if (kept.length > 0) {
-      const content = kept.map((line) => `${JSON.stringify(line)}\n`).join("");
-      // `wx`, so a file made since the folder was prepared is not overwritten.
-      yield* fs.writeFileString(file, content, { flag: "wx" });
+      // `wx`, so a file made since the folder was prepared is not overwritten, and for its owner
+      // alone, as openai-cli saves its files.
+      yield* Stream.fromIterable<JobLine>(kept).pipe(
+        Stream.pipeThroughChannel(Ndjson.encode()),
+        Stream.run(fs.sink(file, { flag: "wx", mode: 0o600 })),
+      );
     }
     if (personWatches()) {
       yield* Effect.sync(() =>
@@ -834,7 +867,7 @@ const saveOutputs = Effect.fnUntraced(function* (dir: string, lines: readonly Ou
  * breaker paused it for a flaw to fix first. A timeout or Ctrl-C stops the wait, saves nothing and
  * leaves the Batch running.
  */
-function waitForBatch(
+function waitAndSave(
   client: ApiClient,
   batchId: string,
   jobs: readonly (readonly [string, Job])[],
@@ -842,7 +875,7 @@ function waitForBatch(
 ) {
   return Effect.gen(function* () {
     const onTerminal = personWatches();
-    const again = `${options.again} --wait`;
+    const { again, timeout, outputDir } = options;
     // Where a person watches, the Batch's ID, in openai-cli's words, as nothing else prints it
     // before the wait ends.
     if (onTerminal) {
@@ -850,8 +883,7 @@ function waitForBatch(
         process.stderr.write(`Batch created: "${batchId}". Waiting for completion.\n`),
       );
     }
-    const { outputDir } = options;
-    const waitAndRead = Effect.gen(function* () {
+    const waitThenSave = Effect.gen(function* () {
       const batch = yield* hubCall((signal) =>
         client.batches.get({ id: batchId }, { signal }),
       ).pipe(
@@ -860,28 +892,21 @@ function waitForBatch(
         Effect.repeat({ schedule: pollSchedule, until: settled }),
         Effect.ensuring(endProgress),
       );
-      // One read per job, a few at a time, until the API reads a Batch's outputs a page at a time.
-      const read =
+      // Saving's failure is kept, so the Batch is printed, its ID with it, whatever saving did,
+      // as openai-cli prints it.
+      const saved =
         outputDir === undefined
-          ? []
-          : yield* Effect.forEach(
-              jobs,
-              ([customId, added]) =>
-                hubCall((signal) => client.jobs.get({ id: added.id }, { signal })).pipe(
-                  Effect.retry(retryTransient),
-                  Effect.map((readJob) => outputLine(customId, readJob)),
-                ),
-              { concurrency: AT_ONCE },
-            );
-      return { batch, read };
+          ? Exit.void
+          : yield* Effect.exit(saveJobLines(client, outputDir, jobs));
+      return { batch, saved };
     });
-    const timeout = options.timeout;
-    // The timeout covers reading the outputs too, and interrupting aborts the hub calls in flight,
-    // so the command ends when it says. The interrupt message is outside it, for Ctrl-C alone.
-    const { batch, read } = yield* (
+    // The timeout covers saving too, as openai-cli's covers its downloads, and interrupting aborts
+    // the hub calls in flight, so the command ends when it says. The interrupt message is outside
+    // it, for Ctrl-C alone.
+    const { batch, saved } = yield* (
       timeout === undefined
-        ? waitAndRead
-        : Effect.timeoutOrElse(waitAndRead, {
+        ? waitThenSave
+        : Effect.timeoutOrElse(waitThenSave, {
             duration: timeout,
             orElse: () =>
               Effect.fail(
@@ -897,13 +922,13 @@ function waitForBatch(
         ),
       ),
     );
-    if (outputDir !== undefined) yield* saveOutputs(outputDir, read);
     yield* printStep(batch);
+    if (Exit.isFailure(saved)) yield* Effect.failCause(saved.cause);
     const { succeeded, ...others } = batch.jobCounts;
-    const unsucceeded = Object.values(others).reduce((sum, count) => sum + count, 0);
+    const unsucceeded = sumAll(Object.values(others));
     const failure =
       batch.pausedBy === "breaker"
-        ? `The Batch's failure breaker paused it, as its jobs failed. Once their failures are fixed, resume it with ${shellWords("agent-batch", "batches", "resume", "--id", batch.id)}, and ${again}.`
+        ? `The Batch's failure breaker paused it, as its jobs failed. Once their failures are fixed, resume it with ${CommandLine.display(["agent-batch", "batches", "resume", "--id", batch.id])}, and ${again}${outputDir === undefined ? "" : " and a new --output-dir"}.`
         : batch.status === "cancelled"
           ? "The Batch was cancelled"
           : unsucceeded > 0
@@ -920,8 +945,8 @@ function waitForBatch(
  * first are its Canary. Each call is retried on a transient failure, under one custom ID: the
  * caller's, or one made for this run and printed on stderr before anything is sent, so running the
  * same command again with it returns the same Batch and adds only the jobs it lacks. With `--wait`,
- * it then follows the Batch until no job is queued, running or paused and prints a line for each
- * job.
+ * it then follows the Batch until no job is queued, running or paused, saves each job's line with
+ * `--output-dir`, and prints the Batch.
  */
 function submitBatchCommand() {
   return os
@@ -985,31 +1010,35 @@ function submitBatchCommand() {
                 ),
               ),
           ),
-          // A Go duration, as `openai batches submit --wait-timeout` takes one; parse-duration reads
-          // every Go form with Go's value, as `ms` and Effect's `Duration` do not.
+          // `ms` reads durations as openai-cli users type them, such as `30m`, `1.5h` and `1 hour`, and
+          // refuses what it cannot read whole; Effect's `Duration` takes only forms like `30 minutes`.
           waitTimeout: z.optional(
             z.pipe(
               z
                 .string()
                 .check(
-                  z.describe("How long --wait waits at most, such as 30m or 1h30m; 0 for no limit"),
+                  z.describe("How long --wait waits at most, such as 30m or 1.5h; 0 for no limit"),
                 ),
               z.transform((given, context) => {
                 const refuse = (message: string) => {
                   context.issues.push({ code: "custom", message, input: given });
                   return z.NEVER;
                 };
-                // A number without a unit, as Go refuses it, which parse-duration reads as
-                // milliseconds: seconds given as before would otherwise wait a thousandth as long.
+                // `ms` reads a number without a unit as milliseconds, so `1800` meant as seconds
+                // would silently wait 1.8 s.
                 if (given.trim() !== "0" && /[\d.]$/.test(given.trim())) {
-                  return refuse("A duration needs a unit, such as 30m or 1h30m");
+                  return refuse("A duration needs a unit, such as 30m or 1.5h");
                 }
-                const millis = parseDuration(given);
-                if (millis === null) {
-                  return refuse("Expected a duration, such as 30m or 1h30m");
+                // `ms` throws on an empty string, and answers `undefined` for text it cannot read,
+                // though its types promise a number for the durations they spell out.
+                const millis: number | undefined =
+                  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- `ms` takes any string; its types narrow it to the forms it reads.
+                  given === "" ? undefined : ms(given as ms.StringValue);
+                if (millis === undefined) {
+                  return refuse("Expected a duration, such as 30m or 1.5h");
                 }
                 if (millis < 0) return refuse("A duration must not be negative");
-                return millis === 0 ? undefined : Duration.millis(millis);
+                return Duration.millis(millis);
               }),
             ),
           ),
@@ -1035,7 +1064,7 @@ function submitBatchCommand() {
           if (more.length > 0) {
             return yield* Effect.fail(
               new Error(
-                `batches submit takes one JSONL file of jobs; to make a job of each file or folder, use --each ${files.join(" ")}`,
+                `batches submit takes one JSONL file of jobs; to make a job of each file or folder, use ${CommandLine.display(["--each", ...files])}`,
               ),
             );
           }
@@ -1067,9 +1096,9 @@ function submitBatchCommand() {
           const customId = yield* customIdOrPrintNew(
             flags.customId,
             (made) =>
-              `Submitting with custom ID ${made}: if this command stops before every job is added, run this command again with ${shellWords("--custom-id", made)} to add the rest.`,
+              `Submitting with custom ID ${made}: if this command stops before every job is added, run this command again with ${CommandLine.display(["--custom-id", made])} to add the rest.`,
           );
-          const again = `run this command again with ${shellWords("--custom-id", customId)}`;
+          const again = `run this command again with ${CommandLine.display(["--custom-id", customId])}`;
           yield* uploadMissing(client, local.files);
           const created = yield* hubCall((signal) =>
             client.batches.create({ customId, agent: parsedAgent.data }, { signal }),
@@ -1082,21 +1111,32 @@ function submitBatchCommand() {
           const added = adds.flatMap((add) => add.jobs.map(({ job }) => job));
           const submitted = Effect.gen(function* () {
             yield* printStep(adds.at(-1)?.batch ?? created);
-            yield* Effect.sync(() =>
-              process.stderr.write(
-                `To wait for its outputs, ${again} --wait; to see how it stands, run ${shellWords("agent-batch", "batches", "get", "--id", created.id)}.\n`,
-              ),
-            );
+            if (personWatches()) {
+              yield* Effect.sync(() =>
+                process.stderr.write(
+                  `To wait for it and save each job's line, ${again} ${CommandLine.display(["--wait", "--output-dir", "NEW_DIR"])}; to see how it stands, run ${CommandLine.display(["agent-batch", "batches", "get", "--id", created.id])}.\n`,
+                ),
+              );
+            }
           });
           return yield* flags.wait
-            ? waitForBatch(
+            ? waitAndSave(
                 client,
                 created.id,
                 Array.zip(
                   local.jobs.map((job) => job.customId),
                   added,
                 ),
-                { again, timeout: flags.waitTimeout, outputDir: flags.outputDir },
+                {
+                  again,
+                  // `0` waits without limit; it is a duration until here, so that without --wait it
+                  // is refused as any --wait-timeout is.
+                  timeout:
+                    flags.waitTimeout === undefined || Duration.isZero(flags.waitTimeout)
+                      ? undefined
+                      : flags.waitTimeout,
+                  outputDir: flags.outputDir,
+                },
               )
             : submitted;
         }).pipe(Effect.mapError(commandError)),

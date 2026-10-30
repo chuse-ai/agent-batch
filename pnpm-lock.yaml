@@ -227,6 +227,9 @@ catalogs:
     '@testcontainers/postgresql':
       specifier: ^12.2.1
       version: 12.2.1
+    '@types/ms':
+      specifier: ^2.1.0
+      version: 2.1.0
     '@types/node':
       specifier: ^22.20.5
       version: 22.20.5
@@ -302,12 +305,12 @@ catalogs:
     log-update:
       specifier: ^8.0.0
       version: 8.0.0
+    ms:
+      specifier: ^2.1.3
+      version: 2.1.3
     nf3:
       specifier: ^0.4.2
       version: 0.4.2
-    parse-duration:
-      specifier: ^2.1.10
-      version: 2.1.10
     pg:
       specifier: ^8.23.1
       version: 8.23.1
@@ -614,6 +617,9 @@ importers:
       '@standard-schema/utils':
         specifier: 'catalog:'
         version: 0.3.0
+      '@types/ms':
+        specifier: 'catalog:'
+        version: 2.1.0
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.5
@@ -641,9 +647,9 @@ importers:
       log-update:
         specifier: 'catalog:'
         version: 8.0.0
-      parse-duration:
+      ms:
         specifier: 'catalog:'
-        version: 2.1.10
+        version: 2.1.3
       proper-lockfile:
         specifier: 'catalog:'
         version: 4.1.2
@@ -2402,6 +2408,9 @@ packages:
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
+
+  '@types/ms@2.1.0':
+    resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
 
   '@types/node@18.19.130':
     resolution: {integrity: sha512-GRaXQx6jGfL8sKfaIDD6OupbIHBr9jv7Jnaml9tB7l4v068PAOXqfcujMMo5PhbIs6ggR1XODELqahT2R8v0fg==}
@@ -4425,9 +4434,6 @@ packages:
   parse-conflict-json@6.0.0:
     resolution: {integrity: sha512-JIdsITvN0yVRpYxiip9DpCduYi75AryIDSCf6ez/Yul6PV46L0B/8SxSvLiMmWiUZKopLrD1BZgexxCfufoT9w==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
-
-  parse-duration@2.1.10:
-    resolution: {integrity: sha512-l72x6XU6zWWOWfdyobeINOjxDSydA0Gm+Q51PJMtWZmXVnQXXWzFv51r6EiFE+WnjZPUsshIMOU4iONDL8A68Q==}
 
   parse-json@5.2.0:
     resolution: {integrity: sha512-ayCKvm/phCGxOkYRSCM82iDwct8/EonSEgCSxWxD7ve6jHggsFl4fZVQBPRNgQoKiuV/odhFrGzQXZwbifC8Rg==}
@@ -7004,6 +7010,8 @@ snapshots:
 
   '@types/estree@1.0.9': {}
 
+  '@types/ms@2.1.0': {}
+
   '@types/node@18.19.130':
     dependencies:
       undici-types: 5.26.5
@@ -8792,8 +8800,6 @@ snapshots:
       json-parse-even-better-errors: 6.0.0
       just-diff: 6.0.2
       just-diff-apply: 5.5.0
-
-  parse-duration@2.1.10: {}
 
   parse-json@5.2.0:
     dependencies:
