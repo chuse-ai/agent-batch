@@ -70,14 +70,15 @@ function hubServer(port: number) {
 }
 
 /**
- * The sweep of content nothing uses, at start and every hour after, as the Workers hub's Cron
- * Trigger runs it there; a sweep that fails is logged, and the next one tries again.
+ * The sweep of content nothing uses, at start and at the top of every hour after, in UTC, as the
+ * Workers hub's Cron Trigger in `wrangler.jsonc` runs it there with the same expression; a sweep
+ * that fails is logged, and the next one tries again.
  */
 const sweeper = Layer.effectDiscard(
   Effect.forkScoped(
     sweepUnusedBlobs.pipe(
       Effect.catchCause(Effect.logError),
-      Effect.repeat(Schedule.spaced("1 hour")),
+      Effect.repeat(Schedule.cron("0 * * * *", "UTC")),
     ),
   ),
 );
