@@ -466,9 +466,7 @@ export const runnerHttpContract = {
       ...byKey({ runner: ["register"] }),
     )
     .input(
-      z.strictObject({
-        name: z.string().check(z.describe("The Runner's name, as the hub lists it.")),
-      }),
+      z.object({ name: z.string().check(z.describe("The Runner's name, as the hub lists it.")) }),
     )
     .output(registeredRunnerSchema),
   getInputFileChunk: api
@@ -485,7 +483,8 @@ export const runnerHttpContract = {
       ...byKey({ runner: ["actAs"] }),
     )
     .input(
-      z.extend(jobRefSchema, {
+      z.object({
+        ...jobRefSchema.shape,
         path: filePathSchema.check(z.describe("The Input file's path, its `/` unencoded.")),
         index: z.int32().check(z.nonnegative(), z.describe("The chunk's position, from 0.")),
       }),

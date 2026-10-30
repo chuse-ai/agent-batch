@@ -1,14 +1,15 @@
 import { getOpenAPIMeta } from "@orpc/openapi";
 import { walkProcedureContractsSync } from "@orpc/server";
-import { apiContract, runnerHttpContract } from "contract";
+import { apiContract } from "contract";
 import { expect, test } from "vite-plus/test";
 
-// Every call refuses a parameter it does not define rather than run without it (ADR 0010). Checked
-// on each input's top-level object; the batches tests send an unknown field nested in a job.
+// Every API call refuses a parameter it does not define rather than run without it (ADR 0010).
+// Checked on each input's top-level object; the batches tests send an unknown field nested in a job.
+// The Runner's own calls ignore unknown fields instead, as the Runner protocol does (ADR 0026).
 
 test("every call's input refuses a parameter it does not define", async () => {
   const checks: Promise<void>[] = [];
-  walkProcedureContractsSync({ apiContract, runnerHttpContract }, (procedure, path) => {
+  walkProcedureContractsSync({ apiContract }, (procedure, path) => {
     for (const schema of procedure["~orpc"].inputSchemas ?? []) {
       // The upload's input is oRPC's request parts: oRPC fills the outer object and `headers` with
       // more than the call reads, so they stay open, and only `params` is the caller's to check.
