@@ -432,7 +432,7 @@ export const MAX_FILES_PER_CHECK = 1000;
  * upload it: `transfer` names how, `put` being one request carrying the whole file, so other ways,
  * such as resumable uploads, can follow.
  */
-const blobCheckSchema = z.union([
+const blobCheckSchema = z.discriminatedUnion("stored", [
   z.extend(blobRefSchema, { stored: z.literal(true) }),
   z.extend(blobRefSchema, {
     stored: z.literal(false),
