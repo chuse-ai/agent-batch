@@ -240,16 +240,6 @@ test("batches submit adds the jobs of a JSONL file in its order, at most 100 at 
   );
 });
 
-// Scripts that write JSONL leave stray whitespace lines, which openai-cli skips too.
-test("batches submit leaves out lines of a JSONL file that hold only whitespace", async () => {
-  const [a, b] = ["a", "b"].map((customId) => JSON.stringify({ customId, input: "A posting." }));
-  const cwd = await folderWith({ "jobs.jsonl": `${a}\n   \n\t\n${b}\n  ` });
-  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
-
-  expect((await submit(hub.url, cwd, ["jobs.jsonl"])).exitCode).toBe(0);
-  expect(hub.adds.flat().map((job) => job.customId)).toEqual(["a", "b"]);
-});
-
 // Root reads any folder, so the refusal shows only for another user.
 test.skipIf(process.getuid?.() === 0)(
   "batches submit --each refuses a folder whose tree it cannot read before sending anything",

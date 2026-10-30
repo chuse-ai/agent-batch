@@ -665,43 +665,6 @@ const endProgress = Effect.sync(() => {
 });
 
 /**
- * `bytes` with every line that holds only whitespace emptied, so that Ndjson's `ignoreEmptyLines`
- * leaves it out, as openai-cli's `outerSpace` (`batch_records_scan.go`) skips such lines; Effect's
- * skips only empty ones. Done on the bytes, as decoding them to text first would lose Ndjson's
- * UTF-8 and line size checks. A line's leading whitespace waits until the line shows whether it
- * holds more, across chunks.
- */
-function withBlankLinesEmptied<E, R>(bytes: Stream.Stream<Uint8Array, E, R>) {
-  let held: Uint8Array[] = [];
-  let blank = true;
-  return Stream.map(bytes, (chunk) => {
-    const kept: Uint8Array[] = [];
-    let start = 0;
-    let whitespaceFrom = blank ? 0 : -1;
-    for (const [i, byte] of chunk.entries()) {
-      if (byte === 0x0a || byte === 0x0d) {
-        if (whitespaceFrom !== -1) {
-          held = [];
-          if (whitespaceFrom < i) {
-            kept.push(chunk.subarray(start, whitespaceFrom));
-            start = i;
-          }
-        }
-        whitespaceFrom = i + 1;
-      } else if (whitespaceFrom !== -1 && ![0x20, 0x09, 0x0b, 0x0c].includes(byte)) {
-        kept.push(...held);
-        held = [];
-        whitespaceFrom = -1;
-      }
-    }
-    blank = whitespaceFrom !== -1;
-    kept.push(chunk.subarray(start, blank ? whitespaceFrom : chunk.length));
-    if (blank) held.push(chunk.subarray(whitespaceFrom));
-    return Buffer.concat(kept);
-  });
-}
-
-/**
  * The jobs in the JSONL file `file`, one job's JSON per line, as `batches add-jobs` takes each,
  * blank lines left out, all read before any is sent; each is checked as the hub checks it. A line
  * may hold at most what one request to the hub carries. A problem names its job by its place among
@@ -714,9 +677,10 @@ function jobsFromJsonl(file: string) {
       return yield* Effect.fail(new Error(`${file} is not a file`));
     }
     const jobs: JobSubmission[] = [];
-    yield* withBlankLinesEmptied(fs.stream(file)).pipe(
+    yield* fs.stream(file).pipe(
       // Ndjson skips a leading BOM and accepts CRLF and CR line ends, as files saved on Windows
-      // have them.
+      // have them. A line holding only whitespace is not skipped but fails as invalid JSON, as
+      // `ignoreEmptyLines` skips only lines with nothing in them.
       Stream.pipeThroughChannel(
         Ndjson.decode({ ignoreEmptyLines: true, maxLineBytes: MAX_BODY_BYTES }),
       ),
