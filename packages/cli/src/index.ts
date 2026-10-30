@@ -504,6 +504,11 @@ function jobsFromPaths(paths: readonly string[]) {
         for (const entry of entries) {
           const file = path.join(given, entry);
           if ((yield* fs.stat(file)).type === "Directory") {
+            // The glob passes over a folder it cannot read, which would leave the job without its
+            // files.
+            yield* fs
+              .access(file, { readable: true })
+              .pipe(Effect.mapError(() => new Error(`${file} cannot be read`)));
             const link = yield* Effect.option(fs.readLink(file));
             if (Option.isSome(link)) {
               return yield* Effect.fail(

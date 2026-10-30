@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -257,6 +257,27 @@ test("batches submit refuses a file that is not JSONL before sending anything, p
   });
   expect(hub.adds).toEqual([]);
 });
+
+// Root reads any folder, so the refusal shows only for another user.
+test.skipIf(process.getuid?.() === 0)(
+  "batches submit --each refuses a folder whose tree it cannot read before sending anything",
+  async () => {
+    const cwd = await folderWith({ "claim/form.txt": "form", "claim/2024/scan.txt": "scan" });
+    const locked = path.join(cwd, "claim/2024");
+    await chmod(locked, 0o000);
+    const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
+
+    const refused = await submit(hub.url, cwd, ["--each", "claim"]).finally(() =>
+      chmod(locked, 0o755),
+    );
+
+    expect(refused).toMatchObject({
+      exitCode: 1,
+      stderr: expect.stringContaining("claim/2024 cannot be read"),
+    });
+    expect(hub.adds).toEqual([]);
+  },
+);
 
 test("batches submit run again with its --custom-id sends the same jobs, so the hub adds only those it lacks", async () => {
   const cwd = await folderWith({ "a.pdf": "a", "claim/form.txt": "form" });
