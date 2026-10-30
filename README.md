@@ -39,17 +39,17 @@ That runs a hub, a Runner and Postgres in the background, and on first run offer
 cat > job.json <<'EOF'
 {
   "customId": "quickstart-1",
-  "agent": { "resultContract": { "schema": { "type": "integer" } } },
+  "agent": { "outputContract": { "schema": { "type": "integer" } } },
   "input": "Count the lines of inputs/notes.txt and submit the count.",
   "inputFiles": { "notes.txt": { "content": "one\ntwo\nthree\n" } }
 }
 EOF
 ID=$(npx agent-batch jobs submit --input job.json | jq -er .id)
 npx agent-batch jobs wait --id "$ID"             # prints the job when it ends; exits 1 unless it succeeded
-npx agent-batch jobs get --id "$ID" | jq .result # 3
+npx agent-batch jobs get --id "$ID" | jq .output # 3
 ```
 
-What happened: the agent found `notes.txt` in its Workspace's `inputs/` folder, counted, and could only finish by calling `submit_result`. The result was checked against the Result contract, the JSON Schema in the agent definition. Had it submitted `"3"` instead of `3`, the validation error would have gone back to the agent to fix; had it given up, the job would have failed with `noResult`. A job never succeeds with nothing in it. The schema checks the shape, not the facts: `4` is also an integer, so read some results.
+What happened: the agent found `notes.txt` in its Workspace's `inputs/` folder, counted, and could only finish by calling `submit_output`. The output was checked against the Output schema, the JSON Schema in the agent definition's Output contract. Had it submitted `"3"` instead of `3`, the validation error would have gone back to the agent to fix; had it given up, the job would have failed with `noOutput`. A job never succeeds with nothing in it. The schema checks the shape, not the facts: `4` is also an integer, so read some outputs.
 
 If you did not see `3`: `npx agent-batch jobs events --id "$ID"` prints what the agent did, and `npx agent-batch stack logs --follow` prints the stack. Submit `job.json` a second time and you get the same job back, because the `customId` is the same. `npx agent-batch stack stop` keeps your data; `npx agent-batch stack delete` removes it and does not ask.
 
@@ -77,7 +77,7 @@ one Runner process (Node, on your machine)
 
 One container too many hung the host for about 30 minutes instead of failing a job. These are particular workloads on one machine, not a capacity guarantee. Method and results: [docs/benchmark.md](docs/benchmark.md).
 
-<!-- recording: a terminal, about 30 seconds, no narration, labelled "Hetzner CAX11, 2 vCPU, 4 GB". A Batch of a few hundred text jobs is added with the CLI; the 5 Canary jobs end first; then `jobs list --status running` and `--status succeeded` are re-run every few seconds and the counts move from running to succeeded; one `jobs get | jq .result` prints a validated JSON object. -->
+<!-- recording: a terminal, about 30 seconds, no narration, labelled "Hetzner CAX11, 2 vCPU, 4 GB". A Batch of a few hundred text jobs is added with the CLI; the 5 Canary jobs end first; then `jobs list --status running` and `--status succeeded` are re-run every few seconds and the counts move from running to succeeded; one `jobs get | jq .output` prints a validated JSON object. -->
 
 A Runner runs 8 jobs at a time by default. That is the concurrency limit, and it is a setting:
 
@@ -98,7 +98,7 @@ cat > agent.json <<'EOF'
 {
   "agent": {
     "instructions": "Read the job posting in inputs/posting.txt. Submit the requirements it treats as mandatory, the ones it treats as optional, and the seniority it is really asking for, judged from the responsibilities rather than the title.",
-    "resultContract": {
+    "outputContract": {
       "schema": {
         "type": "object",
         "required": ["mustHave", "niceToHave", "seniority"],
@@ -131,11 +131,11 @@ EOF
 jq --arg id "$BATCH" '{id: $id, jobs: .}' postings.json \
   | npx agent-batch batches add-jobs --input - | jq -r '.jobs[].job.id' > ids
 for id in $(cat ids); do
-  npx agent-batch jobs wait --id "$id" | jq -c 'if .status == "succeeded" then .result else {id, status} end'
+  npx agent-batch jobs wait --id "$id" | jq -c 'if .status == "succeeded" then .output else {id, status} end'
 done
 ```
 
-Each line is one posting's result, already checked against the schema, or a failed job's ID and status. A run gave:
+Each line is one posting's output, already checked against the schema, or a failed job's ID and status. A run gave:
 
 ```json
 {"mustHave":["5+ years of TypeScript experience","Postgres"],"seniority":"senior","niceToHave":["Effect","Cloudflare Workers"]}
@@ -154,15 +154,15 @@ Two postings you can watch. Four hundred you count. With four hundred, this happ
 2. After the Canary, if more than 10% of the jobs that have ended since it began failed, the Batch pauses. This is the failure breaker. It judges from the first jobs to end, so a run of early failures pauses a large Batch quickly.
 3. `batches resume --id "$BATCH"` carries on where it stopped; `batches pause`, `cancel` and `get` work the same way, as do single jobs, and ended jobs can be deleted.
 
-The hub records every job's events (what the agent did), activity, usage in tokens and cost, and result. A Batch counts its jobs by status, and jobs can be listed by status, label, Batch and custom ID:
+The hub records every job's events (what the agent did), activity, usage in tokens and cost, and output. A Batch counts its jobs by status, and jobs can be listed by status, label, Batch and custom ID:
 
 ```sh
 npx agent-batch batches get --id "$BATCH" | jq -c .jobCounts   # {"queued":0,"running":0,...,"succeeded":2,...}
 npx agent-batch jobs list --batch-id "$BATCH" --status failed
-npx agent-batch jobs list --batch-id "$BATCH" --status succeeded   # listed jobs carry no result: read one with jobs get
+npx agent-batch jobs list --batch-id "$BATCH" --status succeeded   # listed jobs carry no output: read one with jobs get
 ```
 
-Jobs can be added continuously (`add-jobs`, `jobs submit`) and read continuously (`jobs wait`, `jobs list`). A job's journal is on disk, so a restarted Runner recovers its jobs where they stopped. A prompt that gives wrong but valid answers passes the Canary. Read some results.
+Jobs can be added continuously (`add-jobs`, `jobs submit`) and read continuously (`jobs wait`, `jobs list`). A job's journal is on disk, so a restarted Runner recovers its jobs where they stopped. A prompt that gives wrong but valid answers passes the Canary. Read some outputs.
 
 ## Read it before you run it
 
@@ -184,13 +184,13 @@ Model-provider credentials live in the Runner, outside every job sandbox. The Ru
 cat > look.json <<'EOF'
 {
   "customId": "look-1",
-  "agent": { "resultContract": { "schema": { "type": "object", "required": ["names", "networkWorks"],
+  "agent": { "outputContract": { "schema": { "type": "object", "required": ["names", "networkWorks"],
     "properties": { "names": { "type": "array", "items": { "type": "string" } }, "networkWorks": { "type": "boolean" } } } } },
   "input": "Run `env` and submit the names of the environment variables you see, names only. Then run `node -e \"fetch('https://example.com').then(r => console.log(r.status))\"` and submit whether it printed a status."
 }
 EOF
 ID=$(npx agent-batch jobs submit --input look.json | jq -er .id)
-npx agent-batch jobs wait --id "$ID" | jq -c '.result | {networkWorks, keys: [.names[] | select(test("KEY|TOKEN|SECRET"))]}'
+npx agent-batch jobs wait --id "$ID" | jq -c '.output | {networkWorks, keys: [.names[] | select(test("KEY|TOKEN|SECRET"))]}'
 ```
 
 A run whose Runner held an OpenAI key printed `{"networkWorks":false,"keys":[]}`; the same `fetch` run in the Runner's own container printed `200`.

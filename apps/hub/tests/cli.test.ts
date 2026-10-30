@@ -28,7 +28,7 @@ beforeAll(async () => {
 afterAll(() => system.stop());
 
 const SUBMISSION = {
-  agent: { resultContract: { schema: { type: "integer" } } },
+  agent: { outputContract: { schema: { type: "integer" } } },
   input: "Count to a million.",
 };
 
@@ -62,7 +62,7 @@ function agentBatch(...argv: string[]) {
 }
 
 test("jobs submit prints the job it accepted from a file, and jobs wait prints it once it has ended", async () => {
-  system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
+  system.model.setResponses([callTool("submit_output", { value: 1_000_000 })]);
   const dir = await mkdtemp(path.join(tmpdir(), "agent-batch-cli-"));
   const file = path.join(dir, "job.json");
   await writeFile(file, JSON.stringify(SUBMISSION));
@@ -72,7 +72,7 @@ test("jobs submit prints the job it accepted from a file, and jobs wait prints i
 
   const { id } = z.parse(z.object({ id: z.string() }), submitted.printed);
   expect(await agentBatch("jobs", "wait", "--id", id)).toMatchObject({
-    printed: { id, status: "succeeded", result: 1_000_000 },
+    printed: { id, status: "succeeded", output: 1_000_000 },
     exitCode: 0,
   });
 });

@@ -49,7 +49,7 @@ export default interface JobTable {
 
   endedAt: ColumnType<Date | null, Date | string | null, Date | string | null>;
 
-  result: ColumnType<JsonValue | null, JsonValue | null, JsonValue | null>;
+  output: ColumnType<JsonValue | null, JsonValue | null, JsonValue | null>;
 
   pendingControl: ColumnType<JobControl | null, JobControl | null, JobControl | null>;
 

@@ -129,7 +129,7 @@ function controlJobAndHint(jobId: JobId, control: Control, given?: GivenLimits) 
 
 /**
  * `problems` with an input, raised as oRPC raises invalid input, so the answer lists them as it lists
- * the contract's own: for what the contract's schemas cannot check, such as a Result contract's
+ * the contract's own: for what the contract's schemas cannot check, such as an Output contract's
  * schema or the hub's maximums for limits.
  */
 function invalidInput<E>(

@@ -8,7 +8,7 @@ import { callTool } from "./scripted-model.ts";
 
 // A job whose tool call never ends, against a real hub and Runner: its daemon never answers the
 // call while it keeps answering pings, as when the host refuses the daemon a thread, here because
-// the agent submits its result as a FIFO nothing writes. The run timeout, a cancel and the
+// the agent submits its output as a FIFO nothing writes. The run timeout, a cancel and the
 // Runner's stop must end the job all the same, and stop everything it left running.
 
 const run = promisify(execFile);
@@ -24,24 +24,24 @@ afterAll(() => system.stop());
 const SUBMISSION = {
   input: "Submit what the pipe holds.",
   inputFiles: {},
-  resultContract: { schema: { type: "string" } },
+  outputContract: { schema: { type: "string" } },
 } satisfies OneJob;
 
 /**
  * Submits a job that leaves a `sleep` running, for a duration no other process uses, and then
- * submits its result from a FIFO, which never ends; waits until that call runs. Returns the job's
+ * submits its output from a FIFO, which never ends; waits until that call runs. Returns the job's
  * ID and whether the `sleep` still runs, as seen from outside its sandbox.
  */
 async function submitStalledJob(client: ApiClient, limits: { runTimeoutSeconds?: number } = {}) {
   const seconds = String(1000 + Math.floor(Math.random() * 9000));
   system.model.setResponses([
     callTool("bash", { command: `mkfifo pipe && (nohup sleep ${seconds} >/dev/null 2>&1 &)` }),
-    callTool("submit_result", { path: "pipe" }),
+    callTool("submit_output", { path: "pipe" }),
   ]);
   const { id } = await submitJob(client, { ...SUBMISSION, ...limits });
   await expect
     .poll(async () => (await client.jobs.get({ id })).activity?.[0]?.tools, { timeout: 10_000 })
-    .toMatchObject([{ name: "submit_result", status: "running" }]);
+    .toMatchObject([{ name: "submit_output", status: "running" }]);
   // `pgrep` exits with 1 when nothing matches; any other failure tells nothing.
   const sleeping = () =>
     run("pgrep", ["-f", `^sleep ${seconds}$`]).then(

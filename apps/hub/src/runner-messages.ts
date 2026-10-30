@@ -104,8 +104,8 @@ interface ReportRow {
    */
   failureReason: JobFailureReason | null;
   failureMessage: string | null;
-  /** The result, absent unless the report carries a success; `null` is itself a result. */
-  result?: JsonValue;
+  /** The output, absent unless the report carries a success; `null` is itself an output. */
+  output?: JsonValue;
   /**
    * Whether the Runner never started the job, so no Runner holds any of its work: a job held so
    * may be resumed on any Runner.
@@ -138,7 +138,7 @@ const ENDS: ReadonlyMap<string, JobStatus> = new Map([
 /**
  * What a report says of its job's lifecycle, read from the Runner's own entries among its
  * events: a start, a recovery or a resume makes the job running, a pause makes it paused, and its
- * end, one kind per outcome, makes it succeeded, with its result, failed or cancelled. Each
+ * end, one kind per outcome, makes it succeeded, with its output, failed or cancelled. Each
  * applies with the events that carry it, so a job pauses or ends only once every entry before it is
  * stored, and a hub that loses one loses those events too and is sent both again. A job that failed
  * without its journal recording an end says so in `failure`. A job its Runner never started has no
@@ -155,7 +155,7 @@ function lifecycleOf(
   | "endedAt"
   | "failureReason"
   | "failureMessage"
-  | "result"
+  | "output"
   | "neverStarted"
 > {
   const records = report.events.flatMap((event) => (event.type === "entry" ? [event.record] : []));
@@ -180,8 +180,8 @@ function lifecycleOf(
   if (end && status) {
     const ended = { ...base, status };
     if (status === "succeeded") {
-      const { timestamp, result } = z.parse(jobSuccessSchema, end.data);
-      return { ...ended, endedAt: isoDate(timestamp), result };
+      const { timestamp, output } = z.parse(jobSuccessSchema, end.data);
+      return { ...ended, endedAt: isoDate(timestamp), output };
     }
     if (status === "failed") return failed(z.parse(jobFailureSchema, end.data));
     return { ...ended, endedAt: isoDate(z.parse(jobEndingSchema, end.data).timestamp) };
@@ -294,7 +294,7 @@ function applyReportsStatement(
           .selectFrom((eb) => jsonRows(eb, rows))
           .select((eb) => {
             const field = (name: keyof ReportRow) => eb.ref("row.value", "->>").key(name);
-            const json = <Name extends "usage" | "activity" | "result">(name: Name) =>
+            const json = <Name extends "usage" | "activity" | "output">(name: Name) =>
               eb.ref("row.value", "->").key(name);
             return [
               eb.cast<JobId>(field("jobId"), "uuid").as("jobId"),
@@ -311,7 +311,7 @@ function applyReportsStatement(
                 .cast<JobFailureReason | null>(field("failureReason"), jobFailureReason)
                 .as("failureReason"),
               eb.cast<string | null>(field("failureMessage"), "text").as("failureMessage"),
-              json("result").as("result"),
+              json("output").as("output"),
               eb.cast<boolean>(field("neverStarted"), "boolean").as("neverStarted"),
             ];
           }),
@@ -457,7 +457,7 @@ function applyReportsStatement(
             "endedAt",
             "failureReason",
             "failureMessage",
-            "result",
+            "output",
             "neverStarted",
             "nextTotalTokens",
             "nextCostUsd",
@@ -500,7 +500,7 @@ function applyReportsStatement(
                 .end(),
               failureReason: eb.ref("r.failureReason"),
               failureMessage: eb.ref("r.failureMessage"),
-              result: eb.ref("r.result"),
+              output: eb.ref("r.output"),
               pendingControl: unlessSettled(eb.ref("j.pendingControl")),
               pendingControlRequestedAt: unlessSettled(eb.ref("j.pendingControlRequestedAt")),
               // A job held before it started has no work on any Runner, so it is no longer sent to
@@ -758,7 +758,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                     jsonBuildObject({
                       instructions: eb.ref("batch.instructions"),
                       input: eb.ref("wanted.input"),
-                      resultContract: eb.ref("batch.resultContract"),
+                      outputContract: eb.ref("batch.outputContract"),
                       // The files, the agent's and the job's own, by name, SHA-256, size and chunk
                       // size, without their bytes, which the Runner downloads a chunk at a time.
                       inputFiles: jsonArrayFrom(

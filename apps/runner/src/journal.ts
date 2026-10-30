@@ -69,11 +69,11 @@ export const JobResumed = defineEntry<JobOpening>(JOB_RESUMED);
  */
 export const JobPaused = defineEntry<JobPause>(JOB_PAUSED);
 
-/** Written once per run, as its closing, when the job's agent submitted an accepted result. */
+/** Written once per run, as its closing, when the job's agent submitted an accepted output. */
 export const JobSucceeded = defineEntry<JobSuccess>(JOB_SUCCEEDED);
 
 /**
- * Written once per run, as its closing, when the job's agent stopped without a result, a limit
+ * Written once per run, as its closing, when the job's agent stopped without an output, a limit
  * stopped it or its run failed, with why.
  */
 export const JobFailed = defineEntry<JobFailure>(JOB_FAILED);

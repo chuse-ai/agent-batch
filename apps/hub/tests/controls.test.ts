@@ -20,7 +20,7 @@ afterAll(() => system.stop());
 const SUBMISSION = {
   input: "Count to a million.",
   inputFiles: {},
-  resultContract: { schema: { type: "integer" } },
+  outputContract: { schema: { type: "integer" } },
 } satisfies OneJob;
 
 /** Submits a job whose agent's model call runs until the Runner cuts it off, and waits until it runs. */
@@ -57,7 +57,7 @@ test("pausing a job no Runner was sent holds it, and resuming it lets it start",
 
   expect(await client.jobs.pause({ id })).toMatchObject({ status: "paused" });
   expect(await client.jobs.resume({ id })).toMatchObject({ status: "queued" });
-  system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
+  system.model.setResponses([callTool("submit_output", { value: 1_000_000 })]);
   await system.startRunner();
 
   await untilStatus(client, id, "succeeded");
@@ -91,12 +91,12 @@ test("cancelling a running job stops its work at once and ends it cancelled, wit
   ]);
 });
 
-test("a cancel that reaches the Runner after the job's result was accepted leaves it succeeded", async () => {
-  // The result is accepted while a command of the same round still runs, so the run has not ended.
+test("a cancel that reaches the Runner after the job's output was accepted leaves it succeeded", async () => {
+  // The output is accepted while a command of the same round still runs, so the run has not ended.
   system.model.setResponses([
     fauxAssistantMessage(
       [
-        fauxToolCall("submit_result", { value: 1_000_000 }),
+        fauxToolCall("submit_output", { value: 1_000_000 }),
         fauxToolCall("bash", { command: "sleep 600" }),
       ],
       { stopReason: "toolUse" },
@@ -109,7 +109,7 @@ test("a cancel that reaches the Runner after the job's result was accepted leave
       async () =>
         (await client.jobs.events({ id })).events.some(
           (event) =>
-            event.type === "entry" && JSON.stringify(event.record).includes("Result accepted."),
+            event.type === "entry" && JSON.stringify(event.record).includes("Output accepted."),
         ),
       { timeout: 10_000 },
     )
@@ -118,17 +118,17 @@ test("a cancel that reaches the Runner after the job's result was accepted leave
   await client.jobs.cancel({ id });
 
   await untilStatus(client, id, "succeeded");
-  expect(await client.jobs.get({ id })).toMatchObject({ result: 1_000_000 });
+  expect(await client.jobs.get({ id })).toMatchObject({ output: 1_000_000 });
 });
 
 test("a job that succeeded is left as it is by a cancel, and refuses a pause and a resume", async () => {
-  system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
+  system.model.setResponses([callTool("submit_output", { value: 1_000_000 })]);
   const client = await system.clientWithNewJobsKey();
   const { id } = await submitJob(client, SUBMISSION);
   await untilStatus(client, id, "succeeded");
 
   const job = await client.jobs.cancel({ id });
-  expect(job).toMatchObject({ status: "succeeded", result: 1_000_000 });
+  expect(job).toMatchObject({ status: "succeeded", output: 1_000_000 });
   expect(job).not.toHaveProperty("pendingControl");
   await expect(client.jobs.pause({ id })).rejects.toMatchObject({ code: "CONFLICT" });
   await expect(client.jobs.resume({ id })).rejects.toMatchObject({ code: "CONFLICT" });
@@ -153,7 +153,7 @@ test("pausing a running job stops it with its work kept, and resuming it carries
       told = context.messages.flatMap((message) =>
         message.role === "user" && typeof message.content === "string" ? [message.content] : [],
       );
-      return callTool("submit_result", { value: 1_000_000 });
+      return callTool("submit_output", { value: 1_000_000 });
     },
   ]);
   expect(await client.jobs.resume({ id })).toMatchObject({ status: "queued" });
@@ -176,7 +176,7 @@ test("a cancelled job resumes from where it stopped", async () => {
   await client.jobs.cancel({ id });
   await untilStatus(client, id, "cancelled");
 
-  system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
+  system.model.setResponses([callTool("submit_output", { value: 1_000_000 })]);
   await client.jobs.resume({ id });
 
   await untilStatus(client, id, "succeeded");
@@ -200,7 +200,7 @@ test("a failed job resumes with a note asking its agent to carry on", async () =
     (context) => {
       const last = context.messages.at(-1);
       told = last?.role === "user" && typeof last.content === "string" ? last.content : "";
-      return callTool("submit_result", { value: 1_000_000 });
+      return callTool("submit_output", { value: 1_000_000 });
     },
   ]);
   await client.jobs.resume({ id });
@@ -264,7 +264,7 @@ test("pausing a running job frees its slot for the next queued job", async () =>
   await system.startRunner({ maxJobs: 1 });
   const client = await system.clientWithNewJobsKey();
   const id = await submitRunningJob(client);
-  system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
+  system.model.setResponses([callTool("submit_output", { value: 1_000_000 })]);
   const next = await submitJob(client, SUBMISSION);
 
   await client.jobs.pause({ id });
@@ -289,7 +289,7 @@ test("deleting an unfinished job is refused", async () => {
 });
 
 test("deleting a finished job removes its content at once and its files from its host once its Runner confirms", async () => {
-  system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
+  system.model.setResponses([callTool("submit_output", { value: 1_000_000 })]);
   const client = await system.clientWithNewJobsKey();
   const { id } = await submitJob(client, SUBMISSION);
   await untilStatus(client, id, "succeeded");
@@ -303,7 +303,7 @@ test("deleting a finished job removes its content at once and its files from its
     deletedAt: expect.any(Date),
     pendingControl: { type: "delete", requestedAt: expect.any(Date) },
   });
-  expect(deleted).not.toHaveProperty("result");
+  expect(deleted).not.toHaveProperty("output");
   await expect(client.jobs.events({ id })).rejects.toMatchObject({ code: "NOT_FOUND" });
   await expect
     .poll(() => client.jobs.get({ id }).catch((error: unknown) => error), { timeout: 10_000 })
@@ -313,7 +313,7 @@ test("deleting a finished job removes its content at once and its files from its
 });
 
 test("a job deleted while its Runner is away reads as deleted, and a repeated delete returns it, until the Runner is back", async () => {
-  system.model.setResponses([callTool("submit_result", { value: 1_000_000 })]);
+  system.model.setResponses([callTool("submit_output", { value: 1_000_000 })]);
   const client = await system.clientWithNewJobsKey();
   const { id } = await submitJob(client, SUBMISSION);
   await untilStatus(client, id, "succeeded");

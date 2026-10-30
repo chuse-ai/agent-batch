@@ -1,7 +1,7 @@
 {
   "name": "agent-batch",
   "version": "0.5.0",
-  "description": "Run one-off agent jobs unattended on your own machines, each with a validated result contract.",
+  "description": "Run one-off agent jobs unattended on your own machines, each with a validated output contract.",
   "homepage": "https://github.com/chuse-ai/agent-batch#readme",
   "bugs": {
     "url": "https://github.com/chuse-ai/agent-batch/issues"

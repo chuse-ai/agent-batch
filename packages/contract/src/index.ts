@@ -4,7 +4,7 @@ export {
   type Labels,
   labelsSchema,
   type ListedInputFile,
-  type ResultContract,
+  type OutputContract,
   jobRefSchema,
 } from "./job.ts";
 export * from "./json-rpc.ts";

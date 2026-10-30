@@ -3,7 +3,7 @@
 
 /** Represents the enum agent_batch.jobFailureReason */
 type JobFailureReason =
-  | "noResult"
+  | "noOutput"
   | "runTimedOut"
   | "modelBudgetExceeded"
   | "modelFailed"

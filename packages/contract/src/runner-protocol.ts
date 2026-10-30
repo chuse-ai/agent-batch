@@ -10,7 +10,7 @@ import {
   modelBudgetUsdSchema,
   inputSchema,
   instructionsSchema,
-  resultContractSchema,
+  outputContractSchema,
   runTimeoutSecondsSchema,
   textSchema,
 } from "./job.ts";
@@ -79,7 +79,7 @@ const positionSchema = z.int().check(z.nonnegative());
 
 /**
  * A job as the Runner needs it to run the job: its Batch's agent's instructions, null for none, and
- * Result contract, the job's input, and its Input files, its Batch's and its own, by name, SHA-256, size
+ * Output contract, the job's input, and its Input files, its Batch's and its own, by name, SHA-256, size
  * and chunk size, never their bytes, which the Runner downloads from the hub a chunk at a time
  * (`runnerHttpContract.getInputFileChunk`), so an answer stays small whatever the files' size.
  */
@@ -87,7 +87,7 @@ export const jobContentSchema = z.object({
   instructions: z.nullable(instructionsSchema),
   input: inputSchema,
   inputFiles: z.array(listedInputFileSchema),
-  resultContract: resultContractSchema,
+  outputContract: outputContractSchema,
 });
 export type JobContent = z.infer<typeof jobContentSchema>;
 
@@ -165,8 +165,8 @@ export type JobOpening = z.infer<typeof jobOpeningSchema>;
 export const jobPauseSchema = z.object({ timestamp: timestampSchema });
 export type JobPause = z.infer<typeof jobPauseSchema>;
 
-/** What a success records: when, and the job's result. */
-export const jobSuccessSchema = z.object({ timestamp: timestampSchema, result: jsonTextSchema });
+/** What a success records: when, and the job's output. */
+export const jobSuccessSchema = z.object({ timestamp: timestampSchema, output: jsonTextSchema });
 export type JobSuccess = z.infer<typeof jobSuccessSchema>;
 
 /**
@@ -186,7 +186,7 @@ export const failureSchema = z.object({
   // expect new reasons.
   reason: z
     .enum([
-      "noResult",
+      "noOutput",
       "runTimedOut",
       "modelBudgetExceeded",
       "modelFailed",
@@ -195,7 +195,7 @@ export const failureSchema = z.object({
     ])
     .check(
       z.describe(
-        "What failed the job: `noResult` when its agent ended without an accepted result; `runTimedOut` when a run went past its `runTimeoutSeconds`; `modelBudgetExceeded` when its model calls' cost reached its `modelBudgetUsd`; `modelFailed` when generating the agent's next step failed, as when the model's provider refused the call; `runFaulted` when its run broke on its Runner; `runnerRemoved` when its Runner was removed before it ended. New reasons may be added: treat one you do not know as a fault.",
+        "What failed the job: `noOutput` when its agent ended without an accepted output; `runTimedOut` when a run went past its `runTimeoutSeconds`; `modelBudgetExceeded` when its model calls' cost reached its `modelBudgetUsd`; `modelFailed` when generating the agent's next step failed, as when the model's provider refused the call; `runFaulted` when its run broke on its Runner; `runnerRemoved` when its Runner was removed before it ended. New reasons may be added: treat one you do not know as a fault.",
       ),
     ),
   message: z.optional(

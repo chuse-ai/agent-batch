@@ -1,6 +1,6 @@
 # agent-batch
 
-Run one-off agent jobs unattended on your own machines, each with a validated result contract.
+Run one-off agent jobs unattended on your own machines, each with a validated output contract.
 
 ## The command
 

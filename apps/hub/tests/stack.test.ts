@@ -159,7 +159,7 @@ describe.skipIf(inject("hub") !== "node" || process.platform !== "linux")(
         "batches",
         "create",
         "--json",
-        JSON.stringify({ agent: { resultContract: { schema: { type: "integer" } } } }),
+        JSON.stringify({ agent: { outputContract: { schema: { type: "integer" } } } }),
       );
       const { id: batchId } = z.parse(z.object({ id: z.string() }), JSON.parse(batch.stdout));
       await agentBatch("batches", "pause", "--id", batchId);

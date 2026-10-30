@@ -1,6 +1,6 @@
 # One public package; the hub and runner stay private
 
-agent-batch publishes one npm package, `agent-batch`: the CLI, which calls the hub over HTTP. The hub and runner are private workspace packages distributed as separate images. Callers submit prompts, inline input files and result schemas through the API. Configured Pi extensions and additional script-based customization remain planned. Publishing a library now would freeze internals that are still changing.
+agent-batch publishes one npm package, `agent-batch`: the CLI, which calls the hub over HTTP. The hub and runner are private workspace packages distributed as separate images. Callers submit prompts, inline input files and output schemas through the API. Configured Pi extensions and additional script-based customization remain planned. Publishing a library now would freeze internals that are still changing.
 
 ## Consequences
 

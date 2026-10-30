@@ -84,7 +84,7 @@ const JOB_COLUMNS = [
   "endedAt",
   "runTimeoutSeconds",
   "modelBudgetUsd",
-  "result",
+  "output",
   "failureReason",
   "failureMessage",
   "pendingControl",
@@ -96,7 +96,7 @@ const JOB_COLUMNS = [
 const PROGRESS_COLUMNS = ["totalTokens", "costUsd", "activity"] as const;
 
 /**
- * A job as the API reports it: its result only once it has succeeded and its failure once it has
+ * A job as the API reports it: its output only once it has succeeded and its failure once it has
  * failed, its activity only while it runs, and a control only while it waits for the job's Runner.
  * The report of a run's start carries its first activity, so a job running again never shows the
  * last run's.
@@ -107,7 +107,7 @@ function toApiJob(
 ): Job {
   const {
     status,
-    result,
+    output,
     failureReason,
     failureMessage,
     totalTokens,
@@ -127,7 +127,7 @@ function toApiJob(
       : {}),
     ...(blockedBy === null ? {} : { blockedBy }),
   };
-  return withOutcome({ ...rest, ...summary }, { status, result, failureReason, failureMessage });
+  return withOutcome({ ...rest, ...summary }, { status, output, failureReason, failureMessage });
 }
 
 /**
@@ -205,25 +205,25 @@ export async function readJobs(db: Kysely<Database>, ids: readonly JobId[]): Pro
 }
 
 /** What every job reports whatever its status. */
-type JobBase = Omit<Job, "status" | "result" | "failure">;
+type JobBase = Omit<Job, "status" | "output" | "failure">;
 
 /**
- * `job` with its status and what the status carries: a succeeded job's result, where it has one,
+ * `job` with its status and what the status carries: a succeeded job's output, where it has one,
  * and a failed job's failure, with its message where the cause gave one.
  */
 function withOutcome(
   job: JobBase,
   outcome: {
     status: JobStatus;
-    result?: JobRow["result"];
+    output?: JobRow["output"];
     failureReason: JobFailureReason | null;
     failureMessage: string | null;
   },
 ): Job {
-  const { status, result, failureReason, failureMessage } = outcome;
+  const { status, output, failureReason, failureMessage } = outcome;
   switch (status) {
     case "succeeded":
-      return { ...job, status, ...(result === undefined ? {} : { result }) };
+      return { ...job, status, ...(output === undefined ? {} : { output }) };
     case "failed":
       // The migration keeps a reason on every failed job.
       if (failureReason === null) throw new Error(`The failed job ${job.id} has no failure reason`);
@@ -241,10 +241,10 @@ function withOutcome(
 }
 
 /**
- * What is wrong with a Result contract's schema, as messages: text that is not Unicode, then
- * json-schema-library's own checks of the schema, then the hub's rules for a result.
+ * What is wrong with an Output contract's schema, as messages: text that is not Unicode, then
+ * json-schema-library's own checks of the schema, then the hub's rules for an output.
  */
-export function resultContractProblems(schema: Record.ReadonlyRecord<string, unknown>): string[] {
+export function outputContractProblems(schema: Record.ReadonlyRecord<string, unknown>): string[] {
   // Parsed JSON holds no NaN, Infinity or cycles, so canonical JSON refuses it only for a lone
   // surrogate, as RFC 8785 requires; the contract checks the submission's other text itself. NUL in
   // the schema is left to Postgres, which refuses it in `jsonb`: no schema needs one, and finding it
@@ -257,7 +257,7 @@ export function resultContractProblems(schema: Record.ReadonlyRecord<string, unk
   const root = compileSchema(schema);
   if (root.schemaErrors?.length) return root.schemaErrors.map((error) => error.message);
   const problems: string[] = [];
-  // `submit_result` takes one value (ADR 0009), so a list of results is one job per item.
+  // `submit_output` takes one value (ADR 0009), so a list of outputs is one job per item.
   if ([schema.type].flat().includes("array")) {
     problems.push("The schema must describe a single value, not a list");
   }
@@ -421,7 +421,7 @@ function decide(control: Control, job: ControlledJob, now: Date, given: GivenLim
           runId: crypto.randomUUID(),
           placedAt: null,
           endedAt: null,
-          result: null,
+          output: null,
           failureReason: null,
           failureMessage: null,
         },
@@ -1131,14 +1131,14 @@ export function listJobs(query: JobListQuery) {
         // Read without their content, which the contract's `ListedJob` leaves out of the answer.
         jobs: rows
           .slice(0, limit)
-          .map((row) => toApiJob({ ...row, result: null, failureMessage: null, activity: null })),
+          .map((row) => toApiJob({ ...row, output: null, failureMessage: null, activity: null })),
         hasMore: rows.length > limit,
       } satisfies JobsPage;
     }),
   );
 }
 
-/** What a list reads of a job's row: its columns without its result and its failure's message. */
+/** What a list reads of a job's row: its columns without its output and its failure's message. */
 const LISTED_JOB_COLUMNS = [
   "id",
   "status",
