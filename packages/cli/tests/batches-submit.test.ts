@@ -240,6 +240,16 @@ test("batches submit adds the jobs of a JSONL file in its order, at most 100 at 
   );
 });
 
+// Editors on Windows save a byte order mark and CRLF line ends.
+test("batches submit reads a JSONL file saved with a byte order mark and CRLF line ends", async () => {
+  const lines = ["a", "b"].map((customId) => JSON.stringify({ customId, input: "A posting." }));
+  const cwd = await folderWith({ "jobs.jsonl": `\uFEFF${lines.join("\r\n")}\r\n` });
+  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
+
+  expect((await submit(hub.url, cwd, ["jobs.jsonl"])).exitCode).toBe(0);
+  expect(hub.adds.flat().map((job) => job.customId)).toEqual(["a", "b"]);
+});
+
 test("batches submit refuses a file that is not JSONL before sending anything, pointing to --each or to JSONL", async () => {
   const cwd = await folderWith({
     "a.pdf": "%PDF-1.7",

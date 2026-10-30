@@ -27,6 +27,7 @@ import {
   jobRefSchema,
   type JobSubmission,
   jobSubmissionSchema,
+  MAX_BODY_BYTES,
   MAX_FILE_BYTES,
   MAX_FILES_PER_CHECK,
   MAX_JOBS_PER_ADD,
@@ -49,6 +50,7 @@ import {
   Stream,
   Struct,
 } from "effect";
+import { Ndjson } from "effect/encoding";
 import ensureError from "ensure-error";
 import isNetworkError from "is-network-error";
 import { logUpdateStderr } from "log-update";
@@ -658,42 +660,67 @@ const endProgress = Effect.sync(() => {
 
 /**
  * The jobs in the JSONL file `file`, one job's JSON per line, as `batches add-jobs` takes each,
- * blank lines left out; each is checked as the hub checks it. A file whose first line is not JSON,
- * such as a PDF given as the positional by mistake, is refused with a pointer to `--each`, and a
- * JSON array with how to make it JSONL. Read by hand rather than with Effect's `Ndjson`, which
- * gives neither these hints nor a failing line's number.
+ * blank lines left out, all read before any is sent; each is checked as the hub checks it. A line
+ * may hold at most what one request to the hub carries. A problem names its job by its place among
+ * the jobs, as Effect's `Ndjson` counts no lines. A file whose first job fails is told what it holds
+ * instead, from how it starts: a JSON array, with how to make it JSONL; JSON over several lines,
+ * with how to put it on one; anything else, such as a PDF given as the positional by mistake, with a
+ * pointer to `--each`.
  */
 function jobsFromJsonl(file: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const notJsonl = `${file} is not a JSONL file of jobs, one job's JSON per line; to make a job of each file or folder, use --each ${file}`;
-    if ((yield* fs.stat(file)).type !== "File") return yield* Effect.fail(new Error(notJsonl));
-    const content = yield* fs.readFileString(file);
     const arrayHint = `${file} holds a JSON array, not one job's JSON per line; jq -c '.[]' ${file} makes it JSONL`;
-    const notJsonlYet = /^\s*\[/.test(content)
-      ? arrayHint
-      : /^\s*\{/.test(content)
-        ? `${file} holds JSON over several lines, not one job's JSON per line; jq -c . ${file} puts each on one line`
-        : notJsonl;
-    const lines = content.split("\n");
+    if ((yield* fs.stat(file)).type !== "File") return yield* Effect.fail(new Error(notJsonl));
+    // What the file holds, from its first characters, a byte order mark left out.
+    const whatItHolds = Effect.map(
+      Stream.runCollect(fs.stream(file, { bytesToRead: 64 })),
+      (chunks) => {
+        const start = new TextDecoder().decode(Buffer.concat(chunks)).trimStart();
+        return start.startsWith("[")
+          ? arrayHint
+          : start.startsWith("{")
+            ? `${file} holds JSON over several lines, not one job's JSON per line; jq -c . ${file} puts each on one line`
+            : notJsonl;
+      },
+    );
     const jobs: JobSubmission[] = [];
-    for (const [index, line] of lines.entries()) {
-      if (line.trim() === "") continue;
-      const at = `${file}:${index + 1}`;
-      const value = yield* Effect.try({
-        try: (): unknown => JSON.parse(line),
-        catch: (error) =>
-          jobs.length === 0
-            ? new Error(notJsonlYet)
-            : new Error(`${at}: ${ensureError(error).message}`),
-      });
-      if (Array.isArray(value)) return yield* Effect.fail(new Error(arrayHint));
-      const parsed = z.safeParse(jobSubmissionSchema, value);
-      if (!parsed.success) {
-        return yield* Effect.fail(new Error(`${at}: ${z.prettifyError(parsed.error)}`));
-      }
-      jobs.push(parsed.data);
-    }
+    yield* fs.stream(file).pipe(
+      Stream.pipeThroughChannel(
+        Ndjson.decode({ ignoreEmptyLines: true, maxLineBytes: MAX_BODY_BYTES }),
+      ),
+      Stream.runForEach((value) => {
+        if (Array.isArray(value)) return Effect.fail(new Error(arrayHint));
+        const parsed = z.safeParse(jobSubmissionSchema, value);
+        if (!parsed.success) {
+          return Effect.fail(
+            new Error(`${file}: job ${jobs.length + 1}: ${z.prettifyError(parsed.error)}`),
+          );
+        }
+        jobs.push(parsed.data);
+        return Effect.void;
+      }),
+      Effect.catchTag("NdjsonError", (error) => {
+        const at = `${file}: job ${jobs.length + 1}`;
+        if (error.reason === "LineTooLarge") {
+          return Effect.fail(
+            new Error(
+              `${at} is longer than ${MAX_BODY_BYTES / 1024 / 1024} MiB, the most one request to the hub carries`,
+            ),
+          );
+        }
+        if (jobs.length === 0)
+          return Effect.flatMap(whatItHolds, (hint) => Effect.fail(new Error(hint)));
+        return Effect.fail(
+          new Error(
+            error.reason === "InvalidUtf8"
+              ? `${at} is not valid UTF-8`
+              : `${at}: ${ensureError(error.cause).message}`,
+          ),
+        );
+      }),
+    );
     if (jobs.length === 0) return yield* Effect.fail(new Error(`${file} has no jobs`));
     return jobs;
   });
