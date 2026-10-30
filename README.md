@@ -49,7 +49,7 @@ npx agent-batch jobs wait --id "$ID"             # prints the job when it ends; 
 npx agent-batch jobs get --id "$ID" | jq .output # 3
 ```
 
-What happened: the agent found `notes.txt` in its Workspace's `inputs/` folder, counted, and could only finish by calling `submit_output`. The output was checked against the Output contract, the JSON Schema in the agent definition. Had it submitted `"3"` instead of `3`, the validation error would have gone back to the agent to fix; had it given up, the job would have failed with `noOutput`. A job never succeeds with nothing in it. The schema checks the shape, not the facts: `4` is also an integer, so read some outputs.
+What happened: the agent found `notes.txt` in its Workspace's `inputs/` folder, counted, and could only finish by calling `submit_output`. The output was checked against the Output schema, the JSON Schema in the agent definition's Output contract. Had it submitted `"3"` instead of `3`, the validation error would have gone back to the agent to fix; had it given up, the job would have failed with `noOutput`. A job never succeeds with nothing in it. The schema checks the shape, not the facts: `4` is also an integer, so read some outputs.
 
 If you did not see `3`: `npx agent-batch jobs events --id "$ID"` prints what the agent did, and `npx agent-batch stack logs --follow` prints the stack. Submit `job.json` a second time and you get the same job back, because the `customId` is the same. `npx agent-batch stack stop` keeps your data; `npx agent-batch stack delete` removes it and does not ask.
 
