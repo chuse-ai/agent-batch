@@ -24,7 +24,7 @@ let dir: string | undefined;
 let agentBatch: string;
 beforeAll(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "agent-batch-packed-"));
-  await run(VP, ["pack"], { cwd: PACKAGE_DIR });
+  // Packing builds, through the package's `prepack`.
   await run(VP, ["pm", "pack", "--out", path.join(dir, "agent-batch.tgz")], { cwd: PACKAGE_DIR });
   await writeFile(path.join(dir, "package.json"), "{}");
   // The package bundles everything it runs and has no dependencies, so npm installs it alone.

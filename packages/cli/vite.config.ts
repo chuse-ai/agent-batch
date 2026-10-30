@@ -19,7 +19,8 @@ export default defineConfig({
     tasks: {
       // Vite Task does not cache a task that reads a file it also writes, as the copy below does
       // with README.md, so README.md is left out of the inputs; it stays an output, which a cache
-      // hit puts back.
+      // hit puts back. The package's `prepack` runs `vp pack` itself rather than this task: a cached
+      // task cannot start another (voidzero-dev/vite-task#119), and the tests pack inside one.
       build: { command: "vp pack", cache: { input: [{ auto: true }, "!README.md"] } },
     },
   },
