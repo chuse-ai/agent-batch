@@ -18,8 +18,9 @@ import {
   MAX_FILE_BYTES,
   MAX_LABELS,
   modelBudgetUsdSchema,
-  outputContractSchema,
   runTimeoutSecondsSchema,
+  strictBlobRefSchema,
+  strictOutputContractSchema,
 } from "./job.ts";
 import { api, byKey, byKeyOrMember, byMember, forOrganization, NotFound } from "./procedure.ts";
 import { failureSchema, jobActivitySchema, jobEventSchema } from "./runner-protocol.ts";
@@ -177,7 +178,7 @@ export type BlockedBy = NonNullable<Job["blockedBy"]>;
  * It is set once, as the Canary tests it.
  */
 export const agentSchema = z
-  .object({
+  .strictObject({
     instructions: z.optional(
       instructionsSchema.check(
         z.describe(
@@ -185,7 +186,7 @@ export const agentSchema = z
         ),
       ),
     ),
-    outputContract: outputContractSchema.check(
+    outputContract: strictOutputContractSchema.check(
       z.describe("What each job's output must be: `schema`, a JSON Schema the output must match."),
     ),
     runTimeoutSeconds: z.optional(
@@ -222,7 +223,7 @@ const breakerSchema = z.union([
 
 /** A Batch as a caller creates it. */
 export const batchCreationSchema = z
-  .object({
+  .strictObject({
     customId: z.optional(
       customIdSchema.check(
         z.describe(
@@ -243,7 +244,7 @@ export const batchCreationSchema = z
       ._default(
         z.union([
           z.boolean(),
-          z.object({
+          z.strictObject({
             canary: z.optional(canarySchema),
             maxFailurePercent: z.optional(maxFailurePercentSchema),
           }),
@@ -261,7 +262,7 @@ export type BatchCreation = z.infer<typeof batchCreationSchema>;
 
 /** A job as a caller adds it to a Batch, whose agent it runs. */
 export const jobSubmissionSchema = z
-  .object({
+  .strictObject({
     customId: customIdSchema.check(
       z.describe(
         "Your own ID for the job, unique in its Batch. Adding a job again with the same `customId` and the same content returns the job already added, so an add can be retried safely and a whole Batch added again to add only the jobs it lacks; with other content it is refused. A new job needs a new ID.",
@@ -359,7 +360,7 @@ export const addedJobsSchema = z
 export type AddedJobs = z.infer<typeof addedJobsSchema>;
 
 /** A Batch as a call names it. */
-export const batchRefSchema = z.object({ id: z.uuid().check(z.describe("The Batch's ID.")) });
+export const batchRefSchema = z.strictObject({ id: z.uuid().check(z.describe("The Batch's ID.")) });
 
 /**
  * A job as a list reports it: without its content, so without its output, its failure's message
@@ -455,6 +456,12 @@ const blobCheckSchema = z.discriminatedUnion("stored", [
 /**
  * The hub's public HTTP API, for people and their programs. Callers sign in as a member or send an
  * API key in `x-api-key`. A Runner's own calls are `runnerHttpContract`'s.
+ *
+ * Inputs are strict: a parameter the API does not define, in a body or a read's query string, is
+ * refused with 400 naming it (ADR 0010). A write's query string, and that of a read without input,
+ * go unchecked: oRPC hands none of them to the schema but the upload's, which its outer object
+ * drops; none of these calls takes query parameters. Answers and the upload's headers stay open,
+ * so the hub can add fields without breaking callers.
  */
 export const apiContract = {
   runners: {
@@ -473,7 +480,7 @@ export const apiContract = {
         }),
         ...byMember,
       )
-      .input(z.object({ id: z.string() }))
+      .input(z.strictObject({ id: z.string() }))
       .output(
         z.object({
           endedJobs: z.array(jobIdSchema).check(z.describe("The jobs the removal ended.")),
@@ -492,7 +499,7 @@ export const apiContract = {
       .errors({ BAD_REQUEST: {}, FORBIDDEN: {} })
       .meta(openapi({ method: "POST", path: "/api-keys" }), ...byMember)
       .input(
-        z.object({
+        z.strictObject({
           name: z.string(),
           permissions: permissionsSchema,
           expiresIn: z.optional(
@@ -514,7 +521,7 @@ export const apiContract = {
     revoke: api
       .errors({ FORBIDDEN: {}, [NotFound.code]: NotFound })
       .meta(openapi({ method: "DELETE", path: "/api-keys/{id}" }), ...byMember)
-      .input(z.object({ id: z.string() })),
+      .input(z.strictObject({ id: z.string() })),
   },
   blobs: {
     check: forOrganization
@@ -528,9 +535,9 @@ export const apiContract = {
         ...byKey({ job: ["create"] }),
       )
       .input(
-        z.object({
+        z.strictObject({
           files: z
-            .array(blobRefSchema)
+            .array(strictBlobRefSchema)
             .check(
               z.minLength(1),
               z.maxLength(MAX_FILES_PER_CHECK),
@@ -554,7 +561,7 @@ export const apiContract = {
       )
       .input(
         z.object({
-          params: z.object({ digest: digestSchema }),
+          params: z.strictObject({ digest: digestSchema }),
           headers: z.object({
             // Coerced from the header's text by the hub's coercion plugin.
             "content-length": fileSizeBytesSchema.check(z.describe("The file's size in bytes.")),
@@ -704,8 +711,7 @@ export const apiContract = {
         ...byKeyOrMember({ job: ["resume"] }),
       )
       .input(
-        z.object({
-          ...jobRefSchema.shape,
+        z.extend(jobRefSchema, {
           runTimeoutSeconds: z.optional(
             runTimeoutSecondsSchema.check(
               z.describe(
@@ -762,8 +768,7 @@ export const apiContract = {
         ...byKeyOrMember({ job: ["read"] }),
       )
       .input(
-        z.object({
-          ...jobRefSchema.shape,
+        z.extend(jobRefSchema, {
           after: z._default(
             z
               .int()
@@ -801,7 +806,7 @@ export const apiContract = {
         ...byKeyOrMember({ job: ["read"] }),
       )
       .input(
-        z.object({
+        z.strictObject({
           status: z.optional(
             z
               .array(jobStatusSchema)

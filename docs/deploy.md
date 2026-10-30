@@ -21,7 +21,7 @@ On Ubuntu 24.04, let the Runner's job sandboxes create user namespaces before st
 
 The hub and a Runner from their published images on one machine, as a deployment that other machines' Runners and callers can reach once the hub's address is opened to them (see `compose.yaml`). It needs Docker Engine 29 or later and Compose 5 or later, `curl`, `jq` and `openssl`, and on Ubuntu 24.04 the host setting in [Host requirements](#host-requirements). Use current patch releases of [Docker Engine](https://docs.docker.com/engine/install/) and [Compose](https://docs.docker.com/compose/install/).
 
-1. **Start the hub.** It creates its owner from these settings on its first start and serves the API at `http://localhost:8787`. To upgrade later, rerun only the `curl` line from the current version of this page, then `docker compose up -d`.
+1. **Start the hub.** It creates its owner from these settings on its first start and serves the API at `http://localhost:8787`. To upgrade later, rerun only the `curl` line from the current version of this page, then `docker compose up -d`, and after it upgrade Runners on other machines to the same release: before 1.0 a release may change how Runners talk to the hub, and a Runner newer than its hub is not supported, as a Kubernetes kubelet must not be newer than its API server.
 
    <!-- x-release-please-start-version -->
 

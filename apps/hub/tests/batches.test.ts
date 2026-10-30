@@ -148,6 +148,21 @@ test("an add with an invalid job adds none, and its answer names every problem w
   await client.batches.cancel({ id: batch.id });
 });
 
+test("a job naming a field the API does not know, such as the old `inputFiles`, is refused, not run without it", async () => {
+  const client = await system.clientWithNewJobsKey();
+  const batch = await client.batches.create({ agent: AGENT, breaker: false });
+
+  const refused = await post(`/batches/${batch.id}/jobs`, {
+    jobs: [jobNamed("a"), { ...jobNamed("b"), inputFiles: {} }],
+  });
+  expect(refused.status).toBe(400);
+  const { detail } = z.parse(z.object({ detail: z.string() }), await refused.json());
+  expect(detail).toContain('"inputFiles"');
+  expect(detail).toContain("jobs[1]");
+  expect((await client.batches.get({ id: batch.id })).jobCounts).toMatchObject({ queued: 0 });
+  await client.batches.cancel({ id: batch.id });
+});
+
 test("jobs are listed by label, status, Batch and custom ID, newest first, with a Batch's labels beneath their own", async () => {
   const client = await system.clientWithNewJobsKey();
   const batch = await client.batches.create({
@@ -197,6 +212,13 @@ test("jobs are listed by label, status, Batch and custom ID, newest first, with 
     await response.json(),
   );
   expect(page.jobs.map((listed) => listed.customId)).toEqual(["y"]);
+
+  // A misspelled filter is refused, not ignored to answer with every job.
+  const misspelled = await system.hub.fetch(`/jobs?statuses=queued&batchId=${batch.id}`, {
+    headers: { "x-api-key": await system.newJobsKey() },
+  });
+  expect(misspelled.status).toBe(400);
+  expect(await misspelled.json()).toMatchObject({ detail: expect.stringContaining('"statuses"') });
   await client.batches.cancel({ id: batch.id });
 });
 
