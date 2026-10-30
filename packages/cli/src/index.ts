@@ -136,7 +136,11 @@ function isTransient(error: unknown): boolean {
   return (problemOf(error)?.status ?? 0) >= 500;
 }
 
-/** Retries a call that failed transiently, at most twice, waiting longer each time, as Stripe's Go client does. */
+/**
+ * Retries a call that failed transiently at most twice, after about 500 ms and then 1 s, each wait
+ * jittered by up to 20% either way. Two retries growing from 500 ms are the default of OpenAI's
+ * SDKs (`DEFAULT_MAX_RETRIES` and `INITIAL_RETRY_DELAY` in openai-python's `_constants.py`).
+ */
 const retryTransient = {
   schedule: Schedule.exponential("500 millis").pipe(Schedule.jittered),
   times: 2,
