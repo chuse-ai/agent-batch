@@ -924,6 +924,15 @@ function waitAndSave(
         Effect.tap((read) => (onTerminal ? showProgress(client, read) : Effect.void)),
         Effect.repeat({ schedule: pollSchedule, until: settled }),
         Effect.ensuring(endProgress),
+        // A read that fails ends the wait, which says how to wait again, the ID with it; not on an
+        // interrupt, whose own message says so.
+        Effect.tapError(() =>
+          Effect.sync(() =>
+            process.stderr.write(
+              `Stopped waiting; the Batch carries on. To wait again, ${again}.\n`,
+            ),
+          ),
+        ),
       );
       // Saving's failure is kept, so the Batch is printed, its ID with it, whatever saving did,
       // as openai-cli prints it.
