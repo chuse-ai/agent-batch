@@ -59,7 +59,7 @@ import ensureError from "ensure-error";
 import isNetworkError from "is-network-error";
 import { logUpdateStderr } from "log-update";
 import ms from "ms";
-import { createCli, os } from "trpc-cli";
+import { createCli, type Logger, os } from "trpc-cli";
 import * as z from "zod/mini";
 
 import { runToEnd, stackCommands, savedHub } from "./stack.ts";
@@ -1167,6 +1167,28 @@ export function agentBatchCli(version: string) {
       jobs: { submit: submitCommand(), ...commands["jobs"], wait: waitCommand() },
       stack: stackCommands(version),
     }),
+  });
+}
+
+/** Runs the command line, keeping an exit code its work or output has already set. */
+export function runAgentBatchCli(version: string, argv: readonly string[], logger?: Logger) {
+  return agentBatchCli(version).run({
+    argv: [...argv],
+    logger,
+    formatError,
+    prompts: false,
+    // trpc-cli exits as soon as a command ends, cutting off what a pipe has not yet taken of its
+    // output (mmkal/trpc-cli#228). Setting the exit code instead, through trpc-cli's documented
+    // override, lets Node exit once stdout and stderr have drained, as its docs for
+    // `process.exit()` advise; trpc-cli then throws `FailedToExitError`. A write that has already
+    // failed keeps its exit code.
+    process: {
+      exit: (code) => {
+        process.exitCode ??= code;
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- trpc-cli types `exit` as never returning, though the override it documents returns.
+        return undefined as never;
+      },
+    },
   });
 }
 
