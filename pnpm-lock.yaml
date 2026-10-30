@@ -189,11 +189,11 @@ catalogs:
       specifier: ^1.4.0
       version: 1.4.0
     '@effect/platform-node-shared':
-      specifier: ^4.0.5
-      version: 4.0.5
+      specifier: ^4.1.0
+      version: 4.1.0
     '@effect/vitest':
-      specifier: 4.0.5
-      version: 4.0.5
+      specifier: 4.1.0
+      version: 4.1.0
     '@hono/node-server':
       specifier: ^2.1.5
       version: 2.1.5
@@ -258,8 +258,8 @@ catalogs:
       specifier: ^0.4.15
       version: 0.4.15
     effect:
-      specifier: ^4.0.5
-      version: 4.0.5
+      specifier: ^4.1.0
+      version: 4.1.0
     ensure-error:
       specifier: ^5.0.0
       version: 5.0.0
@@ -380,13 +380,13 @@ importers:
         version: 1.7.12(@better-auth/core@1.7.12(@better-auth/utils@0.5.0)(@better-fetch/fetch@1.3.2)(better-call@1.4.4(zod@4.6.7))(jose@6.2.12)(kysely@0.29.7)(nanostores@1.5.5))(@better-auth/utils@0.5.0)(better-auth@1.7.12(pg@8.23.1)(vitest@5.0.5))(better-call@1.4.4(zod@4.6.7))
       '@effect/platform-node-shared':
         specifier: 'catalog:'
-        version: 4.0.5(effect@4.0.5)
+        version: 4.1.0(effect@4.1.0)
       '@hono/node-server':
         specifier: 'catalog:'
         version: 2.1.5(hono@5.0.0-rc.1)
       '@orpc/experimental-effect':
         specifier: 'catalog:'
-        version: 2.0.0-beta.44(crossws@0.4.15)(effect@4.0.5)
+        version: 2.0.0-beta.44(crossws@0.4.15)(effect@4.1.0)
       '@orpc/json-schema':
         specifier: 'catalog:'
         version: 2.0.0-beta.44(crossws@0.4.15)
@@ -419,7 +419,7 @@ importers:
         version: 0.4.15
       effect:
         specifier: 'catalog:'
-        version: 4.0.5
+        version: 4.1.0
       ensure-error:
         specifier: 'catalog:'
         version: 5.0.0
@@ -522,7 +522,7 @@ importers:
         version: 1.4.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(supports-color@10.2.2)(undici@8.11.2)(ws@8.22.0)(zod@4.6.7)
       '@effect/platform-node-shared':
         specifier: 'catalog:'
-        version: 4.0.5(effect@4.0.5)
+        version: 4.1.0(effect@4.1.0)
       '@orpc/client':
         specifier: 'catalog:'
         version: 2.0.0-beta.44
@@ -543,7 +543,7 @@ importers:
         version: link:../../packages/contract
       effect:
         specifier: 'catalog:'
-        version: 4.0.5
+        version: 4.1.0
       ensure-error:
         specifier: 'catalog:'
         version: 5.0.0
@@ -562,7 +562,7 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.5(effect@4.0.5)(vitest@5.0.5)
+        version: 4.1.0(effect@4.1.0)(vitest@5.0.5)
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.5
@@ -586,7 +586,7 @@ importers:
     devDependencies:
       '@effect/platform-node-shared':
         specifier: 'catalog:'
-        version: 4.0.5(effect@4.0.5)
+        version: 4.1.0(effect@4.1.0)
       '@orpc/client':
         specifier: 'catalog:'
         version: 2.0.0-beta.44
@@ -613,7 +613,7 @@ importers:
         version: link:../contract
       effect:
         specifier: 'catalog:'
-        version: 4.0.5
+        version: 4.1.0
       ensure-error:
         specifier: 'catalog:'
         version: 5.0.0
@@ -631,7 +631,7 @@ importers:
         version: 3.7.1(picomatch@4.0.7)(rollup@4.65.0)
       trpc-cli:
         specifier: 'catalog:'
-        version: 0.17.1(effect@4.0.5)(zod@4.6.7)
+        version: 0.17.1(effect@4.1.0)(zod@4.6.7)
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -1219,16 +1219,16 @@ packages:
     resolution: {integrity: sha512-MLIfowwUYIY65jSjMX82paZOrX/NTvLk6D08h+3Jq42a99RzUOewzuCR0zOlPul3D6UBfddat76VT6LvsHEs1w==}
     engines: {node: '>=22.19.0'}
 
-  '@effect/platform-node-shared@4.0.5':
-    resolution: {integrity: sha512-a8rCdEkfZBGe9C6bsIjxVZuRp73svIyK5IHwHdDAVsvZXjrbkxusfI+rZ8WlX31RP1mKizwI/E72GQTNfdMWHw==}
-    engines: {node: '>=18.0.0'}
+  '@effect/platform-node-shared@4.1.0':
+    resolution: {integrity: sha512-uYQfFRoxWLo8fIhiSeBcmz/R1ooOfE3HF3cWHFgxz82tZMk2Wn02BGABcdLmaAch9VpDLbtWnuhSxNyBsGMUFg==}
+    engines: {node: '>=22.19.0'}
     peerDependencies:
-      effect: ^4.0.5
+      effect: ^4.1.0
 
-  '@effect/vitest@4.0.5':
-    resolution: {integrity: sha512-q64paZ/i4V2NiRhTyqCmT2KiDbFjlxc2EZrZca8GGt+Nf8844946HyJM5bPk/q+YeRkFSxIrlCs+J+LSfky/wA==}
+  '@effect/vitest@4.1.0':
+    resolution: {integrity: sha512-+APF69oTYgGj5WCewowk1/udepH74xz4ONyH7d+UfcK0SrF3osiSwsWEyODUpJvWd6MIk5F5PcFJiE4evMuG2A==}
     peerDependencies:
-      effect: ^4.0.5
+      effect: ^4.1.0
       vitest: 5.0.5
 
   '@electric-sql/pglite@0.5.9':
@@ -3318,8 +3318,8 @@ packages:
   ecdsa-sig-formatter@1.0.11:
     resolution: {integrity: sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==}
 
-  effect@4.0.5:
-    resolution: {integrity: sha512-BY4/28NlpOd99yzmV741xbVGmp+1U7tks4oB7F/Png64bTa5tm5eCA6W0RiXsnuLDDoJpjfVSo4Dnq4BZb/89Q==}
+  effect@4.1.0:
+    resolution: {integrity: sha512-lGx2MJJyrXA8RZb2UpQ/0Nkb5Utaimby7oD92+18noBxLPE85IFOvptdzau8dvcxAOwfwHo9iqapbKeFzqQM/Q==}
 
   electron-to-chromium@1.5.456:
     resolution: {integrity: sha512-8hboqI6xesozteFb8aa7OGknvxUtTeRJLz0FoePysUEh/oWbddykIGdgpEJRbPRg/nIMfBf2DFos+H2MtvJl2A==}
@@ -5989,18 +5989,18 @@ snapshots:
 
   '@earendil-works/pi-telemetry@1.4.0': {}
 
-  '@effect/platform-node-shared@4.0.5(effect@4.0.5)':
+  '@effect/platform-node-shared@4.1.0(effect@4.1.0)':
     dependencies:
       '@types/ws': 8.18.2
-      effect: 4.0.5
+      effect: 4.1.0
       ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/vitest@4.0.5(effect@4.0.5)(vitest@5.0.5)':
+  '@effect/vitest@4.1.0(effect@4.1.0)(vitest@5.0.5)':
     dependencies:
-      effect: 4.0.5
+      effect: 4.1.0
       vitest: 5.0.5(@types/node@22.20.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(esbuild@0.28.2)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)
 
   '@electric-sql/pglite@0.5.9': {}
@@ -6442,14 +6442,14 @@ snapshots:
       '@orpc/shared': 2.0.0-beta.44
       '@standard-schema/spec': 1.1.0
 
-  '@orpc/experimental-effect@2.0.0-beta.44(crossws@0.4.15)(effect@4.0.5)':
+  '@orpc/experimental-effect@2.0.0-beta.44(crossws@0.4.15)(effect@4.1.0)':
     dependencies:
       '@orpc/client': 2.0.0-beta.44
       '@orpc/contract': 2.0.0-beta.44
       '@orpc/json-schema': 2.0.0-beta.44(crossws@0.4.15)
       '@orpc/server': 2.0.0-beta.44(crossws@0.4.15)
       '@orpc/shared': 2.0.0-beta.44
-      effect: 4.0.5
+      effect: 4.1.0
     transitivePeerDependencies:
       - crossws
       - fastify
@@ -7768,7 +7768,7 @@ snapshots:
     dependencies:
       safe-buffer: 5.2.1
 
-  effect@4.0.5: {}
+  effect@4.1.0: {}
 
   electron-to-chromium@1.5.456: {}
 
@@ -9337,11 +9337,11 @@ snapshots:
 
   treeverse@3.0.0: {}
 
-  trpc-cli@0.17.1(effect@4.0.5)(zod@4.6.7):
+  trpc-cli@0.17.1(effect@4.1.0)(zod@4.6.7):
     dependencies:
       commander: 14.0.3
     optionalDependencies:
-      effect: 4.0.5
+      effect: 4.1.0
       zod: 4.6.7
 
   ts-algebra@2.0.0: {}
