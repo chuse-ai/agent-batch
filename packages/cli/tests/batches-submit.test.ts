@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -129,7 +129,12 @@ async function fakeHub(
     }
     if (request.method === "GET" && request.url === `/batches/${batchId}`) {
       if (stalled) return;
-      return answer(response, batchOf(batchId, { succeeded: ids.size }));
+      const counts: Record<string, number> = {};
+      for (const each of ids.values()) {
+        const status = String(ended(each)["status"]);
+        counts[status] = (counts[status] ?? 0) + 1;
+      }
+      return answer(response, batchOf(batchId, counts));
     }
     const jobId = request.url?.match(/^\/jobs\/([^/]+)$/)?.[1];
     const customId = jobId === undefined ? undefined : ids.get(jobId);
@@ -273,27 +278,50 @@ test("batches submit run again with its --custom-id sends the same jobs, so the 
   expect(hub.adds[1]).toEqual(hub.adds[0]);
 });
 
-test("batches submit --wait prints each job's output or failure in order and exits 1 when one failed", async () => {
-  const cwd = await folderWith({ "a.pdf": "a", "b.pdf": "b" });
+test("batches submit --wait --output-dir saves each job's line in order, those that succeeded apart from the rest, prints the Batch and exits 1 when one failed", async () => {
+  const cwd = await folderWith({ "a.pdf": "a", "b.pdf": "b", "c.pdf": "c" });
   const failure = { reason: "noOutput", message: "The agent stopped without an output" };
   const hub = await fakeHub((customId) =>
-    customId === "a.pdf"
-      ? { status: "succeeded", output: { total: 12 } }
-      : { status: "failed", failure },
+    customId === "b.pdf"
+      ? { status: "failed", failure }
+      : { status: "succeeded", output: { total: customId } },
   );
+  const args = ["--each", "a.pdf", "b.pdf", "c.pdf", "--wait", "--output-dir", "outputs"];
 
-  const { exitCode, stdout } = await submit(hub.url, cwd, ["--each", "a.pdf", "b.pdf", "--wait"]);
+  const { exitCode, stdout } = await submit(hub.url, cwd, args);
 
   expect(exitCode).toBe(1);
-  expect(
-    stdout
+  expect(JSON.parse(stdout)).toMatchObject({ jobCounts: { succeeded: 2, failed: 1 } });
+  const lines = async (name: string) =>
+    (await readFile(path.join(cwd, "outputs", name), "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line)),
-  ).toEqual([
-    { customId: "a.pdf", status: "succeeded", output: { total: 12 } },
-    { customId: "b.pdf", status: "failed", failure },
+      .map((line) => JSON.parse(line));
+  expect(await lines("output.jsonl")).toEqual([
+    { customId: "a.pdf", status: "succeeded", output: { total: "a.pdf" } },
+    { customId: "c.pdf", status: "succeeded", output: { total: "c.pdf" } },
   ]);
+  expect(await lines("error.jsonl")).toEqual([{ customId: "b.pdf", status: "failed", failure }]);
+});
+
+test("batches submit --output-dir refuses a folder already holding a result file before sending anything", async () => {
+  const cwd = await folderWith({ "a.pdf": "a", "outputs/error.jsonl": "" });
+  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
+
+  const refused = await submit(hub.url, cwd, [
+    "--each",
+    "a.pdf",
+    "--wait",
+    "--output-dir",
+    "outputs",
+  ]);
+
+  expect(refused).toMatchObject({
+    exitCode: 1,
+    stderr: expect.stringContaining(`${path.join("outputs", "error.jsonl")} already exists`),
+  });
+  expect(hub.uploads).toEqual([]);
+  expect(hub.adds).toEqual([]);
 });
 
 test("batches submit --wait-timeout ends the command when it passes, with 124, even while a read hangs", async () => {

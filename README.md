@@ -11,10 +11,10 @@ agent-batch runs real agents on unattended jobs. Give it one agent definition an
 Given a folder of invoices and a JSON Schema for what you want from each, one line runs them all:
 
 ```sh
-npx agent-batch batches submit --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait > outputs.jsonl
+npx agent-batch batches submit --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait --output-dir ./outputs
 ```
 
-Each PDF is a job, and each line of `outputs.jsonl` is one invoice's JSON, or why it failed.
+Each PDF is a job. Each line of `outputs/output.jsonl` is one invoice's JSON, and each line of `outputs/error.jsonl` one that failed, with why.
 
 It does this without giving every job its own sandbox, so you don't pay for agents to wait on the model. Four hundred jobs in their own 1 GB sandboxes hold 400 GB of memory; on one Runner, for jobs that mostly wait on the model, they fit in a 4 GB server.
 
@@ -123,12 +123,12 @@ cat > postings.jsonl <<'EOF'
 {"customId": "posting-0001", "input": "Software Engineer II, Example Corp\nYou will own the billing service end to end and mentor two engineers. Required: 5+ years TypeScript, Postgres. Nice: Effect, Cloudflare Workers.\n"}
 {"customId": "posting-0002", "input": "Junior Developer, Example GmbH\nYou will fix bugs in our Node services with a senior engineer reviewing every change. Required: JavaScript. Nice: Docker.\n"}
 EOF
-npx agent-batch batches submit postings.jsonl \
+BATCH=$(npx agent-batch batches submit postings.jsonl \
   --instructions "The input is a job posting. Submit the requirements it treats as mandatory, the ones it treats as optional, and the seniority it is really asking for, judged from the responsibilities rather than the title." \
-  --output-schema postings.schema.json --wait
+  --output-schema postings.schema.json --wait --output-dir ./results | jq -r .id)
 ```
 
-Each line is one posting's job, in the file's order: its output, already checked against the schema, or for a job that failed, its `failure`, and the command then exits 1. A run gave:
+Once every job has ended, the command prints the Batch, whose ID the commands below take, and saves one line per job, in the file's order: in `results/output.jsonl` the output of each that succeeded, already checked against the schema, and in `results/error.jsonl` the `failure` of each that did not, exiting 1 if any did not. A run's `results/output.jsonl`:
 
 ```json
 {"customId":"posting-0001","status":"succeeded","output":{"mustHave":["5+ years of TypeScript experience","Postgres"],"seniority":"senior","niceToHave":["Effect","Cloudflare Workers"]}}
@@ -136,12 +136,6 @@ Each line is one posting's job, in the file's order: its output, already checked
 ```
 
 The first title said II; the responsibilities said senior.
-
-Each job carries its Batch's ID, which the commands below take:
-
-```sh
-BATCH=$(npx agent-batch jobs list --custom-id posting-0001 | jq -er '.jobs[0].batchId')
-```
 
 `npx agent-batch <command> --help` lists a command's flags, and the hub's reference at `/` every field of the API.
 

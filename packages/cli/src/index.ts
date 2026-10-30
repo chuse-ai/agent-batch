@@ -712,12 +712,13 @@ function jobsFromJsonl(file: string) {
   });
 }
 
-/** The line `batches submit --wait` prints for a job: its output, or why it failed. */
+/** The line `batches submit --wait --output-dir` saves for a job: its output, or why it failed. */
 function outputLine(customId: string, job: Job) {
   if (job.status === "succeeded") return { customId, status: job.status, output: job.output };
   if (job.status === "failed") return { customId, status: job.status, failure: job.failure };
   return { customId, status: job.status };
 }
+type OutputLine = ReturnType<typeof outputLine>;
 
 /** A wait that `--wait-timeout` ended, which exits 124, as `timeout` and `openai batches wait` do. */
 class WaitTimedOut extends Error {
@@ -762,28 +763,81 @@ function showProgress(client: ApiClient, batch: Batch) {
 }
 
 /**
- * `batches submit --wait`: reads the Batch `batchId` until waiting for it is over, showing how it
- * stands on stderr when that is a terminal, then prints a line for each of `jobs`, in order, and
- * fails unless every one succeeded. A caller's pause keeps it waiting, as `jobs wait` does; its
- * failure breaker's pause ends the wait, as the breaker paused it for a flaw to fix first. A timeout
- * or Ctrl-C stops the wait and leaves the Batch running.
+ * Prepares the folder `--output-dir` names before anything is sent, as openai-cli does: creates it
+ * if absent, its parent being there already, and refuses it if it holds either file already, so a
+ * finished wait never overwrites one.
  */
-function waitForOutputs(
+const prepareOutputDir = Effect.fnUntraced(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  if (!(yield* fs.exists(dir))) {
+    yield* fs
+      .makeDirectory(dir)
+      .pipe(
+        Effect.mapError(() => new Error(`${dir} cannot be made; its parent folder must exist`)),
+      );
+  } else if ((yield* fs.stat(dir)).type !== "Directory") {
+    yield* Effect.fail(new Error(`${dir} is not a folder`));
+  }
+  for (const name of ["output.jsonl", "error.jsonl"]) {
+    const file = path.join(dir, name);
+    if (yield* fs.exists(file)) {
+      yield* Effect.fail(new Error(`${file} already exists; choose a new --output-dir`));
+    }
+  }
+});
+
+/**
+ * Saves the line of each job, in order, in `dir`: those that succeeded in `output.jsonl`, the rest
+ * in `error.jsonl`, leaving out a file that would hold none, as openai-cli does. Where a person
+ * watches, stderr says which it saved, in openai-cli's words.
+ */
+const saveOutputs = Effect.fnUntraced(function* (dir: string, lines: readonly OutputLine[]) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  for (const [name, kept] of [
+    ["output", lines.filter((line) => line.status === "succeeded")],
+    ["error", lines.filter((line) => line.status !== "succeeded")],
+  ] as const) {
+    const file = path.join(dir, `${name}.jsonl`);
+    if (kept.length > 0) {
+      const content = kept.map((line) => `${JSON.stringify(line)}\n`).join("");
+      // `wx`, so a file made since the folder was prepared is not overwritten.
+      yield* fs.writeFileString(file, content, { flag: "wx" });
+    }
+    if (process.stderr.isTTY) {
+      yield* Effect.sync(() =>
+        process.stderr.write(kept.length > 0 ? `Saved "${file}"\n` : `No ${name} file saved.\n`),
+      );
+    }
+  }
+});
+
+/**
+ * `batches submit --wait`: reads the Batch `batchId` until waiting for it is over, showing how it
+ * stands on stderr when that is a terminal, then, with `outputDir`, saves each of `jobs`' lines
+ * there, prints the Batch, and fails unless every job succeeded, as openai-cli does. A caller's
+ * pause keeps it waiting, as `jobs wait` does; its failure breaker's pause ends the wait, as the
+ * breaker paused it for a flaw to fix first. A timeout or Ctrl-C stops the wait, saves nothing and
+ * leaves the Batch running.
+ */
+function waitForBatch(
   client: ApiClient,
   batchId: string,
   jobs: readonly (readonly [string, Job])[],
-  options: { again: string; timeout: Duration.Duration | undefined },
+  options: { again: string; timeout: Duration.Duration | undefined; outputDir: string | undefined },
 ) {
   return Effect.gen(function* () {
     const onTerminal = process.stderr.isTTY;
     const again = `${options.again} --wait`;
-    // Where a person watches, the Batch's ID, in OpenAI's CLI's words, as nothing else prints it
-    // while the wait goes well; a script reads it from the jobs instead.
+    // Where a person watches, the Batch's ID, in openai-cli's words, as nothing else prints it
+    // before the wait ends.
     if (onTerminal) {
       yield* Effect.sync(() =>
         process.stderr.write(`Batch created: "${batchId}". Waiting for completion.\n`),
       );
     }
+    const { outputDir } = options;
     const waitAndRead = Effect.gen(function* () {
       const batch = yield* hubCall((signal) =>
         client.batches.get({ id: batchId }, { signal }),
@@ -794,15 +848,18 @@ function waitForOutputs(
         Effect.ensuring(endProgress),
       );
       // One read per job, a few at a time, until the API reads a Batch's outputs a page at a time.
-      const read = yield* Effect.forEach(
-        jobs,
-        ([customId, added]) =>
-          hubCall((signal) => client.jobs.get({ id: added.id }, { signal })).pipe(
-            Effect.retry(retryTransient),
-            Effect.map((readJob) => outputLine(customId, readJob)),
-          ),
-        { concurrency: AT_ONCE },
-      );
+      const read =
+        outputDir === undefined
+          ? []
+          : yield* Effect.forEach(
+              jobs,
+              ([customId, added]) =>
+                hubCall((signal) => client.jobs.get({ id: added.id }, { signal })).pipe(
+                  Effect.retry(retryTransient),
+                  Effect.map((readJob) => outputLine(customId, readJob)),
+                ),
+              { concurrency: AT_ONCE },
+            );
       return { batch, read };
     });
     const timeout = options.timeout;
@@ -827,15 +884,17 @@ function waitForOutputs(
         ),
       ),
     );
-    yield* Effect.forEach(read, printStep);
-    const unsucceeded = read.filter((line) => line.status !== "succeeded").length;
+    if (outputDir !== undefined) yield* saveOutputs(outputDir, read);
+    yield* printStep(batch);
+    const { succeeded, ...others } = batch.jobCounts;
+    const unsucceeded = Object.values(others).reduce((sum, count) => sum + count, 0);
     const failure =
       batch.pausedBy === "breaker"
         ? `The Batch's failure breaker paused it, as its jobs failed. Once their failures are fixed, resume it with agent-batch batches resume --id ${batch.id}, and ${again}.`
         : batch.status === "cancelled"
           ? "The Batch was cancelled"
           : unsucceeded > 0
-            ? `${unsucceeded} of ${read.length} jobs did not succeed`
+            ? `${unsucceeded} of ${succeeded + unsucceeded} jobs did not succeed`
             : undefined;
     if (failure !== undefined) yield* Effect.fail(new Error(failure));
   });
@@ -855,9 +914,9 @@ function submitBatchCommand() {
   return os
     .meta({
       description:
-        "Creates a Batch running an agent given by its flags, with the jobs of a JSONL file, one job's JSON per line as batches add-jobs takes it, or with --each, a job for each file or folder: a file becomes a job with that file as its Input file, and a folder a job with every file in its tree, at its path in the folder, hidden ones left out; each job's custom ID is its path as given, normalized. --each uploads the files the hub does not hold yet. Prints the Batch, or, with --wait, waits for its jobs to end and prints one JSON line for each, with its output or its failure. Running the command again with the Batch's --custom-id adds only the jobs the Batch lacks.",
+        "Creates a Batch running an agent given by its flags, with the jobs of a JSONL file, one job's JSON per line as batches add-jobs takes it, or with --each, a job for each file or folder: a file becomes a job with that file as its Input file, and a folder a job with every file in its tree, at its path in the folder, hidden ones left out; each job's custom ID is its path as given, normalized. --each uploads the files the hub does not hold yet. Prints the Batch, with --wait once its jobs have ended, and with --output-dir saves each job's output or failure in that folder. Running the command again with the Batch's --custom-id adds only the jobs the Batch lacks.",
       examples: [
-        'agent-batch batches submit --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait > outputs.jsonl',
+        'agent-batch batches submit --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait --output-dir ./outputs',
         "agent-batch batches submit jobs.jsonl --output-schema answer.schema.json",
       ],
     })
@@ -900,7 +959,16 @@ function submitBatchCommand() {
               .boolean()
               .check(
                 z.describe(
-                  "Wait until no job is queued, running or paused, then print a JSON line for each job. Exits 0 when every job succeeded, 1 otherwise or when the failure breaker paused the Batch, 124 when --wait-timeout passes. Ctrl-C stops waiting and leaves the Batch running.",
+                  "Wait until no job is queued, running or paused, then print the Batch. Exits 0 when every job succeeded, 1 otherwise or when the failure breaker paused the Batch, 124 when --wait-timeout passes. Ctrl-C stops waiting and leaves the Batch running.",
+                ),
+              ),
+          ),
+          outputDir: z.optional(
+            z
+              .string()
+              .check(
+                z.describe(
+                  "With --wait, save each job's line in this folder, made if absent: output.jsonl for those that succeeded, error.jsonl for the rest; neither may exist yet",
                 ),
               ),
           ),
@@ -938,8 +1006,10 @@ function submitBatchCommand() {
     .handler(({ input: [files, flags] }) =>
       runToEnd(
         Effect.gen(function* () {
-          if (flags.waitTimeout !== undefined && !flags.wait) {
-            return yield* Effect.fail(new Error("--wait-timeout needs --wait"));
+          if (!flags.wait && (flags.outputDir !== undefined || flags.waitTimeout !== undefined)) {
+            return yield* Effect.fail(
+              new Error("Add --wait to use --output-dir or --wait-timeout. Nothing was sent."),
+            );
           }
           if (flags.each !== undefined && files.length > 0) {
             return yield* Effect.fail(
@@ -979,6 +1049,7 @@ function submitBatchCommand() {
             file === undefined
               ? yield* Effect.flatMap(jobsFromPaths(flags.each ?? []), hashJobs)
               : { jobs: yield* jobsFromJsonl(file), files: [] };
+          if (flags.outputDir !== undefined) yield* prepareOutputDir(flags.outputDir);
           const client = yield* apiClient;
           const customId = yield* customIdOrPrintNew(
             flags.customId,
@@ -1005,14 +1076,14 @@ function submitBatchCommand() {
             );
           });
           return yield* flags.wait
-            ? waitForOutputs(
+            ? waitForBatch(
                 client,
                 created.id,
                 Array.zip(
                   local.jobs.map((job) => job.customId),
                   added,
                 ),
-                { again, timeout: flags.waitTimeout },
+                { again, timeout: flags.waitTimeout, outputDir: flags.outputDir },
               )
             : submitted;
         }).pipe(Effect.mapError(commandError)),
