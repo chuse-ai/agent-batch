@@ -16,7 +16,7 @@ afterAll(() => system.stop());
 
 const SUBMISSION = {
   input: "Count to three.",
-  inputFiles: {},
+  files: [],
   outputContract: { schema: { type: "integer" } },
 } satisfies OneJob;
 

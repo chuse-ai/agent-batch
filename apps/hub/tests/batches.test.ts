@@ -1,3 +1,5 @@
+import { ORPCError } from "@orpc/client";
+import { problemOf } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 import * as z from "zod/mini";
 
@@ -14,6 +16,11 @@ beforeAll(() => system.start());
 afterAll(() => system.stop());
 
 const AGENT = { outputContract: { schema: { type: "integer" } } };
+
+/** An Input file at `path`. */
+function fileAt(path: string) {
+  return { path, content: new File(["2.2"], "rates.csv") };
+}
 
 /** A job with the custom ID `customId`. */
 function jobNamed(customId: string, extra: Partial<JobInput> = {}): JobInput {
@@ -88,26 +95,36 @@ test("a custom ID used again with the same content returns what it named, and wi
 test("an add with an invalid job adds none, and its answer names every problem with its path", async () => {
   const client = await system.clientWithNewJobsKey();
   const batch = await client.batches.create({
-    agent: { ...AGENT, inputFiles: { "rates.csv": { content: "1.1" } } },
+    agent: { ...AGENT, files: [{ path: "rates.csv", content: new File(["1.1"], "rates.csv") }] },
     labels: { team: "billing" },
     breaker: false,
   });
   const many = Object.fromEntries(Array.from({ length: 64 }, (_, index) => [`l${index}`, "x"]));
 
-  // Problems only the hub sees, with the Batch: a custom ID given twice, a file named like one of
-  // the agent's, and labels over the limit with the Batch's.
-  const refused = await post(`/batches/${batch.id}/jobs`, {
-    jobs: [
-      jobNamed("a"),
-      jobNamed("a"),
-      jobNamed("b", { inputFiles: { "rates.csv": { content: "2.2" } } }),
-      jobNamed("c", { labels: many }),
-    ],
-  });
-  expect(refused.status).toBe(400);
-  const { detail } = z.parse(z.object({ detail: z.string() }), await refused.json());
-  for (const path of ["jobs[1].customId", 'jobs[2].inputFiles["rates.csv"]', "jobs[3].labels"]) {
-    expect(detail).toContain(path);
+  // Problems only the hub sees, with the Batch: a custom ID given twice, a file at the path of one
+  // of the agent's or inside it, as if it were a folder, and labels over the limit with the
+  // Batch's. Sent with files, so as `multipart/form-data`.
+  const refused = await client.batches
+    .addJobs({
+      id: batch.id,
+      jobs: [
+        jobNamed("a"),
+        jobNamed("a"),
+        jobNamed("b", { files: [fileAt("rates.csv")] }),
+        jobNamed("c", { labels: many }),
+        jobNamed("d", { files: [fileAt("notes.txt"), fileAt("rates.csv/2026.csv")] }),
+      ],
+    })
+    .catch((error: unknown) => error);
+  const problem = refused instanceof ORPCError ? problemOf(refused) : undefined;
+  expect(problem?.status).toBe(400);
+  for (const path of [
+    "jobs[1].customId",
+    "jobs[2].files[0].path",
+    "jobs[3].labels",
+    "jobs[4].files[1].path",
+  ]) {
+    expect(problem?.detail).toContain(path);
   }
 
   // A label value holds any text of at most 256 characters, but no NUL.

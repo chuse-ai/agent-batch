@@ -15,10 +15,15 @@ const AGENT = {
     schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
   },
 };
+/** An Input file at `path`. */
+function fileAt(path: string) {
+  return { path, content: new File([""], "file") };
+}
+
 const JOB = {
   customId: "report-q3",
   input: "Summarise the report in one sentence.",
-  inputFiles: { "q3.md": { content: "Revenue grew 4%." } },
+  files: [{ path: "q3.md", content: new File(["Revenue grew 4%."], "q3.md") }],
 };
 
 /** A client sending a new API key with `permissions`, and the key's ID. */
@@ -42,7 +47,17 @@ test("a Batch is created and a job added to it, each with 200, and the job reads
   const created = await post(key, "/batches", { agent: AGENT });
   expect(created.status).toBe(200);
   const batch = z.parse(z.looseObject({ id: z.string() }), await created.json());
-  const response = await post(key, `/batches/${batch.id}/jobs`, { jobs: [JOB] });
+  // A job with files goes as `multipart/form-data`, its fields in bracket notation.
+  const form = new FormData();
+  form.set("jobs[0][customId]", JOB.customId);
+  form.set("jobs[0][input]", JOB.input);
+  form.set("jobs[0][files][0][path]", "q3.md");
+  form.set("jobs[0][files][0][content]", new File(["Revenue grew 4%."], "q3.md"));
+  const response = await system.hub.fetch(`/batches/${batch.id}/jobs`, {
+    method: "POST",
+    headers: { "x-api-key": key },
+    body: form,
+  });
   expect(response.status).toBe(200);
   const added = z.parse(
     z.object({
@@ -127,7 +142,7 @@ test("a key adds and reads jobs only with the permission for each", async () => 
   });
 });
 
-test("an invalid Output contract or Input file name is refused with 400", async () => {
+test("an invalid Output contract or Input file path is refused with 400", async () => {
   const { key, client } = await withKey({ job: ["create"] });
   const schemas = [
     { type: 5 },
@@ -141,13 +156,24 @@ test("an invalid Output contract or Input file name is refused with 400", async 
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   }
   const batch = await client.batches.create({ agent: AGENT });
-  for (const name of ["reports/q3.md", "../outside", "..", "a\\b"]) {
-    const inputFiles = { [name]: { content: "" } };
-    await expect(client.batches.create({ agent: { ...AGENT, inputFiles } })).rejects.toMatchObject({
+  // A path is relative and stays inside `inputs`; a file name in it is valid on every system.
+  for (const path of ["/etc/passwd", "../outside", "a/../../b", "./a", "a//b", "a/", "", "a\\b"]) {
+    const files = [fileAt(path)];
+    await expect(client.batches.create({ agent: { ...AGENT, files } })).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
     await expect(
-      client.batches.addJobs({ id: batch.id, jobs: [{ ...JOB, inputFiles }] }),
+      client.batches.addJobs({ id: batch.id, jobs: [{ ...JOB, files }] }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }
+  // A path cannot be given twice, nor be a file and a folder in one request.
+  for (const paths of [
+    ["a.txt", "a.txt"],
+    ["photos", "photos/front.jpg"],
+    ["photos/front.jpg", "photos"],
+  ]) {
+    await expect(
+      client.batches.addJobs({ id: batch.id, jobs: [{ ...JOB, files: paths.map(fileAt) }] }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   }
 

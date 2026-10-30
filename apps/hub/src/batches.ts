@@ -7,10 +7,11 @@ import {
   ControlRefused,
   CustomIdReused,
   type JobSubmission,
+  foldersOf,
   labelsSchema,
   NotFound,
 } from "contract";
-import { Array, Data, Effect } from "effect";
+import { Array, Data, Effect, Order } from "effect";
 import { type Kysely, type NotNull, sql, type Transaction } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { v7 as uuidv7 } from "uuid";
@@ -27,7 +28,12 @@ import {
   type RunnerId,
   type UsageRecordId,
 } from "./db/types.ts";
-import { prepareInputFiles, storeBatchInputFiles, storeInputFiles } from "./input-files.ts";
+import {
+  type PreparedInputFiles,
+  prepareInputFiles,
+  storeBatchInputFiles,
+  storeInputFiles,
+} from "./input-files.ts";
 import {
   contentHashOf,
   insertUsageRecords,
@@ -207,11 +213,15 @@ export function createBatch(
     const { customId, agent } = creation;
     // The content a creation under the same custom ID must repeat, with the breaker as it resolves,
     // so `true` and the defaults spelled out are the same.
+    const [files] = yield* prepareInputFiles([agent.files]);
     const contentHash =
       customId === undefined
         ? undefined
-        : contentHashOf({ agent, labels: creation.labels, breaker: apiBreakerOf(breaker) });
-    const [files] = yield* prepareInputFiles([agent.inputFiles]);
+        : contentHashOf({
+            agent: { ...agent, files: filesHashed(files) },
+            labels: creation.labels,
+            breaker: apiBreakerOf(breaker),
+          });
     const created = yield* database.query((db) =>
       db.transaction().execute(async (trx) => {
         const now = new Date();
@@ -278,9 +288,23 @@ function problemsText(issues: readonly { message: string; path: (string | number
 }
 
 /**
- * What is wrong with `jobs`, to be added to a Batch with `labels` and agent's files named
+ * Prepared Input files as a content hash compares them: each path with its bytes' SHA-256, by path,
+ * so the same files in another order are the same content, as they were when keyed by name. A
+ * `File` has no JSON of its own, which canonical JSON would write as `{}`.
+ */
+function filesHashed({ files }: PreparedInputFiles) {
+  return Array.sort(
+    files.map(({ path, blob }) => ({ path, sha256: blob.sha256.toString("hex") })),
+    Order.mapInput(Order.String, (file: { path: string }) => file.path),
+  );
+}
+
+/**
+ * What is wrong with `jobs`, to be added to a Batch with `labels` and agent's files at
  * `sharedFiles`, that the contract's schemas cannot check, with paths from the request: a custom ID
- * given twice, labels over the limit with the Batch's, and a file named like one of the agent's.
+ * given twice, labels over the limit with the Batch's, a file whose path collides with one of the
+ * agent's, as the same path or as a file and a folder, and a job with neither an input nor its own
+ * Input files.
  */
 function jobProblems(
   jobs: readonly JobSubmission[],
@@ -288,6 +312,7 @@ function jobProblems(
   sharedFiles: ReadonlySet<string>,
 ) {
   const firstWithId = new Map<string, number>();
+  const sharedFolders = new Set([...sharedFiles].flatMap(foldersOf));
   return jobs.flatMap((job, index) => {
     const problems: { message: string; path: (string | number)[] }[] = [];
     const first = firstWithId.get(job.customId);
@@ -306,14 +331,28 @@ function jobProblems(
         path: ["jobs", index, "labels"],
       });
     }
-    for (const name of Object.keys(job.inputFiles)) {
-      if (sharedFiles.has(name)) {
-        problems.push({
-          message: "Must not be the name of one of the Batch's agent's Input files",
-          path: ["jobs", index, "inputFiles", name],
-        });
-      }
+    // Its own files, not its agent's, which every job of the Batch gets: a job with neither would
+    // be the same work as every other. Checked here, as a refinement of the submission would keep
+    // Zod from extending it, as the CLI's `jobs submit` does.
+    if (job.input === undefined && job.files.length === 0) {
+      problems.push({
+        message: "Must be given for a job without its own Input files",
+        path: ["jobs", index, "input"],
+      });
     }
+    // Every job of the Batch gets the agent's files in the same `inputs` folder as its own.
+    job.files.forEach(({ path }, fileIndex) => {
+      const message = sharedFiles.has(path)
+        ? "Must not be the path of one of the Batch's agent's Input files"
+        : sharedFolders.has(path)
+          ? "Must not be a folder of one of the Batch's agent's Input files"
+          : foldersOf(path).some((folder) => sharedFiles.has(folder))
+            ? "Must not be in a folder that is one of the Batch's agent's Input files"
+            : undefined;
+      if (message !== undefined) {
+        problems.push({ message, path: ["jobs", index, "files", fileIndex, "path"] });
+      }
+    });
     return problems;
   });
 }
@@ -338,7 +377,7 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
           jsonArrayFrom(
             eb
               .selectFrom("batchInputFile")
-              .select("batchInputFile.name")
+              .select("batchInputFile.path")
               .whereRef("batchInputFile.batchId", "=", "batch.id"),
           ).as("files"),
         ])
@@ -349,17 +388,17 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
     const problems = jobProblems(
       jobs,
       frozen.labels,
-      new Set(frozen.files.map(({ name }) => name)),
+      new Set(frozen.files.map(({ path }) => path)),
     );
     if (problems.length > 0) return yield* Effect.fail(new InvalidInput({ problems }));
-    const prepared = yield* prepareInputFiles(jobs.map((job) => job.inputFiles));
+    const prepared = yield* prepareInputFiles(jobs.map((job) => job.files));
     // Each job with its content as a later add under the same custom ID must repeat it, and its
     // Input files.
     const given = Array.zipWith(jobs, prepared, (job, files) => ({
       job,
       contentHash: contentHashOf({
         input: job.input,
-        inputFiles: job.inputFiles,
+        files: filesHashed(files),
         labels: job.labels,
       }),
       files,

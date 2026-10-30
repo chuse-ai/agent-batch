@@ -25,11 +25,12 @@ exports[`the commands and their flags 1`] = `
             },
             {
               "attributeName": "agent",
-              "flags": "--agent <json>",
+              "description": "Object (json formatted); Required: ["outputContract"]",
+              "flags": "--agent [json]",
               "name": "agent",
               "negate": false,
-              "optional": false,
-              "required": true,
+              "optional": true,
+              "required": false,
               "variadic": false,
             },
             {
@@ -86,7 +87,7 @@ exports[`the commands and their flags 1`] = `
             {
               "attributeName": "jobs",
               "defaultValue": [],
-              "description": "The jobs to add, 1 to 100 per request; a larger Batch is added over several.; Min items: 1; Max items: 100 array",
+              "description": "Type: object; Object (json formatted); Required: ["customId"] The jobs to add, 1 to 100 per request; a larger Batch is added over several.; Min items: 1; Max items: 100 array",
               "flags": "--jobs [values...]",
               "name": "jobs",
               "negate": false,

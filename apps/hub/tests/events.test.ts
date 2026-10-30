@@ -20,7 +20,7 @@ afterAll(() => system.stop());
 
 const SUBMISSION = {
   input: "Greet the reader.",
-  inputFiles: {},
+  files: [],
   outputContract: {
     schema: {
       type: "object",

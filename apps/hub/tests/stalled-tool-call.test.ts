@@ -23,7 +23,7 @@ afterAll(() => system.stop());
 
 const SUBMISSION = {
   input: "Submit what the pipe holds.",
-  inputFiles: {},
+  files: [],
   outputContract: { schema: { type: "string" } },
 } satisfies OneJob;
 

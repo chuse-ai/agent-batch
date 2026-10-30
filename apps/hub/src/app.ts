@@ -8,6 +8,7 @@ import { SmartCoercionHandlerPlugin } from "@orpc/json-schema";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { OpenAPIReferenceHandlerPlugin } from "@orpc/openapi/plugins";
 import { implement, ValidationError } from "@orpc/server";
+import { RequestLimitHandlerPlugin } from "@orpc/server/plugins";
 import { ZodToJsonSchemaConverter } from "@orpc/zod";
 import {
   apiContract,
@@ -44,7 +45,7 @@ import {
   ApikeyId,
   BatchId,
   EventId,
-  InputFileName,
+  InputFilePath,
   JobId,
   RunnerId,
   UploadChunkIndex,
@@ -301,13 +302,13 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
       getInputFileChunk: os.runnerProtocol.getInputFileChunk.effect(function* ({ input, context }) {
         const key = yield* callerKey(context.caller);
         const runnerId = yield* findRunnerByKey(ApikeyId(key.id));
-        // The IDs and the name enter the hub here.
+        // The IDs and the path enter the hub here.
         const chunk =
           runnerId &&
           (yield* readInputFileChunk(
             runnerId,
             JobId(input.id),
-            InputFileName(input.name),
+            InputFilePath(input.path),
             UploadChunkIndex(input.index),
           ));
         if (!chunk) return yield* Effect.fail(new NotFound());
@@ -316,9 +317,19 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
     },
   });
 
+/**
+ * The most bytes a request's body may hold. Fetch reads a body whole before oRPC parses it, a
+ * multipart body's files included, parsing copies each file's bytes, and storing them reads and
+ * compresses them again: on Node, a 32 MiB body of one file peaked at about 140 MiB above the
+ * hub's baseline, and of 100 small files at about 75 MiB. A Workers isolate has 128 MB for every
+ * request it serves. Provisional, until limits on a job's files and a request are set.
+ */
+const MAX_BODY_BYTES = 16 * 1024 * 1024;
+
 const api = new OpenAPIHandler(router, {
   customErrorResponseBodyEncoder: toProblemDetails,
   plugins: [
+    new RequestLimitHandlerPlugin({ maxBodySize: MAX_BODY_BYTES }),
     // A query string's values arrive as text; this turns them into what the input's schema
     // expects, such as `after=42` into a number.
     new SmartCoercionHandlerPlugin({ converters: [new ZodToJsonSchemaConverter()] }),

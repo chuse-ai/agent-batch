@@ -198,14 +198,15 @@ export const agentSchema = z
         ),
       ),
     ),
-    // Defaults to none, so an agent without them is the same agent as one with an empty list.
-    inputFiles: z._default(
+    // Defaults to none, so an agent without them is the same agent as one with an empty list, and
+    // a multipart request, which cannot carry an empty list, can leave them out.
+    files: z._default(
       inputFilesSchema.check(
         z.describe(
-          "Files every job's agent finds in its Workspace's `inputs/` folder, by name, beside the job's own; none by default.",
+          "Files every job's agent finds in its Workspace's `inputs/` folder, at their paths, beside the job's own; none by default. Each is a `path` and its `content`, sent in a `multipart/form-data` request.",
         ),
       ),
-      {},
+      [],
     ),
   })
   .register(z.globalRegistry, { id: "Agent" });
@@ -272,19 +273,22 @@ export const jobSubmissionSchema = z
         "Your own ID for the job, unique in its Batch. Adding a job again with the same `customId` and the same content returns the job already added, so an add can be retried safely and a whole Batch added again to add only the jobs it lacks; with other content it is refused. A new job needs a new ID.",
       ),
     ),
-    input: inputSchema.check(
-      z.describe(
-        "What the job gives the Batch's agent to work on: the agent's first input, after its instructions.",
-      ),
-    ),
-    // Defaults to none, so a job without them is the same job as one with an empty list.
-    inputFiles: z._default(
-      inputFilesSchema.check(
+    input: z.optional(
+      inputSchema.check(
         z.describe(
-          "Files the job's agent finds in its Workspace's `inputs/` folder, by name, beside the agent's own; none by default. A name the agent's files already use is refused.",
+          "What the job gives the Batch's agent to work on: the agent's first input, after its instructions. Optional for a job with its own `files`, which are then what it works on; a job with neither is refused.",
         ),
       ),
-      {},
+    ),
+    // Defaults to none, so a job without them is the same job as one with an empty list, and a
+    // multipart request, which cannot carry an empty list, can leave them out.
+    files: z._default(
+      inputFilesSchema.check(
+        z.describe(
+          "Files the job's agent finds in its Workspace's `inputs/` folder, at their paths, beside the agent's own; none by default. Each is a `path`, such as `invoice.pdf` or `claims/42/photo.jpg`, and its `content`, sent in a `multipart/form-data` request. A path that collides with one of the agent's files, as the same path or as a file and a folder, is refused.",
+        ),
+      ),
+      [],
     ),
     labels: z._default(
       labelsSchema.check(

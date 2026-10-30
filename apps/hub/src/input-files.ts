@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { zstdCompressSync } from "node:zlib";
 
 import type { JobSubmission } from "contract";
-import { Array, Effect, Record } from "effect";
+import { Array, Effect } from "effect";
 import type { Kysely } from "kysely";
 
 import { Db, jsonRows } from "./db/database.ts";
@@ -11,7 +11,7 @@ import {
   type BatchId,
   BlobSha256,
   type Database,
-  InputFileName,
+  InputFilePath,
   type JobId,
   type NewUploadChunk,
   type RunnerId,
@@ -57,7 +57,7 @@ interface PreparedBlob {
 
 /** One job's Input files, hashed, each with the blob it needs. */
 export interface PreparedInputFiles {
-  readonly files: readonly { name: InputFileName; blob: PreparedBlob }[];
+  readonly files: readonly { path: InputFilePath; blob: PreparedBlob }[];
 }
 
 /**
@@ -65,21 +65,29 @@ export interface PreparedInputFiles {
  * hold when it looked, before the submission's transaction, so its locks are not held while it
  * compresses; one look for every job, and each blob compressed once however many jobs share it.
  */
-export function prepareInputFiles(filesOfJobs: readonly JobSubmission["inputFiles"][]) {
-  // Each distinct blob once, which every file with its bytes shares, compressed below if it was
-  // not stored.
-  const blobs = new Map<string, { sha256: BlobSha256; bytes: Buffer; chunks?: Buffer[] }>();
-  const prepared = filesOfJobs.map((files): PreparedInputFiles => ({
-    files: Record.collect(files, (name, file) => {
-      const bytes = Buffer.from(file.content, "utf8");
-      const sha256 = BlobSha256(createHash("sha256").update(bytes).digest());
-      const hex = sha256.toString("hex");
-      const blob = blobs.get(hex) ?? { sha256, bytes };
-      blobs.set(hex, blob);
-      return { name: InputFileName(name), blob };
-    }),
-  }));
+export function prepareInputFiles(filesOfJobs: readonly JobSubmission["files"][]) {
   return Effect.gen(function* () {
+    // Each distinct blob once, which every file with its bytes shares, compressed below if it was
+    // not stored.
+    const blobs = new Map<string, { sha256: BlobSha256; bytes: Buffer; chunks?: Buffer[] }>();
+    const prepared = yield* Effect.forEach(filesOfJobs, (files) =>
+      Effect.map(
+        Effect.forEach(files, ({ path, content }) =>
+          Effect.map(
+            Effect.promise(() => content.arrayBuffer()),
+            (read) => {
+              const bytes = Buffer.from(read);
+              const sha256 = BlobSha256(createHash("sha256").update(bytes).digest());
+              const hex = sha256.toString("hex");
+              const blob = blobs.get(hex) ?? { sha256, bytes };
+              blobs.set(hex, blob);
+              return { path: InputFilePath(path), blob };
+            },
+          ),
+        ),
+        (jobFiles): PreparedInputFiles => ({ files: jobFiles }),
+      ),
+    );
     if (blobs.size === 0) return prepared;
     const database = yield* Db;
     // A look without a lock: a blob deleted meanwhile is stored again, and compressed then.
@@ -123,18 +131,18 @@ export async function storeInputFiles(
     jobs.map(({ prepared }) => prepared),
   );
   const rows = jobs.flatMap(({ jobId, prepared }) =>
-    prepared.files.map(({ name, blob }) => ({ jobId, name, sha256: blob.sha256.toString("hex") })),
+    prepared.files.map(({ path, blob }) => ({ jobId, path, sha256: blob.sha256.toString("hex") })),
   );
   if (rows.length === 0) return;
   await trx
     .insertInto("inputFile")
-    .columns(["jobId", "name", "sha256"])
+    .columns(["jobId", "path", "sha256"])
     .expression(
       trx
         .selectFrom((eb) => jsonRows(eb, rows))
         .select((eb) => [
           eb.cast<JobId>(eb.ref("row.value", "->>").key("jobId"), "uuid").as("jobId"),
-          eb.ref("row.value", "->>").key("name").as("name"),
+          eb.ref("row.value", "->>").key("path").as("path"),
           eb
             .fn<BlobSha256>("decode", [eb.ref("row.value", "->>").key("sha256"), eb.val("hex")])
             .as("sha256"),
@@ -153,20 +161,20 @@ export async function storeBatchInputFiles(
   prepared: PreparedInputFiles,
 ): Promise<void> {
   await storeBlobs(trx, [prepared]);
-  const rows = prepared.files.map(({ name, blob }) => ({
-    name,
+  const rows = prepared.files.map(({ path, blob }) => ({
+    path,
     sha256: blob.sha256.toString("hex"),
   }));
   if (rows.length === 0) return;
   await trx
     .insertInto("batchInputFile")
-    .columns(["batchId", "name", "sha256"])
+    .columns(["batchId", "path", "sha256"])
     .expression(
       trx
         .selectFrom((eb) => jsonRows(eb, rows))
         .select((eb) => [
           eb.cast<BatchId>(eb.val(batchId), "uuid").as("batchId"),
-          eb.ref("row.value", "->>").key("name").as("name"),
+          eb.ref("row.value", "->>").key("path").as("path"),
           eb
             .fn<BlobSha256>("decode", [eb.ref("row.value", "->>").key("sha256"), eb.val("hex")])
             .as("sha256"),
@@ -315,34 +323,34 @@ export async function deleteUnusedBlobs(
 }
 
 /**
- * Chunk `index` of the job `jobId`'s Input file `name`, its own or its Batch's agent's, one zstd
+ * Chunk `index` of the job `jobId`'s Input file at `path`, its own or its Batch's agent's, one zstd
  * frame, for the Runner `runnerId` the job is placed on; nothing when there is no such chunk, file
  * or job, or the job is not placed on that Runner.
  */
 export function readInputFileChunk(
   runnerId: RunnerId,
   jobId: JobId,
-  name: InputFileName,
+  path: InputFilePath,
   index: UploadChunkIndex,
 ) {
   return Db.use((database) =>
     database.query((db) =>
       db
         .selectFrom("job")
-        // A job's file names and its Batch's never overlap, as adding a job refuses one that would.
+        // A job's file paths and its Batch's never collide, as adding a job refuses one that would.
         .innerJoinLateral(
           (eb) =>
             eb
               .selectFrom("inputFile")
               .select("inputFile.sha256")
               .whereRef("inputFile.jobId", "=", "job.id")
-              .where("inputFile.name", "=", name)
+              .where("inputFile.path", "=", path)
               .unionAll(
                 eb
                   .selectFrom("batchInputFile")
                   .select("batchInputFile.sha256")
                   .whereRef("batchInputFile.batchId", "=", "job.batchId")
-                  .where("batchInputFile.name", "=", name),
+                  .where("batchInputFile.path", "=", path),
               )
               .as("file"),
           (join) => join.onTrue(),

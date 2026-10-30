@@ -197,11 +197,12 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await schema
     .createTable("batchInputFile")
     .addColumn("batchId", "uuid", (col) => col.notNull().references("batch.id").onDelete("cascade"))
-    .addColumn("name", "text", (col) => col.notNull())
+    // The file's path under each of the Batch's jobs' `inputs` folder, relative, with folders.
+    .addColumn("path", "text", (col) => col.notNull())
     .addColumn("sha256", "bytea", (col) =>
       col.notNull().references("blob.sha256").onDelete("restrict"),
     )
-    .addPrimaryKeyConstraint("batchInputFile_pkey", ["batchId", "name"])
+    .addPrimaryKeyConstraint("batchInputFile_pkey", ["batchId", "path"])
     .execute();
   // For the reference check of deleting a blob, and for finding whether any Batch still uses one.
   await schema
@@ -218,8 +219,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("id", "uuid", (col) => col.primaryKey())
     .addColumn("organizationId", "text", (col) => col.notNull())
     .addColumn("status", sql`agent_batch."jobStatus"`, (col) => col.notNull())
-    // What the job gives its Batch's agent.
-    .addColumn("input", "text", (col) => col.notNull())
+    // What the job gives its Batch's agent. Null when the job gives its agent no text, only its own
+    // files.
+    .addColumn("input", "text")
     // The caller's own ID for the job, unique in its Batch.
     .addColumn("customId", "text", (col) => col.notNull())
     // SHA-256 of the job's RFC 8785 canonical JSON as added, without its custom ID, in hex, which an
@@ -345,12 +347,13 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await schema
     .createTable("inputFile")
     .addColumn("jobId", "uuid", (col) => col.notNull())
-    .addColumn("name", "text", (col) => col.notNull())
+    // The file's path under the job's `inputs` folder, relative, with folders.
+    .addColumn("path", "text", (col) => col.notNull())
     // A job's file refers to its blob, which cannot be deleted while any job's file refers to it.
     .addColumn("sha256", "bytea", (col) =>
       col.notNull().references("blob.sha256").onDelete("restrict"),
     )
-    .addPrimaryKeyConstraint("inputFile_pkey", ["jobId", "name"])
+    .addPrimaryKeyConstraint("inputFile_pkey", ["jobId", "path"])
     .addForeignKeyConstraint("inputFile_jobId_fkey", ["jobId"], "job", ["id"], (constraint) =>
       constraint.onDelete("cascade"),
     )

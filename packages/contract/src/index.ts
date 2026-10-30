@@ -1,6 +1,9 @@
 export * from "./api.ts";
 export {
+  foldersOf,
+  inputFileSchema,
   jsonTextSchema,
+  pathsCollide,
   type Labels,
   labelsSchema,
   type ListedInputFile,

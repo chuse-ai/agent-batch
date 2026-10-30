@@ -70,10 +70,10 @@ export type JobInput = Parameters<ApiClient["batches"]["addJobs"]>[0]["jobs"][nu
 
 /** One job as the tests submit it: its agent's fields and its own, its custom ID optional. */
 export type OneJob = AgentInput &
-  Omit<JobInput, "customId" | "inputFiles"> & {
+  Omit<JobInput, "customId" | "files"> & {
     customId?: string;
     /** The job's own Input files. */
-    inputFiles?: JobInput["inputFiles"];
+    files?: JobInput["files"];
   };
 
 /**

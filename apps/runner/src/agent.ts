@@ -99,6 +99,16 @@ export interface AgentSettings {
 const CONTINUATION_NOTE = "Carry on with the job from where you stopped.";
 
 /**
+ * What a job that gives no input, only its own files, is told as its first message in place
+ * of an input: the model's API needs one. A fixed text, so that it is the same each time the run
+ * opens and nothing about the job moves into the instructions every job of the Batch shares. It
+ * names no files: the Runner receives the Batch's and the job's in one list, so a list could not
+ * say which are the job's, and the agent finds them all in `inputs`. "Using" rather than "on" each
+ * file, as some may be the Batch's, for reference.
+ */
+const FILES_ONLY_NOTE = "Follow your instructions, using your files in the `inputs` folder.";
+
+/**
  * The output `submit_output` accepted first, committed in its own transaction before the call's
  * result, so a restart keeps it even when the call itself was cut off; absent until one is accepted,
  * since `null` is itself an output.
@@ -400,7 +410,7 @@ export function openJob(
      * The input this run answers, the same each time the run opens, as when a restarted
      * Runner opens the journal again: the continuation note it submitted, if any; else an input
      * still waiting for its answer, which it carries on, as one a failed run left; else the
-     * job's own input, which it submits if the journal has none and which is its own when it entered the
+     * job's own input, or `FILES_ONLY_NOTE` for a job that gives none, which it submits if the journal has none and which is its own when it entered the
      * conversation after the run's opening; else, on a resume, a short note asking the agent
      * to carry on, as a pi user types the next message after Esc, since the job's pause or
      * cancel or pi's failure settled its work. Each is submitted once under its request ID. Work a
@@ -433,7 +443,7 @@ export function openJob(
           opened?.entry !== undefined &&
           jobInput.entry > opened.entry);
       return jobInputIsOwn
-        ? submit(job.input, jobInputRequest)
+        ? submit(job.input ?? FILES_ONLY_NOTE, jobInputRequest)
         : submit(CONTINUATION_NOTE, noteRequest);
     };
     const runAgent = Effect.gen(function* () {

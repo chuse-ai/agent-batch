@@ -18,8 +18,10 @@ import {
   createProblemDetailsLink,
   FINAL_JOB_STATUSES,
   getAccess,
+  inputFileSchema,
   jobRefSchema,
   jobSubmissionSchema,
+  MAX_JOBS_PER_ADD,
   problemOf,
 } from "contract";
 import { Config, Effect, Option, Redacted, Schedule, Schema, SchemaIssue } from "effect";
@@ -259,6 +261,47 @@ function commandsOf(router: object, path: readonly string[] = []): Commands {
 }
 
 /**
+ * An Input file as the commands take it in JSON, which holds no bytes: its path, and its text as
+ * `content`, which the command sends as a UTF-8 file. `batches submit` sends files from disk.
+ */
+const textFileSchema = z.object({
+  path: inputFileSchema.shape.path,
+  content: z.string().check(z.describe("The file's text, sent as UTF-8")),
+});
+
+/** Input files as the commands take them in JSON, none by default, as the API's. */
+function textFilesSchema(description: string) {
+  return z._default(z.array(textFileSchema).check(z.describe(description)), []);
+}
+
+/** An agent as the commands take it in JSON: its files as text. */
+const textAgentSchema = z.extend(agentSchema, {
+  files: textFilesSchema(
+    "Files every job's agent finds in its Workspace's `inputs/` folder, beside the job's own: each a `path`, such as `notes/q3.md`, and its text as `content`; none by default.",
+  ),
+});
+
+/** A job as the commands take it in JSON: its files as text. */
+const textJobSchema = z.extend(jobSubmissionSchema, {
+  files: textFilesSchema(
+    "Files the job's agent finds in its Workspace's `inputs/` folder: each a `path`, such as `notes/q3.md`, and its text as `content`; none by default. A path that collides with one of the agent's files is refused.",
+  ),
+});
+
+/** `value` with its `files` as the API takes them: each text a UTF-8 file. */
+function withFiles<T extends { files: readonly z.infer<typeof textFileSchema>[] }>(value: T) {
+  return {
+    ...value,
+    files: value.files.map(({ path, content }) => ({
+      path,
+      content: new File([content], path.split("/").at(-1) ?? path, {
+        type: "text/plain; charset=utf-8",
+      }),
+    })),
+  };
+}
+
+/**
  * `jobs submit`: one job, as a Batch of one without a failure breaker, which means nothing for one
  * job and would leave the Batch paused by its failure. The command creates the Batch and adds the
  * job, each call retried on a transient failure under one custom ID, so a retry never creates a
@@ -281,7 +324,7 @@ function submitCommand() {
       ],
     })
     .input(
-      z.extend(jobSubmissionSchema, {
+      z.extend(textJobSchema, {
         customId: z.optional(
           jobSubmissionSchema.shape.customId.check(
             z.describe(
@@ -289,7 +332,7 @@ function submitCommand() {
             ),
           ),
         ),
-        agent: agentSchema,
+        agent: textAgentSchema,
       }),
     )
     .handler(({ input }) =>
@@ -307,10 +350,10 @@ function submitCommand() {
             );
           }
           const batch = yield* hubCall(() =>
-            client.batches.create({ customId: id, agent, breaker: false }),
+            client.batches.create({ customId: id, agent: withFiles(agent), breaker: false }),
           ).pipe(Effect.retry(retryTransient));
           const added = yield* hubCall(() =>
-            client.batches.addJobs({ id: batch.id, jobs: [{ ...given, customId: id }] }),
+            client.batches.addJobs({ id: batch.id, jobs: [{ ...withFiles(given), customId: id }] }),
           ).pipe(Effect.retry(retryTransient));
           yield* printStep(added.jobs[0]?.job);
         }),
@@ -332,7 +375,7 @@ function createBatchCommand() {
       })
       // A copy of the creation's fields, each with a flag: trpc-cli reads a schema registered with an
       // id, which Zod's JSON Schema gives as a reference, as one `--json` input (mmkal/trpc-cli#233).
-      .input(z.object(batchCreationSchema.shape))
+      .input(z.object({ ...batchCreationSchema.shape, agent: textAgentSchema }))
       .handler(({ input }) =>
         runCommand(
           Effect.gen(function* () {
@@ -347,13 +390,51 @@ function createBatchCommand() {
               );
             }
             const created = yield* hubCall(() =>
-              client.batches.create({ ...input, customId }),
+              client.batches.create({ ...input, agent: withFiles(input.agent), customId }),
             ).pipe(Effect.retry(retryTransient));
             yield* printStep(created);
           }),
         ),
       )
   );
+}
+
+/**
+ * `batches add-jobs`: the contract's call, with each job's files given as text, as `jobs submit`
+ * takes them.
+ */
+function addJobsCommand() {
+  return os
+    .meta({
+      description: getOpenAPIMeta(apiContract.batches.addJobs)?.description,
+      examples: ["agent-batch batches add-jobs --input jobs.json"],
+    })
+    .input(
+      z.object({
+        id: z.uuid().check(z.describe("The Batch's ID.")),
+        jobs: z
+          .array(textJobSchema)
+          .check(
+            z.minLength(1),
+            z.maxLength(MAX_JOBS_PER_ADD),
+            z.describe(
+              `The jobs to add, 1 to ${MAX_JOBS_PER_ADD} per request; a larger Batch is added over several.`,
+            ),
+          ),
+      }),
+    )
+    .handler(({ input }) =>
+      runCommand(
+        Effect.gen(function* () {
+          const client = yield* apiClient;
+          yield* printStep(
+            yield* hubCall(() =>
+              client.batches.addJobs({ id: input.id, jobs: input.jobs.map(withFiles) }),
+            ),
+          );
+        }),
+      ),
+    );
 }
 
 /**
@@ -408,7 +489,11 @@ export function agentBatchCli(version: string) {
     // only the hub's contract, which is oRPC 2's.
     router: os.router({
       ...commands,
-      batches: { ...commands["batches"], create: createBatchCommand() },
+      batches: {
+        ...commands["batches"],
+        create: createBatchCommand(),
+        addJobs: addJobsCommand(),
+      },
       jobs: { submit: submitCommand(), ...commands["jobs"], wait: waitCommand() },
       stack: stackCommands(version),
     }),
