@@ -202,7 +202,7 @@ The model is per Runner. `stack start --provider anthropic --model claude-sonnet
 
 - You want to talk to the agent. Jobs run unattended and end; there is no chat.
 - You want one answer to one request, right now. Submitting and reading are separate steps, and there is no push or callback.
-- The job needs the web, or what a photo says. Job commands have no network, and the Runner's image has no programs that read images; send their text.
+- The job needs the web. Job commands have no network.
 - People who must not see each other's work share the machine. The sandbox is around each job's commands; agent-batch is for one organization, not hostile multi-tenant use.
 - Every job wants a different model. The model is per Runner; run a Runner per model.
 - Your jobs must move between hosts. A job's journal and Workspace stay with the Runner that took it, and each data directory takes one Runner process.

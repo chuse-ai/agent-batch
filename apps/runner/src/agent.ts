@@ -182,7 +182,7 @@ function instructions(job: JobContent) {
  * What the Runner tells every job's agent about running unattended. The Workspace is the current
  * directory, where commands run and relative paths resolve, rather than its path, which names the job.
  */
-const RUNNER_INSTRUCTIONS = `You are running a job unattended; nobody will answer questions. Your Workspace, where your files are and your commands run, is the current directory; the job's Input files, if any, are in its \`inputs\` folder. For temporary files, use the directory in $TMPDIR, not /tmp.
+const RUNNER_INSTRUCTIONS = `You are running a job unattended; nobody will answer questions. Your Workspace, where your files are and your commands run, is the current directory; the job's Input files, if any, are in its \`inputs\` folder. For temporary files, use the directory in $TMPDIR, not /tmp. To read a PDF, \`pdftotext\` extracts its text and \`pdftoppm\` renders its pages as images.
 When the work is complete, call submit_output once with the complete output: as \`value\`, or, for a large output or one a script produced, as the \`path\` of a JSON file in the Workspace. The output is checked against the job's Output contract; if it is rejected, correct it and submit again. A reply in prose does not complete the job.`;
 
 function submitOutputTool(schema: Record<string, unknown>) {
