@@ -680,7 +680,7 @@ function jobsFromJsonl(file: string) {
     yield* fs.stream(file).pipe(
       // Ndjson skips a leading BOM and accepts CRLF and CR line ends, as files saved on Windows
       // have them. A line holding only whitespace is not skipped but fails as invalid JSON, as
-      // `ignoreEmptyLines` skips only lines with nothing in them.
+      // `ignoreEmptyLines` skips only lines with nothing in them (Effect-TS/effect#10201).
       Stream.pipeThroughChannel(
         Ndjson.decode({ ignoreEmptyLines: true, maxLineBytes: MAX_BODY_BYTES }),
       ),
