@@ -764,6 +764,13 @@ function waitForOutputs(
   return Effect.gen(function* () {
     const onTerminal = process.stderr.isTTY;
     const again = `${options.again} --wait`;
+    // Where a person watches, the Batch's ID, in OpenAI's CLI's words, as nothing else prints it
+    // while the wait goes well; a script reads it from the jobs instead.
+    if (onTerminal) {
+      yield* Effect.sync(() =>
+        process.stderr.write(`Batch created: "${batchId}". Waiting for completion.\n`),
+      );
+    }
     const waitAndRead = Effect.gen(function* () {
       const batch = yield* hubCall((signal) =>
         client.batches.get({ id: batchId }, { signal }),
