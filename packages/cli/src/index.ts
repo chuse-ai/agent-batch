@@ -58,7 +58,7 @@ import parseDuration from "parse-duration";
 import { createCli, os } from "trpc-cli";
 import * as z from "zod/mini";
 
-import { runToEnd, stackCommands, savedHub } from "./stack.ts";
+import { runToEnd, shellWords, stackCommands, savedHub } from "./stack.ts";
 
 // The `agent-batch` command: one command per call of the hub's public API that an API key can
 // make, derived from the contract, so the commands cannot drift from the API, plus `jobs submit`,
@@ -890,7 +890,7 @@ function waitForBatch(
     const unsucceeded = Object.values(others).reduce((sum, count) => sum + count, 0);
     const failure =
       batch.pausedBy === "breaker"
-        ? `The Batch's failure breaker paused it, as its jobs failed. Once their failures are fixed, resume it with agent-batch batches resume --id ${batch.id}, and ${again}.`
+        ? `The Batch's failure breaker paused it, as its jobs failed. Once their failures are fixed, resume it with ${shellWords("agent-batch", "batches", "resume", "--id", batch.id)}, and ${again}.`
         : batch.status === "cancelled"
           ? "The Batch was cancelled"
           : unsucceeded > 0
@@ -1054,9 +1054,9 @@ function submitBatchCommand() {
           const customId = yield* customIdOrPrintNew(
             flags.customId,
             (made) =>
-              `Submitting with custom ID ${made}: if this command stops before every job is added, run this command again with --custom-id ${made} to add the rest.`,
+              `Submitting with custom ID ${made}: if this command stops before every job is added, run this command again with ${shellWords("--custom-id", made)} to add the rest.`,
           );
-          const again = `run this command again with --custom-id ${customId}`;
+          const again = `run this command again with ${shellWords("--custom-id", customId)}`;
           yield* uploadMissing(client, local.files);
           const created = yield* hubCall((signal) =>
             client.batches.create({ customId, agent: parsedAgent.data }, { signal }),
@@ -1071,7 +1071,7 @@ function submitBatchCommand() {
             yield* printStep(adds.at(-1)?.batch ?? created);
             yield* Effect.sync(() =>
               process.stderr.write(
-                `To wait for its outputs, ${again} --wait; to see how it stands, run agent-batch batches get --id ${created.id}.\n`,
+                `To wait for its outputs, ${again} --wait; to see how it stands, run ${shellWords("agent-batch", "batches", "get", "--id", created.id)}.\n`,
               ),
             );
           });

@@ -10,9 +10,20 @@ import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { writeFile } from "atomically";
 import { apiContract, createProblemDetailsLink } from "contract";
-import { Cause, Config, Effect, Exit, FileSystem, Layer, Path, Runtime, Stream } from "effect";
+import {
+  Cause,
+  Config,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Path,
+  Result,
+  Runtime,
+  Stream,
+} from "effect";
 import { Cookies } from "effect/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
 import ensureError from "ensure-error";
 import envPaths from "env-paths";
 import lockfile from "proper-lockfile";
@@ -639,7 +650,7 @@ function start(version: string, flags: StartFlags) {
         Effect.mapError(
           (error) =>
             new Error(
-              `${error.message}. The existing Runner was not stopped. Check agent-batch stack logs; to repair provider authentication, run agent-batch stack login --provider ${state.model.provider}, then agent-batch stack start.`,
+              `${error.message}. The existing Runner was not stopped. Check agent-batch stack logs; to repair provider authentication, run ${shellWords("agent-batch", "stack", "login", "--provider", state.model.provider)}, then agent-batch stack start.`,
             ),
         ),
       );
@@ -679,7 +690,7 @@ function start(version: string, flags: StartFlags) {
               )
             : "The existing Runner was not stopped";
           yield* say(
-            `Runner startup did not complete. ${disposition}; the hub and saved data remain. Check agent-batch stack status and agent-batch stack logs. If provider authentication is missing or needs repair, run agent-batch stack login --provider ${state.model.provider}, then agent-batch stack start.`,
+            `Runner startup did not complete. ${disposition}; the hub and saved data remain. Check agent-batch stack status and agent-batch stack logs. If provider authentication is missing or needs repair, run ${shellWords("agent-batch", "stack", "login", "--provider", state.model.provider)}, then agent-batch stack start.`,
           );
         }),
       ),
@@ -729,6 +740,16 @@ function runCredentialCommand(
       command === "login" && !input.withApiKey && process.stdin.isTTY && process.stdout.isTTY,
     );
   }).pipe(Effect.scoped);
+}
+
+/**
+ * `words`, each quoted where a POSIX shell needs it, so a command printed for a person to run is
+ * one they can paste, whatever the names and IDs in it hold. `join` refuses only NUL, which no word
+ * here can hold: each comes from the command line, at once or as saved, or from the hub, which
+ * refuses it.
+ */
+export function shellWords(...words: readonly string[]): string {
+  return Result.getOrThrow(CommandLine.join(words));
 }
 
 /**
