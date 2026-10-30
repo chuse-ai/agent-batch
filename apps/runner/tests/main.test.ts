@@ -10,8 +10,10 @@ const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
 const runner = (args: string[]) =>
   promisify(execFile)(process.execPath, [main, ...args], { env: { PATH: process.env.PATH } });
 
-// `agent-batch stack` and the Runner image call the Runner with these exact arguments.
-describe.concurrent("the Runner's command line", () => {
+// `agent-batch stack` and the Runner image call the Runner with these exact arguments. Each case
+// starts a Node process, all at once, while CI's two vCPUs also run the CLI's tests: on CI a case
+// takes 2 to 5 s, so the default 5 s limit is too tight.
+describe.concurrent("the Runner's command line", { timeout: 20_000 }, () => {
   it.for([
     [],
     ["--healthcheck"],
