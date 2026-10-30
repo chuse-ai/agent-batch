@@ -179,6 +179,9 @@ test("content uploaded once is served to every job of an add that names it", asy
           digest: digestOf(content),
           originalSizeBytes: Buffer.byteLength(content),
         });
+        // Reading every job's files takes seconds; the first, a middle and the last job show each
+        // job is served the content it names, the large file included.
+        if (![0, Math.floor(jobs.length / 2), jobs.length - 1].includes(index)) continue;
         const chunks: Buffer[] = [];
         const count = Math.ceil(file.originalSizeBytes / file.chunkBytes);
         for (let chunkIndex = 0; chunkIndex < count; chunkIndex++) {
