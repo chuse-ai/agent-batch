@@ -333,9 +333,10 @@ function createBatchCommand() {
         description: getOpenAPIMeta(apiContract.batches.create)?.description,
         examples: ["agent-batch batches create --input batch.json"],
       })
-      // A copy of the creation's fields, each with a flag: trpc-cli reads a schema registered with an
-      // id, which Zod's JSON Schema gives as a reference, as one `--json` input (mmkal/trpc-cli#233).
-      .input(z.object(batchCreationSchema.shape))
+      // A copy of the creation, strict as it is, without its registered id, so each field gets a
+      // flag: trpc-cli reads a schema registered with an id, which Zod's JSON Schema gives as a
+      // reference, as one `--json` input (mmkal/trpc-cli#233).
+      .input(z.extend(batchCreationSchema, {}))
       .handler(({ input }) =>
         runCommand(
           Effect.gen(function* () {
