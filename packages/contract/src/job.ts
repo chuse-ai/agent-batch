@@ -100,14 +100,6 @@ export const filePathSchema = textSchema.check(
   ),
 );
 
-/**
- * Whether two Input files' paths cannot both be written: the same path, or one a folder the other
- * is in, as `photos` and `photos/front.jpg`.
- */
-export function pathsCollide(a: string, b: string): boolean {
-  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
-}
-
 /** Each path that `path` lies in, nearest last: `a` and `a/b` for `a/b/c`. */
 export function foldersOf(path: string): string[] {
   const names = path.split("/");
@@ -115,9 +107,8 @@ export function foldersOf(path: string): string[] {
 }
 
 /**
- * An Input file: its path in the job's `inputs` folder and its bytes. `instanceof`, not Zod's file
- * check, which in workerd falls back to checking for `size` and `type`; its JSON Schema is the one
- * Zod gives a file, which has oRPC document a request carrying it as `multipart/form-data`.
+ * An Input file: its path in the job's `inputs` folder and its bytes. Its JSON Schema is the one Zod
+ * gives a file, which has oRPC document a request carrying it as `multipart/form-data`.
  */
 export const inputFileSchema = z.object({
   path: filePathSchema,

@@ -15,6 +15,7 @@ import {
   agentSchema,
   apiContract,
   batchCreationSchema,
+  batchRefSchema,
   createProblemDetailsLink,
   FINAL_JOB_STATUSES,
   getAccess,
@@ -264,8 +265,7 @@ function commandsOf(router: object, path: readonly string[] = []): Commands {
  * An Input file as the commands take it in JSON, which holds no bytes: its path, and its text as
  * `content`, which the command sends as a UTF-8 file. `batches submit` sends files from disk.
  */
-const textFileSchema = z.object({
-  path: inputFileSchema.shape.path,
+const textFileSchema = z.extend(inputFileSchema, {
   content: z.string().check(z.describe("The file's text, sent as UTF-8")),
 });
 
@@ -410,8 +410,7 @@ function addJobsCommand() {
       examples: ["agent-batch batches add-jobs --input jobs.json"],
     })
     .input(
-      z.object({
-        id: z.uuid().check(z.describe("The Batch's ID.")),
+      z.extend(batchRefSchema, {
         jobs: z
           .array(textJobSchema)
           .check(

@@ -49,7 +49,7 @@ What an agent is told on every job, after the Runner's own instructions.
 _Avoid_: system prompt
 
 **Input**:
-What a job gives its Batch's agent to work on, as text, beside its Input files.
+What a job gives its Batch's agent to work on, as text, beside its Input files; a job with Input files of its own may give none.
 _Avoid_: prompt, query
 
 **Custom ID**:
@@ -127,5 +127,5 @@ Where a job's commands run and its files live, such as an OS sandbox of the job'
 _Avoid_: backend
 
 **Run**:
-One stretch of a job running on a runner. It begins with one message, the job's input or a resume's note, when the hub places the job there or resumes it, and ends at a decided stop, when the job pauses or ends, or when the hub drops it; a restart of its runner does not end it. Its ID fences what the runner reports, so nothing a past run does touches the next.
+One stretch of a job running on a runner. It begins with one message, the job's input (or a note pointing to its files when it has none) or a resume's note, when the hub places the job there or resumes it, and ends at a decided stop, when the job pauses or ends, or when the hub drops it; a restart of its runner does not end it. Its ID fences what the runner reports, so nothing a past run does touches the next.
 _Avoid_: execution, invocation

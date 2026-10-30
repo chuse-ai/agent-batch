@@ -332,8 +332,9 @@ function jobProblems(
       });
     }
     // Its own files, not its agent's, which every job of the Batch gets: a job with neither would
-    // be the same work as every other. Checked here, as a refinement of the submission would keep
-    // Zod from extending it, as the CLI's `jobs submit` does.
+    // be the same work as every other. Checked here, as Zod's `extend` refuses to replace a key of a
+    // refined object, and the CLI's commands replace the submission's `files` with text files,
+    // which `safeExtend` refuses as an incompatible type.
     if (job.input === undefined && job.files.length === 0) {
       problems.push({
         message: "Must be given for a job without its own Input files",
