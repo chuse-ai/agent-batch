@@ -54,6 +54,7 @@ import { Ndjson } from "effect/encoding";
 import ensureError from "ensure-error";
 import isNetworkError from "is-network-error";
 import { logUpdateStderr } from "log-update";
+import parseDuration from "parse-duration";
 import { createCli, os } from "trpc-cli";
 import * as z from "zod/mini";
 
@@ -807,7 +808,7 @@ function waitForOutputs(
   client: ApiClient,
   batchId: string,
   jobs: readonly (readonly [string, Job])[],
-  options: { again: string; timeoutSeconds: number | undefined },
+  options: { again: string; timeout: Duration.Duration | undefined },
 ) {
   return Effect.gen(function* () {
     const onTerminal = process.stderr.isTTY;
@@ -840,18 +841,18 @@ function waitForOutputs(
       );
       return { batch, read };
     });
-    const timeoutSeconds = options.timeoutSeconds;
+    const timeout = options.timeout;
     // The timeout covers reading the outputs too, and interrupting aborts the hub calls in flight,
     // so the command ends when it says. The interrupt message is outside it, for Ctrl-C alone.
     const { batch, read } = yield* (
-      timeoutSeconds === undefined
+      timeout === undefined
         ? waitAndRead
         : Effect.timeoutOrElse(waitAndRead, {
-            duration: Duration.seconds(timeoutSeconds),
+            duration: timeout,
             orElse: () =>
               Effect.fail(
                 new WaitTimedOut(
-                  `Stopped waiting after ${timeoutSeconds} seconds; the Batch carries on. To wait again, ${again}.`,
+                  `Stopped waiting after ${Duration.format(timeout)}; the Batch carries on. To wait again, ${again}.`,
                 ),
               ),
           })
@@ -939,8 +940,33 @@ function submitBatchCommand() {
                 ),
               ),
           ),
+          // A Go duration, as `openai batches submit --wait-timeout` takes one; parse-duration reads
+          // every Go form with Go's value, as `ms` and Effect's `Duration` do not.
           waitTimeout: z.optional(
-            z.int().check(z.positive(), z.describe("How many seconds --wait waits at most")),
+            z.pipe(
+              z
+                .string()
+                .check(
+                  z.describe("How long --wait waits at most, such as 30m or 1h30m; 0 for no limit"),
+                ),
+              z.transform((given, context) => {
+                const refuse = (message: string) => {
+                  context.issues.push({ code: "custom", message, input: given });
+                  return z.NEVER;
+                };
+                // A number without a unit, as Go refuses it, which parse-duration reads as
+                // milliseconds: seconds given as before would otherwise wait a thousandth as long.
+                if (given.trim() !== "0" && /[\d.]$/.test(given.trim())) {
+                  return refuse("A duration needs a unit, such as 30m or 1h30m");
+                }
+                const millis = parseDuration(given);
+                if (millis === null) {
+                  return refuse("Expected a duration, such as 30m or 1h30m");
+                }
+                if (millis < 0) return refuse("A duration must not be negative");
+                return millis === 0 ? undefined : Duration.millis(millis);
+              }),
+            ),
           ),
         }),
       ]),
@@ -1022,7 +1048,7 @@ function submitBatchCommand() {
                   local.jobs.map((job) => job.customId),
                   added,
                 ),
-                { again, timeoutSeconds: flags.waitTimeout },
+                { again, timeout: flags.waitTimeout },
               )
             : submitted;
         }).pipe(Effect.mapError(commandError)),

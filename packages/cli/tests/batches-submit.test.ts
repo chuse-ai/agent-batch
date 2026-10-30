@@ -315,10 +315,28 @@ test("batches submit --wait-timeout ends the command when it passes, with 124, e
     "a.pdf",
     "--wait",
     "--wait-timeout",
-    "1",
+    "1s",
   ]);
 
   expect(exitCode).toBe(124);
-  expect(stderr).toContain("Stopped waiting after 1 seconds; the Batch carries on.");
+  expect(stderr).toContain("Stopped waiting after 1s; the Batch carries on.");
   expect(stderr).not.toContain("Stopped waiting; the Batch carries on.");
+});
+
+// A duration with no unit is refused, so seconds given as a number never wait a thousandth as long.
+test("batches submit refuses a --wait-timeout without a unit before sending anything", async () => {
+  const cwd = await folderWith({ "a.pdf": "a" });
+  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
+
+  const refused = await submit(hub.url, cwd, [
+    "--each",
+    "a.pdf",
+    "--wait",
+    "--wait-timeout",
+    "1800",
+  ]);
+
+  expect(refused.exitCode).not.toBe(0);
+  expect(refused.stderr).toContain("A duration needs a unit, such as 30m or 1h30m");
+  expect(hub.adds).toEqual([]);
 });

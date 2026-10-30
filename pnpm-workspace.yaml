@@ -75,6 +75,7 @@ catalog:
   kysely: ^0.29.7
   log-update: ^8.0.0
   nf3: ^0.4.2
+  parse-duration: ^2.1.10
   pg: ^8.23.1
   proper-lockfile: ^4.1.2
   rollup-plugin-license: ^3.7.1
