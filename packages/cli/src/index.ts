@@ -864,8 +864,8 @@ const saveJobLines = Effect.fnUntraced(function* (
  * stands on stderr when a person watches, then, with `outputDir`, saves each of `jobs`' lines
  * there, prints the Batch, and fails unless every job succeeded, as openai-cli does. A caller's
  * pause keeps it waiting, as `jobs wait` does; its failure breaker's pause ends the wait, as the
- * breaker paused it for a flaw to fix first. A timeout or Ctrl-C stops the wait, saves nothing and
- * leaves the Batch running.
+ * breaker paused it for a flaw to fix first. A timeout or Ctrl-C stops the wait, prints no Batch and
+ * leaves the Batch running; during saving, it leaves the files saving had begun.
  */
 function waitAndSave(
   client: ApiClient,
@@ -1010,8 +1010,9 @@ function submitBatchCommand() {
                 ),
               ),
           ),
-          // `ms` reads durations as openai-cli users type them, such as `30m`, `1.5h` and `1 hour`, and
-          // refuses what it cannot read whole; Effect's `Duration` takes only forms like `30 minutes`.
+          // `ms` reads a duration in one unit, such as `30m`, `1.5h` or `1 hour`, and refuses what it
+          // cannot read whole, Go's `1h30m` that openai-cli takes included; Effect's `Duration` takes
+          // only forms like `30 minutes`.
           waitTimeout: z.optional(
             z.pipe(
               z
