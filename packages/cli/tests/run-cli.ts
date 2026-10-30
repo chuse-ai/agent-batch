@@ -21,10 +21,10 @@ hub.listen(0, "127.0.0.1");
 await once(hub, "listening");
 const { port } = z.parse(z.object({ port: z.int() }), hub.address());
 
-/** Moves the faked clock on by 100 ms, then lets a millisecond of real time pass. */
+/** Moves the faked clock on by 100 ms, then lets 5 ms of real time pass. */
 async function tick() {
   await vi.advanceTimersByTimeAsync(100);
-  await sleep(1);
+  await sleep(5);
   return false;
 }
 
@@ -35,10 +35,11 @@ async function tick() {
  * process shows, such as its exit code reaching the shell, is covered there.
  *
  * The clock is faked, so the command's waits, such as a retry's backoff or `--wait-timeout`, pass
- * at once: from when `clockFrom` resolves, if given, until the command ends, it runs 100 times as
+ * at once: from when `clockFrom` resolves, if given, until the command ends, it runs 20 times as
  * fast as real time. Not faster, as fetch's own timeouts run on the faked clock too, and must not
- * pass while the hub answers. Effect sleeps with `setTimeout` and runs its fibers with
- * `setImmediate`, so only `setTimeout` is faked, with `clearTimeout`; `node:timers/promises` is not.
+ * pass while the hub answers: its 10 s to connect is then half a second. Effect sleeps with
+ * `setTimeout` and runs its fibers with `setImmediate`, so only `setTimeout` is faked, with
+ * `clearTimeout`; `node:timers/promises` is not.
  */
 export async function runCli(
   argv: readonly string[],
