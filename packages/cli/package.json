@@ -43,6 +43,8 @@
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
     "@orpc/openapi": "catalog:",
+    "@orpc/server": "catalog:",
+    "@orpc/shared": "catalog:",
     "@standard-schema/utils": "catalog:",
     "@types/node": "catalog:",
     "@types/proper-lockfile": "catalog:",

@@ -215,6 +215,9 @@ catalogs:
     '@orpc/server':
       specifier: 2.0.0-beta.44
       version: 2.0.0-beta.44
+    '@orpc/shared':
+      specifier: 2.0.0-beta.44
+      version: 2.0.0-beta.44
     '@orpc/zod':
       specifier: 2.0.0-beta.44
       version: 2.0.0-beta.44
@@ -599,6 +602,12 @@ importers:
       '@orpc/openapi':
         specifier: 'catalog:'
         version: 2.0.0-beta.44(crossws@0.4.15)
+      '@orpc/server':
+        specifier: 'catalog:'
+        version: 2.0.0-beta.44(crossws@0.4.15)
+      '@orpc/shared':
+        specifier: 'catalog:'
+        version: 2.0.0-beta.44
       '@standard-schema/utils':
         specifier: 'catalog:'
         version: 0.3.0
@@ -637,7 +646,7 @@ importers:
         version: 3.7.1(picomatch@4.0.7)(rollup@4.65.0)
       trpc-cli:
         specifier: 'catalog:'
-        version: 0.17.1(effect@4.1.0)(zod@4.6.7)
+        version: 0.17.1(@orpc/server@2.0.0-beta.44(crossws@0.4.15))(effect@4.1.0)(zod@4.6.7)
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -9422,10 +9431,11 @@ snapshots:
 
   treeverse@3.0.0: {}
 
-  trpc-cli@0.17.1(effect@4.1.0)(zod@4.6.7):
+  trpc-cli@0.17.1(@orpc/server@2.0.0-beta.44(crossws@0.4.15))(effect@4.1.0)(zod@4.6.7):
     dependencies:
       commander: 14.0.3
     optionalDependencies:
+      '@orpc/server': 2.0.0-beta.44(crossws@0.4.15)
       effect: 4.1.0
       zod: 4.6.7
 

@@ -9,9 +9,11 @@ import { createORPCClient, ORPCError } from "@orpc/client";
 import {
   type AnyProcedureContract,
   type ContractRouterClient,
-  ProcedureContract,
+  type RouterContract,
 } from "@orpc/contract";
 import { getOpenAPIMeta } from "@orpc/openapi";
+import { walkProcedureContractsSync } from "@orpc/server";
+import { set } from "@orpc/shared";
 import { getDotPath } from "@standard-schema/utils";
 import {
   agentSchema,
@@ -280,26 +282,16 @@ interface Commands {
 }
 
 /** The commands for the procedures in `router` that an API key can call. */
-function commandsOf(router: object, path: readonly string[] = []): Commands {
+function commandsOf(router: RouterContract): Commands {
   const commands: Commands = {};
-  for (const [name, value] of Object.entries(router)) {
-    if (typeof value !== "object" || value === null) continue;
+  walkProcedureContractsSync(router, (procedure, path) => {
     // The commands mirror the API where that makes sense; the `blobs` calls are low-level content
     // transfer, which `batches submit` does for the caller, hashing local files and uploading the
-    // missing ones, so they have no commands.
-    if (path.length === 0 && name === "blobs") continue;
-    const at = [...path, name];
-    if (value instanceof ProcedureContract) {
-      // The command line authenticates with an API key only, so a call only a member makes has no
-      // command.
-      if (getAccess(value)?.key) {
-        commands[name] = command(value, at);
-      }
-    } else {
-      const nested = commandsOf(value, at);
-      if (Object.keys(nested).length > 0) commands[name] = nested;
-    }
-  }
+    // missing ones, so they have no commands. The command line authenticates with an API key only,
+    // so a call only a member makes has no command either.
+    if (!Array.isArrayNonEmpty(path) || path[0] === "blobs" || !getAccess(procedure)?.key) return;
+    set(commands, path, command(procedure, path));
+  });
   return commands;
 }
 
