@@ -2,20 +2,39 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { describe, expect, it } from "vite-plus/test";
+import { ConfigProvider, Effect, Exit, Layer, Option, Stdio } from "effect";
+import { CliError } from "effect/cli";
+import { describe, expect, it, onTestFinished, vi } from "vite-plus/test";
 
-const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
+import { runnerCli } from "../src/main.ts";
 
-/** Runs the Runner's entry point with no settings, so a command that parses stops at its settings. */
-const runner = (args: string[]) =>
-  promisify(execFile)(process.execPath, [main, ...args], { env: { PATH: process.env.PATH } });
+// `agent-batch stack` and the Runner image call the Runner with these exact arguments. With no
+// settings, a list the command line accepts stops at reading them, and one it refuses never gets
+// there.
 
-// `agent-batch stack` and the Runner image call the Runner with these exact arguments. Each case
-// starts a Node process, all at once, while CI's two vCPUs also run the CLI's tests: on CI a case
-// takes 2 to 5 s, so the default 5 s limit is too tight.
-describe.concurrent("the Runner's command line", { timeout: 20_000 }, () => {
+/** Runs the Runner's command line in-process on `args` with no settings, and what it printed on stderr. */
+async function runner(args: string[]) {
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  // Help and parse errors go to stdout.
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
+  const exit = await Effect.runPromiseExit(
+    runnerCli.pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Stdio.layerTest({ args: Effect.succeed(args) }),
+          ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+        ),
+      ),
+    ),
+  );
+  return { exit, stderr: stderr.mock.calls.flat().join("\n") };
+}
+
+describe("the Runner's command line", () => {
   it.for([
-    [],
     ["--healthcheck"],
     ["register"],
     ["register", "--healthcheck"],
@@ -26,10 +45,10 @@ describe.concurrent("the Runner's command line", { timeout: 20_000 }, () => {
     ["auth-check", "--login"],
     ["auth-status"],
   ])("accepts %j", async (args) => {
-    await expect(runner(args)).rejects.toMatchObject({
-      code: 1,
-      stderr: expect.stringContaining("The Runner is not configured"),
-    });
+    const { exit, stderr } = await runner(args);
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(stderr).toContain("The Runner is not configured");
   });
 
   it.for([
@@ -38,9 +57,21 @@ describe.concurrent("the Runner's command line", { timeout: 20_000 }, () => {
     ["auth-check", "--with-api-key"],
     ["unknown"],
   ])("refuses %j", async (args) => {
-    await expect(runner(args)).rejects.toMatchObject({
+    const { exit, stderr } = await runner(args);
+
+    expect(CliError.isCliError(Option.getOrUndefined(Exit.findErrorOption(exit)))).toBe(true);
+    expect(stderr).not.toContain("The Runner is not configured");
+  });
+
+  // The one start of the entry point itself, with no arguments, as the image starts it: its
+  // refusal reaches the shell as a failing exit code.
+  it("accepts [] from a started process, and exits 1", async () => {
+    const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
+    await expect(
+      promisify(execFile)(process.execPath, [main], { env: { PATH: process.env.PATH } }),
+    ).rejects.toMatchObject({
       code: 1,
-      stderr: expect.not.stringContaining("The Runner is not configured"),
+      stderr: expect.stringContaining("The Runner is not configured"),
     });
   });
 });
