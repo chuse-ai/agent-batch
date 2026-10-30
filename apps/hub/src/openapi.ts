@@ -34,7 +34,7 @@ export function generateOpenAPIDocument(sessionCookie: string) {
         title: "agent-batch",
         version: packageJson.version,
         // A limit every call shares, which no one operation's description would carry.
-        description: `A request's body may hold at most ${MAX_BODY_BYTES / 1024 / 1024} MiB, and an upload's at most ${MAX_FILE_BYTES / 1024 / 1024} MiB; a larger body is refused with 413. A parameter the API does not define, in a request's body or a read's query string, is refused with 400, naming it.`,
+        description: `A request's body may hold at most ${MAX_BODY_BYTES / 1024 / 1024} MiB, and an upload's at most ${MAX_FILE_BYTES / 1024 / 1024} MiB; a larger body is refused with 413.`,
       },
       components: {
         securitySchemes: {
