@@ -687,6 +687,8 @@ function jobsFromJsonl(file: string) {
     );
     const jobs: JobSubmission[] = [];
     yield* fs.stream(file).pipe(
+      // Ndjson skips a leading BOM and accepts CRLF and CR line ends, as files saved on Windows
+      // have them.
       Stream.pipeThroughChannel(
         Ndjson.decode({ ignoreEmptyLines: true, maxLineBytes: MAX_BODY_BYTES }),
       ),
