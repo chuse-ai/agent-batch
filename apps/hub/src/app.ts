@@ -512,7 +512,8 @@ export function createApp<Bindings extends object>(platform: HubPlatform<Binding
     return response;
   };
 
-  app.put("/blobs/:digest", (c) => serve(c, uploads));
+  // Both spellings oRPC matches, so a trailing `/` keeps the upload's limit.
+  app.on("PUT", ["/blobs/:digest", "/blobs/:digest/"], (c) => serve(c, uploads));
   app.all("*", (c) => serve(c, api));
 
   return app;

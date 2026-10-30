@@ -312,7 +312,7 @@ export function uploadBlob(digest: string, sizeBytes: number, body: ReadableStre
  * Writes the bytes `body` carries as chunks of the upload `uploadId`, each `CHUNK_BYTES` original
  * bytes compressed as one zstd frame, a few chunks per statement, each in its own transaction, so
  * none waits on the caller. Answers how many bytes it read and their SHA-256. Stopping it cancels
- * the body.
+ * the body once a read under way ends, as an async iterator's `return` waits for its `next`.
  */
 function writeChunks(uploadId: UploadId, body: ReadableStream<Uint8Array>) {
   return Effect.gen(function* () {
