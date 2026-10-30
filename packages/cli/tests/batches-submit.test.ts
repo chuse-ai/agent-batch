@@ -66,9 +66,13 @@ function jobOf(id: string, customId: string, status: Record<string, unknown>) {
 
 /**
  * A hub answering `batches submit`: it creates one Batch, keeps the jobs each add sends, and answers
- * each job's read with `ended(customId)`, every job having ended by the first read of the Batch.
+ * each job's read with `ended(customId)`, every job having ended by the first read of the Batch,
+ * which it never answers when `stalled`.
  */
-async function fakeHub(ended: (customId: string) => Record<string, unknown>) {
+async function fakeHub(
+  ended: (customId: string) => Record<string, unknown>,
+  { stalled = false } = {},
+) {
   const batchId = crypto.randomUUID();
   const adds: AddedJob[][] = [];
   const ids = new Map<string, string>();
@@ -97,6 +101,7 @@ async function fakeHub(ended: (customId: string) => Record<string, unknown>) {
       });
     }
     if (request.method === "GET" && request.url === `/batches/${batchId}`) {
+      if (stalled) return;
       return answer(response, batchOf(batchId, { succeeded: ids.size }));
     }
     const jobId = request.url?.match(/^\/jobs\/([^/]+)$/)?.[1];
@@ -108,6 +113,7 @@ async function fakeHub(ended: (customId: string) => Record<string, unknown>) {
   });
   hub.on("error", () => {});
   onTestFinished(() => {
+    hub.closeAllConnections();
     hub.close();
   });
   hub.listen(0, "127.0.0.1");
@@ -206,4 +212,20 @@ test("batches submit --wait prints each job's output or failure in order and exi
     { customId: "a.pdf", status: "succeeded", output: { total: 12 } },
     { customId: "b.pdf", status: "failed", failure },
   ]);
+});
+
+test("batches submit --wait-timeout ends the command when it passes, with 124, even while a read hangs", async () => {
+  const cwd = await folderWith({ "a.pdf": "a" });
+  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }), { stalled: true });
+
+  const { exitCode, stderr } = await submit(hub.url, cwd, [
+    "a.pdf",
+    "--wait",
+    "--wait-timeout",
+    "1",
+  ]);
+
+  expect(exitCode).toBe(124);
+  expect(stderr).toContain("Stopped waiting after 1 seconds; the Batch carries on.");
+  expect(stderr).not.toContain("Stopped waiting; the Batch carries on.");
 });

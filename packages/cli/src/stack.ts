@@ -752,7 +752,8 @@ export function runToEnd(
         if (Exit.isSuccess(exit)) resolve();
         else if (Cause.hasInterruptsOnly(exit.cause)) Runtime.defaultTeardown(exit, onExit);
         else {
-          // Set before trpc-cli's exit, which keeps a code already set.
+          // Set before trpc-cli exits, as `bin.ts`'s exit keeps a code already set: 124 for a
+          // timed-out wait, say, rather than trpc-cli's 1.
           Runtime.defaultTeardown(exit, (code) => {
             process.exitCode = code;
           });
