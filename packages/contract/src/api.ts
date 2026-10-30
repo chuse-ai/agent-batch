@@ -3,9 +3,10 @@ import { openapi } from "@orpc/openapi";
 import * as z from "zod/mini";
 
 import {
-  contentRefSchema,
+  blobRefSchema,
   customIdSchema,
   digestSchema,
+  fileSizeBytesSchema,
   inputFilesSchema,
   inputSchema,
   instructionsSchema,
@@ -277,7 +278,7 @@ export const jobSubmissionSchema = z
     files: z._default(
       inputFilesSchema.check(
         z.describe(
-          "Files the job's agent finds in its Workspace's `inputs/` folder, at their paths; none by default. Each is a `path`, such as `invoice.pdf` or `claims/42/photo.jpg`, and the `digest` and `sizeBytes` of content the Organization uploaded with `PUT /blobs/{digest}`, or that another of its jobs uses; other content is refused.",
+          "Files the job's agent finds in its Workspace's `inputs/` folder, at their paths; none by default. Each is a `path`, such as `invoice.pdf` or `claims/42/photo.jpg`, and the `digest` and `sizeBytes` of a Blob the Organization uploaded with `PUT /blobs/{digest}`, or that another of its jobs uses; any other Blob is refused.",
         ),
       ),
       [],
@@ -423,17 +424,17 @@ export const CustomIdReused = error("UNPROCESSABLE_CONTENT");
 // removing a Runner raises `Forbidden` itself. The hub raises `BAD_REQUEST` itself only for what the
 // contract's schemas cannot check, such as an Output contract's schema.
 
-/** The most files one check of stored content names. */
+/** The most files one check of stored Blobs names. */
 export const MAX_FILES_PER_CHECK = 1000;
 
 /**
- * Whether the Organization holds a file's content, as a check answers it, and if not, where to
+ * Whether the Organization holds a file's Blob, as a check answers it, and if not, where to
  * upload it: `transfer` names how, `put` being one request carrying the whole file, so other ways,
  * such as resumable uploads, can follow.
  */
 const blobCheckSchema = z.union([
-  z.extend(contentRefSchema, { stored: z.literal(true) }),
-  z.extend(contentRefSchema, {
+  z.extend(blobRefSchema, { stored: z.literal(true) }),
+  z.extend(blobRefSchema, {
     stored: z.literal(false),
     upload: z.object({
       transfer: z.literal("put"),
@@ -515,14 +516,14 @@ export const apiContract = {
         openapi({
           method: "POST",
           path: "/blobs/check",
-          description: `Answers, for each file named by \`digest\` and \`sizeBytes\`, in the order given, whether the Organization holds that content: \`stored: true\` when it uploaded it in the last seven days or one of its jobs uses it, so jobs may name it without uploading it again; otherwise \`stored: false\` and where to upload it. At most ${MAX_FILES_PER_CHECK} files per request. A file whose size is not that of the content the Organization holds with its digest is refused.`,
+          description: `Answers, for each file named by \`digest\` and \`sizeBytes\`, in the order given, whether the Organization holds that Blob: \`stored: true\` when it uploaded it in the last seven days or one of its jobs uses it, so jobs may name it without uploading it again; otherwise \`stored: false\` and where to upload it. At most ${MAX_FILES_PER_CHECK} files per request. A file whose size is not that of the Blob the Organization holds with its digest is refused.`,
         }),
         ...byKey({ job: ["create"] }),
       )
       .input(
         z.object({
           files: z
-            .array(contentRefSchema)
+            .array(blobRefSchema)
             .check(
               z.minLength(1),
               z.maxLength(MAX_FILES_PER_CHECK),
@@ -540,7 +541,7 @@ export const apiContract = {
           // The body is handed over as it arrives, so the hub stores a file a chunk at a time.
           inputStructure: "detailed",
           requestBodyHint: "octet-stream",
-          description: `Uploads a file's bytes as the request's body, at most ${MAX_FILE_BYTES / 1024 / 1024} MiB, with \`Content-Length\`, under its \`digest\`, and answers once the hub has checked the bytes' size and SHA-256 and stored them. The Organization then holds the content for seven days, renewed by each upload of it, and as long as any of its jobs uses it after that. Bytes whose size or SHA-256 differ from what the request names are refused, and nothing is stored.`,
+          description: `Uploads a file's bytes as the request's body, at most ${MAX_FILE_BYTES / 1024 / 1024} MiB, with \`Content-Length\`, under its \`digest\`, and answers once the hub has checked the bytes' size and SHA-256 and stored them as a Blob. The Organization then holds the Blob for seven days, renewed by each upload of it, and as long as any of its jobs uses it after that. Bytes whose size or SHA-256 differ from what the request names are refused, and nothing is stored.`,
         }),
         ...byKey({ job: ["create"] }),
       )
@@ -548,24 +549,21 @@ export const apiContract = {
         z.object({
           params: z.object({ digest: digestSchema }),
           headers: z.object({
-            "content-length": z
-              .string()
-              .check(z.regex(/^\d+$/), z.describe("The file's size in bytes.")),
+            // Coerced from the header's text by the hub's coercion plugin.
+            "content-length": fileSizeBytesSchema.check(z.describe("The file's size in bytes.")),
           }),
           // A stream of the request's bytes, which oRPC hands over without reading it first; its
           // JSON Schema is a file's.
-          body: z
-            .custom<ReadableStream<Uint8Array>>((value) => value instanceof ReadableStream)
-            .check(
-              z.meta({
-                type: "string",
-                format: "binary",
-                contentMediaType: "application/octet-stream",
-              }),
-            ),
+          body: z.instanceof(ReadableStream<Uint8Array>).check(
+            z.meta({
+              type: "string",
+              format: "binary",
+              contentMediaType: "application/octet-stream",
+            }),
+          ),
         }),
       )
-      .output(contentRefSchema),
+      .output(blobRefSchema),
   },
   batches: {
     create: forOrganization
@@ -739,7 +737,7 @@ export const apiContract = {
           method: "DELETE",
           path: "/jobs/{id}",
           description:
-            "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, its Input files' content included unless an upload of it under seven days old still holds it, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with `deletedAt` and a waiting `delete`, and then as not found. Its Usage record stays, and so does its Batch, with the agent's instructions and Output contract. An unfinished job is refused: cancel it first.",
+            "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, its Input files' Blobs included unless an upload under seven days old still holds them, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with `deletedAt` and a waiting `delete`, and then as not found. Its Usage record stays, and so does its Batch, with the agent's instructions and Output contract. An unfinished job is refused: cancel it first.",
         }),
         ...byKeyOrMember({ job: ["delete"] }),
       )

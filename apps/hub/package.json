@@ -28,6 +28,7 @@
     "@standard-schema/utils": "catalog:",
     "better-auth": "catalog:",
     "canonicalize": "catalog:",
+    "chunk-data": "catalog:",
     "contract": "workspace:*",
     "crossws": "catalog:",
     "effect": "catalog:",

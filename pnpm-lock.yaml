@@ -248,6 +248,9 @@ catalogs:
     canonicalize:
       specifier: ^5.1.0
       version: 5.1.0
+    chunk-data:
+      specifier: ^0.1.0
+      version: 0.1.0
     content-type:
       specifier: ^3.1.1
       version: 3.1.1
@@ -405,6 +408,9 @@ importers:
       canonicalize:
         specifier: 'catalog:'
         version: 5.1.0
+      chunk-data:
+        specifier: 'catalog:'
+        version: 0.1.0
       contract:
         specifier: workspace:*
         version: link:../../packages/contract
@@ -3078,6 +3084,10 @@ packages:
   chownr@3.0.0:
     resolution: {integrity: sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g==}
     engines: {node: '>=18'}
+
+  chunk-data@0.1.0:
+    resolution: {integrity: sha512-zFyPtyC0SZ6Zu79b9sOYtXZcgrsXe0RpePrzRyj52hYVFG1+Rk6rBqjjOEk+GNQwc3PIX+86teQMok970pod1g==}
+    engines: {node: '>=20'}
 
   cli-cursor@3.1.0:
     resolution: {integrity: sha512-I/zHAwsKf9FqGoXM4WWRACob9+SNukZTd94DWF57E4toouRulbCxcUh6RKUEOQlYTHJnzkPMySvPNaaSLNfLZw==}
@@ -7566,6 +7576,8 @@ snapshots:
   chownr@1.1.4: {}
 
   chownr@3.0.0: {}
+
+  chunk-data@0.1.0: {}
 
   cli-cursor@3.1.0:
     dependencies:

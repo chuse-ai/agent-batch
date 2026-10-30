@@ -5,7 +5,7 @@ import * as z from "zod/mini";
 
 import { DB_SCHEMA, openDatabase } from "../src/db/database.ts";
 import { JobId } from "../src/db/types.ts";
-import { OWNER, startSystem, submitJob } from "./harness.ts";
+import { OWNER, startSystem, submitJob, uploadContent } from "./harness.ts";
 
 const system = startSystem();
 
@@ -158,6 +158,11 @@ test("an invalid Output contract or Input file path is refused with 400", async 
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   }
   const batch = await client.batches.create({ agent: AGENT });
+  // The file's Blob is held, so only its path can be refused: at a valid path it is taken.
+  await uploadContent(client, "");
+  await expect(
+    client.batches.addJobs({ id: batch.id, jobs: [{ ...JOB, files: [fileAt("a/b.txt")] }] }),
+  ).resolves.toMatchObject({ jobs: [{ created: true }] });
   // A path is relative and stays inside `inputs`; a file name in it is valid on every system.
   for (const path of ["/etc/passwd", "../outside", "a/../../b", "./a", "a//b", "a/", "", "a\\b"]) {
     const files = [fileAt(path)];

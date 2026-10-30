@@ -763,11 +763,11 @@ async function recordUsageOfEnd(trx: Transaction<Database>, jobId: JobId) {
  * Deletes the finished job `jobId` and returns it as it now reads, or fails with a 404 error or,
  * for an unfinished job, a 409; with its Runner to tell to sync now. In one transaction: the job's
  * row goes, and with it its Input files, events and progress, and the blobs of its Input files that
- * nothing else uses, no other job and no upload of them under seven days old; its latest Usage record is marked deleted, as its tombstone; and the deletion
- * of its files from its host is recorded for its Runner, unless no Runner holds any of the job, as
- * when none was sent it or none started it. A repeat while that deletion waits returns the job
- * again, as Kubernetes returns a pod already being deleted; once the deletion is done, the job is
- * not found.
+ * nothing else uses, no other job and no upload of them under seven days old; its latest Usage
+ * record is marked deleted, as its tombstone; and the deletion of its files from its host is
+ * recorded for its Runner, unless no Runner holds any of the job, as when none was sent it or none
+ * started it. A repeat while that deletion waits returns the job again, as Kubernetes returns a pod
+ * already being deleted; once the deletion is done, the job is not found.
  */
 export function deleteJob(jobId: JobId) {
   return Effect.gen(function* () {

@@ -1,4 +1,3 @@
-import { ORPCError } from "@orpc/client";
 import { problemOf } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 import * as z from "zod/mini";
@@ -27,7 +26,7 @@ const AGENT = { outputContract: { schema: { type: "integer" } } };
 /** The add's problem, as its error's Problem Details give it. */
 async function addProblem(client: ApiClient, id: string, jobs: JobInput[]) {
   const refused = await client.batches.addJobs({ id, jobs }).catch((error: unknown) => error);
-  return refused instanceof ORPCError ? problemOf(refused) : undefined;
+  return problemOf(refused);
 }
 
 /** A job with the custom ID `customId`. */

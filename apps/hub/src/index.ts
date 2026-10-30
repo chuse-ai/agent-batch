@@ -4,7 +4,7 @@ import { HTTPException } from "hono/http-exception";
 
 import { createApp } from "./app.ts";
 import { databaseAndAuthLayer } from "./auth/auth.ts";
-import { sweepUnusedContent } from "./blobs.ts";
+import { sweepUnusedBlobs } from "./blobs.ts";
 import { RunnerConnections } from "./platform.ts";
 import {
   authSettings,
@@ -53,8 +53,16 @@ const app = createApp<Env>({
 
 export default {
   fetch: app.fetch,
-  // The Cron Trigger's sweep of content nothing uses, every hour (`wrangler.jsonc`).
+  // The Cron Trigger's sweep of Blobs nothing uses, every hour (`wrangler.jsonc`), logged when it
+  // fails, as the next one tries again.
   scheduled: (_controller, env, context) => {
-    context.waitUntil(Effect.runPromise(Effect.provide(sweepUnusedContent, workersLayer(env))));
+    context.waitUntil(
+      Effect.runPromise(
+        sweepUnusedBlobs.pipe(
+          Effect.catchCause(Effect.logError),
+          Effect.provide(workersLayer(env)),
+        ),
+      ),
+    );
   },
 } satisfies ExportedHandler<Env>;

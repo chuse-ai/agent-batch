@@ -5,7 +5,7 @@ import { Config, Effect, Layer, Option, Redacted, Schedule } from "effect";
 import ensureError from "ensure-error";
 
 import { createApp, decideRunnerUpgrade } from "./app.ts";
-import { sweepUnusedContent } from "./blobs.ts";
+import { sweepUnusedBlobs } from "./blobs.ts";
 import { migrateDatabase } from "./db/migrate.ts";
 import { NodeRunnerSockets, nodeServices } from "./node/layers.ts";
 import { startServer, stopServer } from "./node/server.ts";
@@ -75,7 +75,7 @@ function hubServer(port: number) {
  */
 const sweeper = Layer.effectDiscard(
   Effect.forkScoped(
-    sweepUnusedContent.pipe(
+    sweepUnusedBlobs.pipe(
       Effect.catchCause(Effect.logError),
       Effect.repeat(Schedule.spaced("1 hour")),
     ),

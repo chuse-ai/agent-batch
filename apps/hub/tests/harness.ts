@@ -89,7 +89,7 @@ export async function uploadContent(client: ApiClient, content: string | Uint8Ar
   const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
   return await client.blobs.upload({
     params: { digest },
-    headers: { "content-length": String(bytes.length) },
+    headers: { "content-length": bytes.length },
     body: new Blob([bytes]).stream(),
   });
 }
@@ -107,7 +107,7 @@ async function uploaded(client: ApiClient, files: readonly FileContent[]) {
 }
 
 /**
- * Submits `job` as the CLI's `jobs submit` does: its files uploaded, then a Batch of one, without
+ * Submits `job` as the CLI's `jobs submit` does, after uploading its files: a Batch of one, without
  * a failure breaker, running the job's agent, and the job added to it; returns the job as the add
  * answers it.
  */

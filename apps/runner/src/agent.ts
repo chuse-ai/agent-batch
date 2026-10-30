@@ -407,15 +407,16 @@ export function openJob(
     // or runs on in its sandbox.
     const stopWork = Effect.promise(() => root.abort(context, { background: true }));
     /**
-     * The input this run answers, the same each time the run opens, as when a restarted
-     * Runner opens the journal again: the continuation note it submitted, if any; else an input
-     * still waiting for its answer, which it carries on, as one a failed run left; else the
-     * job's own input, or `FILES_ONLY_NOTE` for a job that gives none, which it submits if the journal has none and which is its own when it entered the
-     * conversation after the run's opening; else, on a resume, a short note asking the agent
-     * to carry on, as a pi user types the next message after Esc, since the job's pause or
-     * cancel or pi's failure settled its work. Each is submitted once under its request ID. Work a
-     * Runner's restart left pending carries on from the input it was answering: the cut-off model
-     * call is made again, and a cut-off tool call gets an `interrupted` result.
+     * The input this run answers, the same each time the run opens, as when a restarted Runner
+     * opens the journal again: the continuation note it submitted, if any; else an input still
+     * waiting for its answer, which it carries on, as one a failed run left; else the job's own
+     * input, or `FILES_ONLY_NOTE` for a job that gives none, which it submits if the journal has
+     * none and which is its own when it entered the conversation after the run's opening; else, on
+     * a resume, a short note asking the agent to carry on, as a pi user types the next message
+     * after Esc, since the job's pause or cancel or pi's failure settled its work. Each is
+     * submitted once under its request ID. Work a Runner's restart left pending carries on from the
+     * input it was answering: the cut-off model call is made again, and a cut-off tool call gets an
+     * `interrupted` result.
      */
     const submitInput = async (): Promise<Submission> => {
       const jobInputRequest = `job:${jobId}`;

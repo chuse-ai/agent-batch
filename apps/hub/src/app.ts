@@ -23,7 +23,7 @@ import {
   selectProtocolVersion,
 } from "contract";
 import { type Context, Effect, Struct } from "effect";
-import { Hono } from "hono";
+import { type Context as HonoContext, Hono } from "hono";
 import {
   PROBLEM_JSON_CONTENT_TYPE,
   problemDetails,
@@ -225,7 +225,7 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
       }),
       upload: os.blobs.upload.effect(function* ({ input, errors }) {
         const { params, headers, body } = input;
-        return yield* uploadBlob(params.digest, Number(headers["content-length"]), body).pipe(
+        return yield* uploadBlob(params.digest, headers["content-length"], body).pipe(
           Effect.catchTag("InvalidInput", ({ problems }) =>
             Effect.fail(invalidInput(errors, { params, headers }, problems)),
           ),
@@ -493,15 +493,15 @@ export function createApp<Bindings extends object>(platform: HubPlatform<Binding
     return await platform.acceptRunner(c.env, c.req.raw, runner);
   });
 
-  app.all("*", async (c) => {
+  /** Serves the request `c` holds with the oRPC handler `handler`. */
+  const serve = async (c: HonoContext<{ Bindings: Bindings }>, handler: typeof api) => {
     const { matched, response } = await platform.run(
       c.env,
       Effect.contextWith((services: Context.Context<HubServices>) =>
         Effect.promise(() =>
-          (c.req.method === "PUT" && c.req.path.startsWith("/blobs/") ? uploads : api).handle(
-            c.req.raw,
-            { context: { "effect/context": services, headers: c.req.raw.headers } },
-          ),
+          handler.handle(c.req.raw, {
+            context: { "effect/context": services, headers: c.req.raw.headers },
+          }),
         ),
       ),
     );
@@ -510,7 +510,10 @@ export function createApp<Bindings extends object>(platform: HubPlatform<Binding
     // it (middleapi/orpc#2317); its error bodies are Problem Details.
     if (response.status >= 400) response.headers.set("content-type", PROBLEM_JSON_CONTENT_TYPE);
     return response;
-  });
+  };
+
+  app.put("/blobs/:digest", (c) => serve(c, uploads));
+  app.all("*", (c) => serve(c, api));
 
   return app;
 }

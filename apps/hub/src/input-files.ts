@@ -4,12 +4,12 @@ import type { JobSubmission } from "contract";
 import { Effect } from "effect";
 import type { Kysely } from "kysely";
 
-import { digestOf, heldBy, sha256Of } from "./blobs.ts";
+import { digestOf, selectHeldBlobs, sha256Of, sizeProblem } from "./blobs.ts";
 import { Db, jsonRows } from "./db/database.ts";
 import {
   type BlobSha256,
   type Database,
-  type InputFilePath,
+  InputFilePath,
   type JobId,
   type OrganizationId,
   type RunnerId,
@@ -37,13 +37,11 @@ export async function lockHeldBlobs(
   files: readonly { digest: string }[],
 ): Promise<Map<string, number>> {
   if (files.length === 0) return new Map();
-  const rows = await trx
-    .selectFrom("blob")
-    .select(["sha256", "originalSizeBytes"])
-    .where("sha256", "=", (eb) =>
-      eb.fn.any(eb.val([...new Set(files.map(({ digest }) => digest))].map(sha256Of))),
-    )
-    .where((eb) => heldBy(eb, organizationId))
+  const rows = await selectHeldBlobs(
+    trx,
+    organizationId,
+    files.map(({ digest }) => digest),
+  )
     .orderBy("sha256")
     .forKeyShare()
     .execute();
@@ -52,7 +50,7 @@ export async function lockHeldBlobs(
 
 /**
  * What is wrong with the files of `jobs`, given the sizes of the blobs their Organization holds,
- * `held`, from `lockHeldBlobs`: content it does not hold, and a size other than its content's.
+ * `held`, from `lockHeldBlobs`: a Blob it does not hold, and a size other than its Blob's.
  */
 export function unheldFileProblems(
   jobs: readonly JobSubmission[],
@@ -65,19 +63,15 @@ export function unheldFileProblems(
         return [
           {
             message:
-              "Must be content the Organization uploaded in the last seven days, or that one of its jobs uses",
+              "Must be a Blob the Organization uploaded in the last seven days, or that one of its jobs uses",
             path: ["jobs", index, "files", fileIndex, "digest"],
           },
         ];
       }
-      return size === sizeBytes
+      const message = sizeProblem(size, sizeBytes);
+      return message === undefined
         ? []
-        : [
-            {
-              message: `Must be ${size}, the size of the content with this digest`,
-              path: ["jobs", index, "files", fileIndex, "sizeBytes"],
-            },
-          ];
+        : [{ message, path: ["jobs", index, "files", fileIndex, "sizeBytes"] }];
     }),
   );
 }
@@ -91,7 +85,11 @@ export async function storeInputFiles(
   jobs: readonly { jobId: JobId; files: JobSubmission["files"] }[],
 ): Promise<void> {
   const rows = jobs.flatMap(({ jobId, files }) =>
-    files.map(({ path, digest }) => ({ jobId, path, sha256: sha256Of(digest).toString("hex") })),
+    files.map(({ path, digest }) => ({
+      jobId,
+      path: InputFilePath(path),
+      sha256: sha256Of(digest).toString("hex"),
+    })),
   );
   if (rows.length === 0) return;
   await trx
@@ -102,7 +100,7 @@ export async function storeInputFiles(
         .selectFrom((eb) => jsonRows(eb, rows))
         .select((eb) => [
           eb.cast<JobId>(eb.ref("row.value", "->>").key("jobId"), "uuid").as("jobId"),
-          eb.ref("row.value", "->>").key("path").as("path"),
+          eb.cast<InputFilePath>(eb.ref("row.value", "->>").key("path"), "text").as("path"),
           eb
             .fn<BlobSha256>("decode", [eb.ref("row.value", "->>").key("sha256"), eb.val("hex")])
             .as("sha256"),
@@ -147,7 +145,8 @@ export function readInputFileChunk(
     database.query((db) =>
       db
         .selectFrom("job")
-        // A job's file paths and its Batch's never collide, as adding a job refuses one that would.
+        // A Batch's agent has no Input files yet, so a job's paths cannot collide with its Batch's;
+        // when it has, adding a job must refuse a path its Batch has.
         .innerJoinLateral(
           (eb) =>
             eb

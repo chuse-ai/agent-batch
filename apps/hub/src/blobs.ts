@@ -2,27 +2,27 @@ import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { zstdCompressSync } from "node:zlib";
 
-import { Effect } from "effect";
-import { type ExpressionBuilder, type Kysely, sql } from "kysely";
+import { chunkFromAsync } from "chunk-data";
+import { Cause, Effect, Stream } from "effect";
+import { type ExpressionBuilder, type Kysely } from "kysely";
 
 import { getOrganization } from "./auth/auth.ts";
-import { InvalidInput } from "./batches.ts";
 import { Db } from "./db/database.ts";
 import {
   BlobSha256,
   type Database,
-  type NewUploadChunk,
   type OrganizationId,
   UploadChunkIndex,
   UploadId,
 } from "./db/types.ts";
+import { InvalidInput } from "./invalid-input.ts";
 
-// Stored content, uploaded before the jobs that name it (ADR 0035): a check tells a caller which of
-// its files the hub already holds for its Organization, an upload stores one file's bytes from one
-// request, and jobs then name their files by digest. The bytes of each content are stored once
-// however many Organizations upload them (ADR 0031), but an Organization is told content is stored,
-// and may name it, only while it holds it: while its upload is under seven days old, or while a
-// job or Batch of its own uses it. Content nothing holds or uses is deleted by the sweep.
+// Blobs, uploaded before the jobs that name them (ADR 0035): a check tells a caller which of its
+// files the hub already holds for its Organization, an upload stores one file's bytes from one
+// request, and jobs then name their files by digest. Each Blob's bytes are stored once however many
+// Organizations upload them (ADR 0031), but an Organization is told a Blob is stored, and may name
+// it, only while it holds it: while its upload is under seven days old, or while a job or Batch of
+// its own uses it. A Blob nothing holds or uses is deleted by the sweep.
 
 /**
  * The original bytes in each chunk of a new blob but its last. Each request for a chunk costs CPU
@@ -41,14 +41,20 @@ const CHUNK_BYTES = 1024 * 1024;
 // https://developers.cloudflare.com/workers/platform/limits/#memory
 const CHUNKS_PER_INSERT = 8;
 
-/** How long an upload keeps its content held for the Organization without any job using it. */
-const HOLD = sql<Date>`now() + interval '7 days'`;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Until when an upload made now holds its Blob for the Organization, though no job uses it. */
+function holdUntil() {
+  return new Date(Date.now() + 7 * DAY_MS);
+}
 
 /**
- * How long an upload not yet published keeps its chunks: one request writes it, so an older one
- * failed or was cut off.
+ * Until when an upload started now keeps its chunks if it is not published: one request writes
+ * it, so an older one failed or was cut off.
  */
-const UNPUBLISHED = sql<Date>`now() + interval '1 day'`;
+function unpublishedUntil() {
+  return new Date(Date.now() + DAY_MS);
+}
 
 /** How many unused blobs the sweep deletes in each of its transactions. */
 const SWEEP_BATCH = 1000;
@@ -75,7 +81,7 @@ export function heldBy(eb: ExpressionBuilder<Database, "blob">, organizationId: 
         .select("organizationBlob.sha256")
         .whereRef("organizationBlob.sha256", "=", "blob.sha256")
         .where("organizationBlob.organizationId", "=", organizationId)
-        .where("organizationBlob.expiresAt", ">", sql<Date>`now()`),
+        .where("organizationBlob.expiresAt", ">", new Date()),
     ),
     eb.exists(
       eb
@@ -119,7 +125,7 @@ export function inUse(eb: ExpressionBuilder<Database, "blob">) {
         .selectFrom("organizationBlob")
         .select("organizationBlob.sha256")
         .whereRef("organizationBlob.sha256", "=", "blob.sha256")
-        .where("organizationBlob.expiresAt", ">", sql<Date>`now()`),
+        .where("organizationBlob.expiresAt", ">", new Date()),
     ),
   ]);
 }
@@ -143,34 +149,46 @@ export async function deleteUnusedBlobs(
 }
 
 /**
- * For each of `files`, in order, whether the caller's Organization holds its content, or where to
- * upload it; fails with a problem for each file whose size is not that of the content it holds.
+ * The blobs at the digests `digests` that the Organization `organizationId` holds, with their sizes.
+ */
+export function selectHeldBlobs(
+  db: Kysely<Database>,
+  organizationId: OrganizationId,
+  digests: readonly string[],
+) {
+  return db
+    .selectFrom("blob")
+    .select(["sha256", "originalSizeBytes"])
+    .where("sha256", "=", (eb) => eb.fn.any(eb.val([...new Set(digests)].map(sha256Of))))
+    .where((eb) => heldBy(eb, organizationId));
+}
+
+/** The problem with a file of `sizeBytes` whose digest names a Blob of `held` bytes, if any. */
+export function sizeProblem(held: number | undefined, sizeBytes: number) {
+  return held === undefined || held === sizeBytes
+    ? undefined
+    : `Must be ${held}, the size of the Blob with this digest`;
+}
+
+/**
+ * For each of `files`, in order, whether the caller's Organization holds its Blob, or where to
+ * upload it; fails with a problem for each file whose size is not that of the Blob it holds.
  */
 export function checkBlobs(files: readonly { digest: string; sizeBytes: number }[]) {
   return Effect.gen(function* () {
     const database = yield* Db;
     const organization = yield* getOrganization;
     const held = yield* database.query((db) =>
-      db
-        .selectFrom("blob")
-        .select(["sha256", "originalSizeBytes"])
-        .where("sha256", "=", (eb) =>
-          eb.fn.any(eb.val(files.map(({ digest }) => sha256Of(digest)))),
-        )
-        .where((eb) => heldBy(eb, organization.id))
-        .execute(),
+      selectHeldBlobs(
+        db,
+        organization.id,
+        files.map(({ digest }) => digest),
+      ).execute(),
     );
     const sizes = new Map(held.map((row) => [digestOf(row.sha256), row.originalSizeBytes]));
     const problems = files.flatMap(({ digest, sizeBytes }, index) => {
-      const size = sizes.get(digest);
-      return size === undefined || size === sizeBytes
-        ? []
-        : [
-            {
-              message: `Must be ${size}, the size of the content with this digest`,
-              path: ["files", index, "sizeBytes"],
-            },
-          ];
+      const message = sizeProblem(sizes.get(digest), sizeBytes);
+      return message === undefined ? [] : [{ message, path: ["files", index, "sizeBytes"] }];
     });
     if (problems.length > 0) return yield* Effect.fail(new InvalidInput({ problems }));
     return files.map(({ digest, sizeBytes }) =>
@@ -202,140 +220,145 @@ export function uploadBlob(digest: string, sizeBytes: number, body: ReadableStre
     yield* database.query((db) =>
       db
         .insertInto("upload")
-        .values({ id: uploadId, sha256: null, chunkBytes: CHUNK_BYTES, expiresAt: UNPUBLISHED })
+        .values({
+          id: uploadId,
+          sha256: null,
+          chunkBytes: CHUNK_BYTES,
+          expiresAt: unpublishedUntil(),
+        })
         .execute(),
     );
-    const dropUpload = database
-      .query((db) => db.deleteFrom("upload").where("id", "=", uploadId).execute())
-      .pipe(Effect.ignore);
-    const written = yield* database
-      .query((db) => writeChunks(db, uploadId, body, sizeBytes))
-      .pipe(Effect.onError(() => dropUpload));
-    const problems = [
-      ...(written.sizeBytes === sizeBytes
-        ? []
-        : [{ message: `Must be ${sizeBytes} bytes, as given`, path: ["body"] }]),
-      ...(written.sha256.equals(sha256)
-        ? []
-        : [
-            {
-              message: `Must be the digest of the bytes, which is ${digestOf(written.sha256)}`,
-              path: ["params", "digest"],
-            },
-          ]),
-    ];
-    if (problems.length > 0) {
-      yield* dropUpload;
-      return yield* Effect.fail(new InvalidInput({ problems }));
-    }
-    yield* database
-      .query((db) =>
-        db.transaction().execute(async (trx) => {
-          // Inserts the blob, or locks the one stored, as a submission's lock and a deletion's
-          // `for update` wait for each other: a blob whose deletion this waited for is gone once
-          // that commits, and is inserted afresh (ADR 0031).
-          const inserted = await trx
-            .insertInto("blob")
-            .values({ sha256, originalSizeBytes: sizeBytes })
-            .onConflict((conflict) =>
-              conflict
-                .column("sha256")
-                .doUpdateSet((eb) => ({ originalSizeBytes: eb.ref("excluded.originalSizeBytes") }))
-                .where((eb) => eb.lit(false)),
-            )
-            .returning("sha256")
-            .executeTakeFirst();
-          if (inserted) {
+    yield* Effect.gen(function* () {
+      const written = yield* writeChunks(uploadId, body);
+      const problems = [
+        ...(written.sizeBytes === sizeBytes
+          ? []
+          : [{ message: `Must be ${sizeBytes} bytes, as given`, path: ["body"] }]),
+        ...(written.sha256.equals(sha256)
+          ? []
+          : [
+              {
+                message: `Must be the digest of the bytes, which is ${digestOf(written.sha256)}`,
+                path: ["params", "digest"],
+              },
+            ]),
+      ];
+      if (problems.length > 0) return yield* Effect.fail(new InvalidInput({ problems }));
+      // Uninterruptible, as a transaction under way runs to its end anyway: the cleanup below then
+      // starts once it has committed or rolled back.
+      return yield* Effect.uninterruptible(
+        database.query((db) =>
+          db.transaction().execute(async (trx) => {
+            // Inserts the blob, or locks the one stored with an update's lock, which waits for a
+            // deletion's: a blob whose deletion this waited for is gone once that commits, and is
+            // inserted afresh (ADR 0031).
+            const inserted = await trx
+              .insertInto("blob")
+              .values({ sha256, originalSizeBytes: sizeBytes })
+              .onConflict((conflict) =>
+                conflict
+                  .column("sha256")
+                  .doUpdateSet((eb) => ({
+                    originalSizeBytes: eb.ref("excluded.originalSizeBytes"),
+                  }))
+                  .where((eb) => eb.lit(false)),
+              )
+              .returning("sha256")
+              .executeTakeFirst();
+            if (inserted) {
+              await trx
+                .updateTable("upload")
+                .set({ sha256 })
+                .where("id", "=", uploadId)
+                .executeTakeFirstOrThrow();
+            } else {
+              await trx.deleteFrom("upload").where("id", "=", uploadId).execute();
+            }
+            const until = holdUntil();
             await trx
-              .updateTable("upload")
-              .set({ sha256 })
+              .insertInto("organizationBlob")
+              .values({ organizationId: organization.id, sha256, expiresAt: until })
+              .onConflict((conflict) =>
+                conflict.columns(["organizationId", "sha256"]).doUpdateSet((eb) => ({
+                  expiresAt: eb.fn("greatest", [
+                    eb.ref("organizationBlob.expiresAt"),
+                    eb.val(until),
+                  ]),
+                })),
+              )
+              .execute();
+          }),
+        ),
+      );
+    }).pipe(
+      // Only while unpublished: a published upload holds a blob's bytes.
+      Effect.onError(() =>
+        database
+          .query((db) =>
+            db
+              .deleteFrom("upload")
               .where("id", "=", uploadId)
-              .executeTakeFirstOrThrow();
-          } else {
-            await trx.deleteFrom("upload").where("id", "=", uploadId).execute();
-          }
-          await trx
-            .insertInto("organizationBlob")
-            .values({ organizationId: organization.id, sha256, expiresAt: HOLD })
-            .onConflict((conflict) =>
-              conflict.columns(["organizationId", "sha256"]).doUpdateSet((eb) => ({
-                expiresAt: sql<Date>`greatest(${eb.ref("organizationBlob.expiresAt")}, ${HOLD})`,
-              })),
-            )
-            .execute();
-        }),
-      )
-      .pipe(Effect.onError(() => dropUpload));
+              .where("sha256", "is", null)
+              .execute(),
+          )
+          .pipe(Effect.ignore),
+      ),
+    );
     return { digest, sizeBytes };
   });
 }
 
 /**
  * Writes the bytes `body` carries as chunks of the upload `uploadId`, each `CHUNK_BYTES` original
- * bytes compressed as one zstd frame, a few chunks per statement; stops reading past `sizeBytes`.
- * Answers how many bytes it read and their SHA-256.
+ * bytes compressed as one zstd frame, a few chunks per statement, each in its own transaction, so
+ * none waits on the caller. Answers how many bytes it read and their SHA-256. Stopping it cancels
+ * the body.
  */
-async function writeChunks(
-  db: Kysely<Database>,
-  uploadId: UploadId,
-  body: ReadableStream<Uint8Array>,
-  sizeBytes: number,
-) {
-  const hash = createHash("sha256");
-  let read = 0;
-  let pending = Buffer.alloc(0);
-  let index = 0;
-  let group: NewUploadChunk[] = [];
-  // Cuts chunks off the bytes read while they hold at least `least`: a whole chunk while reading,
-  // and any at the end.
-  const cut = async (least: number) => {
-    while (pending.length >= least) {
-      const bytes = zstdCompressSync(pending.subarray(0, CHUNK_BYTES));
-      pending = pending.subarray(CHUNK_BYTES);
-      group.push({ uploadId, index: UploadChunkIndex(index), bytes });
-      index += 1;
-      if (group.length === CHUNKS_PER_INSERT) {
-        // pg sends a Buffer parameter as binary, so the bytes cross as they are.
-        await db.insertInto("uploadChunk").values(group).execute();
-        group = [];
-      }
-    }
-  };
-  const reader = body.getReader();
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      read += value.byteLength;
-      // More bytes than the request gave are refused once the rest is known not to matter.
-      if (read > sizeBytes) break;
-      hash.update(value);
-      pending = Buffer.concat([pending, value]);
-      await cut(CHUNK_BYTES);
-    }
-    await cut(1);
-    if (group.length > 0) await db.insertInto("uploadChunk").values(group).execute();
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
-  return { sizeBytes: read, sha256: hash.digest() };
+function writeChunks(uploadId: UploadId, body: ReadableStream<Uint8Array>) {
+  return Effect.gen(function* () {
+    const database = yield* Db;
+    const hash = createHash("sha256");
+    let sizeBytes = 0;
+    yield* Stream.fromAsyncIterable(
+      chunkFromAsync(body, CHUNK_BYTES),
+      (error) => new Cause.UnknownError(error),
+    ).pipe(
+      Stream.map((bytes) => {
+        hash.update(bytes);
+        sizeBytes += bytes.byteLength;
+        return zstdCompressSync(bytes);
+      }),
+      Stream.zipWithIndex,
+      Stream.grouped(CHUNKS_PER_INSERT),
+      Stream.runForEach((group) =>
+        database.query((db) =>
+          db
+            .insertInto("uploadChunk")
+            .values(
+              // pg sends a Buffer parameter as binary, so the bytes cross as they are.
+              group.map(([bytes, index]) => ({ uploadId, index: UploadChunkIndex(index), bytes })),
+            )
+            .execute(),
+        ),
+      ),
+    );
+    return { sizeBytes, sha256: hash.digest() };
+  });
 }
 
 /**
- * Deletes what no longer needs keeping: Organizations' expired uploads of content, uploads never
+ * Deletes what no longer needs keeping: Organizations' expired holds of Blobs, uploads never
  * published, and blobs nothing uses, a few at a time, skipping any a submission or deletion holds.
  * Run every hour by the platform's scheduler.
  */
-export const sweepUnusedContent = Db.use((database) =>
+export const sweepUnusedBlobs = Db.use((database) =>
   database.query(async (db) => {
-    await db
-      .deleteFrom("organizationBlob")
-      .where("expiresAt", "<=", sql<Date>`now()`)
-      .execute();
+    const now = new Date();
+    await db.deleteFrom("organizationBlob").where("expiresAt", "<=", now).execute();
     await db
       .deleteFrom("upload")
       .where("sha256", "is", null)
-      .where("expiresAt", "<=", sql<Date>`now()`)
+      .where("expiresAt", "<=", now)
       .execute();
     for (;;) {
       const deleted = await db.transaction().execute(async (trx) => {

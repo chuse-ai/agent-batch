@@ -3,13 +3,12 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 
-import { ORPCError } from "@orpc/client";
 import { createJsonRpcClient, hubNotifications, problemOf, runnerRequests } from "contract";
 import { Effect } from "effect";
 import { sql } from "kysely";
 import { afterAll, assert, beforeAll, expect, inject, test } from "vite-plus/test";
 
-import { sweepUnusedContent } from "../src/blobs.ts";
+import { sweepUnusedBlobs } from "../src/blobs.ts";
 import { Db, DB_SCHEMA, openDatabase } from "../src/db/database.ts";
 import { type OneJob, startSystem, submitJob, uploadContent } from "./harness.ts";
 import { callTool } from "./scripted-model.ts";
@@ -45,7 +44,7 @@ async function sweep() {
   await using db = openDatabase(inject("databaseUrl"));
   await Effect.runPromise(
     Effect.gen(function* () {
-      return yield* Effect.provideService(sweepUnusedContent, Db, yield* Db.make(db));
+      return yield* Effect.provideService(sweepUnusedBlobs, Db, yield* Db.make(db));
     }),
   );
 }
@@ -240,11 +239,11 @@ test("an upload whose bytes are not those its digest names stores nothing", asyn
   const refused = await client.blobs
     .upload({
       params: { digest: digestOf(claimed) },
-      headers: { "content-length": "4" },
+      headers: { "content-length": 4 },
       body: new Blob(["else"]).stream(),
     })
     .catch((error: unknown) => error);
-  const problem = refused instanceof ORPCError ? problemOf(refused) : undefined;
+  const problem = problemOf(refused);
   expect(problem).toMatchObject({ status: 400, detail: expect.stringContaining(digestOf("else")) });
   expect(await storedOf([claimed, "else"])).toEqual([]);
   await expect(
@@ -299,7 +298,7 @@ test("the sweep deletes uploads that were never published once they expire", asy
   await sql`delete from ${upload} where sha256 is null`.execute(db);
 });
 
-test("the Runner puts a job's Input files in its Workspace as they were submitted, at their paths", async () => {
+test("the Runner puts a job's Input files in its Workspace as they were submitted, at their paths, and the job needs no input", async () => {
   system.model.setResponses([callTool("submit_output", { value: "done" })]);
   const client = await system.clientWithNewJobsKey();
   // Bytes that are not UTF-8, at a path of folders and characters of several bytes.
@@ -307,7 +306,7 @@ test("the Runner puts a job's Input files in its Workspace as they were submitte
   await system.startRunner();
   try {
     const { id } = await submitJob(client, {
-      ...SUBMISSION,
+      outputContract: SUBMISSION.outputContract,
       files: [
         fileAt("report.txt", LARGE),
         fileAt("empty.txt", ""),

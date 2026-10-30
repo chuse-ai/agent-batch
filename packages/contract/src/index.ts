@@ -1,6 +1,6 @@
 export * from "./api.ts";
 export {
-  contentRefSchema,
+  blobRefSchema,
   digestSchema,
   inputFileSchema,
   MAX_FILE_BYTES,

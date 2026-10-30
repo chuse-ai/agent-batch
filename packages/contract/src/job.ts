@@ -121,7 +121,7 @@ export const digestSchema = z
 export const fileSizeBytesSchema = z.int().check(z.nonnegative(), z.maximum(MAX_FILE_BYTES));
 
 /** Stored content as a caller names it: its digest and its size in bytes. */
-export const contentRefSchema = z.object({
+export const blobRefSchema = z.object({
   digest: digestSchema.check(z.describe("The content's digest, such as `sha256:9f86d0…`.")),
   sizeBytes: fileSizeBytesSchema.check(z.describe("The content's size in bytes.")),
 });
@@ -130,7 +130,7 @@ export const contentRefSchema = z.object({
  * An Input file: its path in the job's `inputs` folder and the stored content it holds, named by
  * digest and size, as uploaded before the job.
  */
-export const inputFileSchema = z.extend(contentRefSchema, { path: filePathSchema });
+export const inputFileSchema = z.extend(blobRefSchema, { path: filePathSchema });
 
 /**
  * Files written into the job's `inputs` folder before its agent starts, as sandbox APIs take them: a

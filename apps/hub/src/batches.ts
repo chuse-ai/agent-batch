@@ -10,7 +10,7 @@ import {
   labelsSchema,
   NotFound,
 } from "contract";
-import { Array, Data, Effect, Order } from "effect";
+import { Array, Effect, Order } from "effect";
 import { type Kysely, type NotNull, sql, type Transaction } from "kysely";
 import { v7 as uuidv7 } from "uuid";
 import * as z from "zod/mini";
@@ -27,6 +27,7 @@ import {
   type UsageRecordId,
 } from "./db/types.ts";
 import { lockHeldBlobs, storeInputFiles, unheldFileProblems } from "./input-files.ts";
+import { InvalidInput } from "./invalid-input.ts";
 import {
   contentHashOf,
   insertUsageRecords,
@@ -48,11 +49,6 @@ import type { HubSettings } from "./settings.ts";
 // breaker's resume of it, by a report that ends jobs (several Batches in the order of their IDs),
 // and by a job's resume. Placement locks jobs and reads their Batches without a lock, so it never
 // waits on a Batch (ADR 0033).
-
-/** Input a module refuses as the contract refuses invalid input, with each problem's path. */
-export class InvalidInput extends Data.TaggedError("InvalidInput")<{
-  problems: readonly { message: string; path: (string | number)[] }[];
-}> {}
 
 /** The breaker a creation asks for, as the Batch's row stores it: both null for none. */
 function breakerOf(given: BatchCreation["breaker"]) {
@@ -273,10 +269,10 @@ function problemsText(issues: readonly { message: string; path: (string | number
 }
 
 /**
- * Input files as a content hash compares them: by path, so the same files in another order are the
- * same content, as they were when keyed by name.
+ * Input files sorted by path, as a content hash compares them: the same files in another order are
+ * the same content.
  */
-function filesHashed(files: JobSubmission["files"]) {
+function filesByPath(files: JobSubmission["files"]) {
   return Array.sort(
     files,
     Order.mapInput(Order.String, (file: { path: string }) => file.path),
@@ -344,7 +340,7 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
       job,
       contentHash: contentHashOf({
         input: job.input,
-        files: filesHashed(job.files),
+        files: filesByPath(job.files),
         labels: job.labels,
       }),
     }));
@@ -358,7 +354,18 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
           .where("id", "=", batchId)
           .forUpdate()
           .executeTakeFirstOrThrow();
-        // Its files' blobs, locked against deletion before any job names them; content the
+        // The jobs the Batch already has under these custom IDs, locked in the order of their IDs
+        // against their deletion, so the answer can read them back; before their blobs, as a
+        // deletion locks a job and then its blobs.
+        const existing = await trx
+          .selectFrom("job")
+          .select(["id", "customId", "contentHash"])
+          .where("batchId", "=", batchId)
+          .where("customId", "=", (eb) => eb.fn.any(eb.val(jobs.map((job) => job.customId))))
+          .orderBy("id")
+          .forKeyShare()
+          .execute();
+        // Its files' blobs, locked against deletion before any job names them; a Blob the
         // Organization does not hold is invalid input, refused before a cancel.
         const held = await lockHeldBlobs(
           trx,
@@ -369,16 +376,6 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
         if (unheld.length > 0) return { kind: "unheld" as const, unheld };
         // A cancelled Batch takes no jobs: a runnable one would undo the cancel unseen.
         if (locked.cancelledAt !== null) return { kind: "cancelled" as const };
-        // The jobs the Batch already has under these custom IDs, locked in the order of their IDs
-        // against their deletion, so the answer can read them back.
-        const existing = await trx
-          .selectFrom("job")
-          .select(["id", "customId", "contentHash"])
-          .where("batchId", "=", batchId)
-          .where("customId", "=", (eb) => eb.fn.any(eb.val(jobs.map((job) => job.customId))))
-          .orderBy("id")
-          .forKeyShare()
-          .execute();
         const byCustomId = new Map(existing.map((row) => [row.customId, row]));
         const reused = given.flatMap(({ job, contentHash }, index) => {
           const found = byCustomId.get(job.customId);

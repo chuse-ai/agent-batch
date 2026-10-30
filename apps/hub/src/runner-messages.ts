@@ -759,7 +759,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                       instructions: eb.ref("batch.instructions"),
                       input: eb.ref("wanted.input"),
                       outputContract: eb.ref("batch.outputContract"),
-                      // The files, the agent's and the job's own, by path, SHA-256, size and chunk
+                      // The files, the agent's and the job's own, by path, digest, size and chunk
                       // size, without their bytes, which the Runner downloads a chunk at a time.
                       files: jsonArrayFrom(
                         eb
@@ -780,9 +780,14 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                           .innerJoin("upload", "upload.sha256", "file.sha256")
                           .select((fileEb) => [
                             "file.path",
-                            sql<string>`'sha256:' || encode(${fileEb.ref("blob.sha256")}, 'hex')`.as(
-                              "digest",
-                            ),
+                            fileEb(
+                              fileEb.val("sha256:"),
+                              "||",
+                              fileEb.fn<string>("encode", [
+                                fileEb.ref("blob.sha256"),
+                                fileEb.val("hex"),
+                              ]),
+                            ).as("digest"),
                             "blob.originalSizeBytes",
                             "upload.chunkBytes",
                           ]),

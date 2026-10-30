@@ -10,7 +10,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Answers, for each file named by \`digest\` and \`sizeBytes\`, in the order given, whether the Organization holds that content: \`stored: true\` when it uploaded it in the last seven days or one of its jobs uses it, so jobs may name it without uploading it again; otherwise \`stored: false\` and where to upload it. At most 1000 files per request. A file whose size is not that of the content the Organization holds with its digest is refused.",
+          "description": "Answers, for each file named by \`digest\` and \`sizeBytes\`, in the order given, whether the Organization holds that Blob: \`stored: true\` when it uploaded it in the last seven days or one of its jobs uses it, so jobs may name it without uploading it again; otherwise \`stored: false\` and where to upload it. At most 1000 files per request. A file whose size is not that of the Blob the Organization holds with its digest is refused.",
           "name": "check",
           "options": [
             {
@@ -429,7 +429,7 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, its Input files' content included unless an upload of it under seven days old still holds it, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with \`deletedAt\` and a waiting \`delete\`, and then as not found. Its Usage record stays, and so does its Batch, with the agent's instructions and Output contract. An unfinished job is refused: cancel it first.",
+          "description": "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, its Input files' Blobs included unless an upload under seven days old still holds them, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with \`deletedAt\` and a waiting \`delete\`, and then as not found. Its Usage record stays, and so does its Batch, with the agent's instructions and Output contract. An unfinished job is refused: cancel it first.",
           "name": "delete",
           "options": [
             {
