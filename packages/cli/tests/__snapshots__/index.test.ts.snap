@@ -272,7 +272,7 @@ exports[`the commands and their flags 1`] = `
             },
           ],
           "commands": [],
-          "description": "Creates a Batch running an agent given by its flags, with the jobs of a JSONL file, one job's JSON per line as batches add-jobs takes it, or with --each, a job for each file or folder: a file becomes a job with that file as its Input file, and a folder a job with every file in its tree, at its path in the folder, hidden ones left out; each job's custom ID is its path as given. --each uploads the files the hub does not hold yet. Prints the Batch, or, with --wait, waits for its jobs to end and prints one JSON line for each, with its output or its failure. Running the command again with the Batch's --custom-id adds only the jobs the Batch lacks.",
+          "description": "Creates a Batch running an agent given by its flags, with the jobs of a JSONL file, one job's JSON per line as batches add-jobs takes it, or with --each, a job for each file or folder: a file becomes a job with that file as its Input file, and a folder a job with every file in its tree, at its path in the folder, hidden ones left out; each job's custom ID is its path as given, normalized. --each uploads the files the hub does not hold yet. Prints the Batch, or, with --wait, waits for its jobs to end and prints one JSON line for each, with its output or its failure. Running the command again with the Batch's --custom-id adds only the jobs the Batch lacks.",
           "name": "submit",
           "options": [
             {

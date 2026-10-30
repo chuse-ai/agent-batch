@@ -44,9 +44,11 @@ import {
   Schema,
   SchemaIssue,
   Stream,
+  Struct,
 } from "effect";
 import ensureError from "ensure-error";
 import isNetworkError from "is-network-error";
+import { logUpdateStderr } from "log-update";
 import { createCli, os } from "trpc-cli";
 import * as z from "zod/mini";
 
@@ -54,8 +56,8 @@ import { runToEnd, stackCommands, savedHub } from "./stack.ts";
 
 // The `agent-batch` command: one command per call of the hub's public API that an API key can
 // make, derived from the contract, so the commands cannot drift from the API, plus `jobs submit`,
-// `jobs wait` and `batches submit`. Each prints the API's JSON on stdout; an error from the hub prints its Problem
-// Details on stderr and exits non-zero.
+// `jobs wait` and `batches submit`. Each prints the API's JSON on stdout; an error from the hub
+// prints its Problem Details on stderr and exits non-zero.
 
 type ApiClient = ContractRouterClient<typeof apiContract>;
 
@@ -200,7 +202,7 @@ function runCommand(work: Effect.Effect<void, unknown>) {
  * The caller's custom ID, or one made for this run of the command and printed on stderr, through
  * `notice`, before anything is sent, so that a command stopped or killed meanwhile has told it.
  */
-function customIdOf(given: string | undefined, notice: (id: string) => string) {
+function customIdOrPrintNew(given: string | undefined, notice: (id: string) => string) {
   if (given !== undefined) return Effect.succeed(given);
   const id = crypto.randomUUID();
   return Effect.as(
@@ -336,7 +338,7 @@ function submitCommand() {
         Effect.gen(function* () {
           const client = yield* apiClient;
           const { agent, ...given } = input;
-          const id = yield* customIdOf(
+          const id = yield* customIdOrPrintNew(
             input.customId,
             (made) =>
               `Submitting with custom ID ${made}: if this command cannot tell whether the job was accepted, submit it again with this ID, as customId in its JSON, to find out.`,
@@ -375,7 +377,7 @@ function createBatchCommand() {
         runCommand(
           Effect.gen(function* () {
             const client = yield* apiClient;
-            const customId = yield* customIdOf(
+            const customId = yield* customIdOrPrintNew(
               input.customId,
               (made) =>
                 `Creating with custom ID ${made}: if this command cannot tell whether the Batch was created, create it again with this ID, as customId in its JSON, to find out.`,
@@ -433,10 +435,10 @@ function waitCommand() {
     );
 }
 
-/** A file on disk that a job of `batches submit --each` carries, at `path` in its `inputs` folder. */
+/** A file at `diskPath` that a job of `batches submit --each` carries, at `path` in `inputs`. */
 interface LocalFile {
   path: string;
-  file: string;
+  diskPath: string;
   sizeBytes: number;
 }
 
@@ -459,8 +461,10 @@ function customIdOfPath(path: Path.Path, given: string) {
 
 /**
  * The jobs `paths` make, in their order: a file is one job with the file as its one Input file, by
- * its name; a folder is one job with every file in its tree, at its path in the folder, hidden
- * files and folders left out. Every problem with the paths is found before anything is sent.
+ * its name; a folder is one job with every file in its tree, at its path in the folder. Hidden
+ * files and folders are left out, given or inside a folder, as a shell's `*` leaves them out; a
+ * link to a folder inside a folder is refused, as the glob does not follow it. Every problem with
+ * the paths is found before anything is sent.
  */
 function jobsFromPaths(paths: readonly string[]) {
   return Effect.gen(function* () {
@@ -479,20 +483,22 @@ function jobsFromPaths(paths: readonly string[]) {
           ),
         );
       }
-      return { path: at, file, sizeBytes };
+      return { path: at, diskPath: file, sizeBytes };
     });
+    const isHidden = (given: string) => /^\.[^./]/.test(path.basename(given));
+    const hidden = paths.filter(isHidden);
+    if (hidden.length > 0) {
+      yield* Effect.sync(() =>
+        process.stderr.write(`Leaving out hidden files and folders: ${hidden.join(", ")}\n`),
+      );
+    }
     const jobs = yield* Effect.forEach(
-      paths,
+      paths.filter((given) => !isHidden(given)),
       Effect.fnUntraced(function* (given): Effect.fn.Return<PathJob, unknown> {
         const customId = customIdOfPath(path, given);
         const info = yield* fs.stat(given);
         if (info.type !== "Directory") {
-          // The resolved path's name, so that `invoices/a.pdf/` names its file too.
-          return {
-            given,
-            customId,
-            files: [yield* fileAt(given, path.basename(path.resolve(given)))],
-          };
+          return { given, customId, files: [yield* fileAt(given, path.basename(given))] };
         }
         // A glob's `*` leaves out hidden files and folders, and never enters a hidden folder. Sorted,
         // so a job's files are in the same order on every run and every system.
@@ -500,7 +506,15 @@ function jobsFromPaths(paths: readonly string[]) {
         const files: LocalFile[] = [];
         for (const entry of entries) {
           const file = path.join(given, entry);
-          if ((yield* fs.stat(file)).type === "Directory") continue;
+          if ((yield* fs.stat(file)).type === "Directory") {
+            const link = yield* Effect.option(fs.readLink(file));
+            if (Option.isSome(link)) {
+              return yield* Effect.fail(
+                new Error(`${file} is a link to a folder, which --each does not follow`),
+              );
+            }
+            continue;
+          }
           files.push(yield* fileAt(file, entry.split(path.sep).join("/")));
         }
         if (files.length === 0) {
@@ -534,24 +548,20 @@ function digestOf(file: string) {
 }
 
 /**
- * How many files `batches submit` hashes, and uploads, at once. Docker and restic send five layers
- * or packs at once; each upload holds one of the hub's database connections while it writes, of
- * the ten a Node hub's pool has, so five leave the hub room for other callers.
+ * How many files `batches submit` hashes or uploads, and how many jobs it reads, at once. Docker
+ * and restic send five layers or packs at once; each upload holds one of the hub's database
+ * connections while it writes, of the ten a Node hub's pool has, so five leave the hub room for
+ * other callers.
  */
-const FILES_AT_ONCE = 5;
+const AT_ONCE = 5;
 
 /** `bytes` in MiB, to a tenth. */
 function mib(bytes: number) {
   return (bytes / 1024 / 1024).toFixed(1);
 }
 
-/** A file of a job with the content it names, and where that content is on disk. */
-interface HashedFile {
-  path: string;
-  digest: string;
-  sizeBytes: number;
-  file: string;
-}
+/** A file of a job with the digest of its content. */
+type HashedFile = LocalFile & { digest: string };
 
 /**
  * The jobs `pathJobs` make, as the hub takes them, their files named by digest, each checked as the
@@ -560,19 +570,24 @@ interface HashedFile {
  */
 function hashJobs(pathJobs: readonly PathJob[]) {
   return Effect.gen(function* () {
-    const hashed = yield* Effect.forEach(pathJobs, ({ files }) =>
-      Effect.forEach(
-        files,
-        (file) => Effect.map(digestOf(file.file), (digest): HashedFile => ({ ...file, digest })),
-        { concurrency: FILES_AT_ONCE },
+    // Every file once, across jobs, as with --each over files each job has one.
+    const diskPaths = [...new Set(pathJobs.flatMap(({ files }) => files.map((f) => f.diskPath)))];
+    const digests = new Map(
+      yield* Effect.forEach(
+        diskPaths,
+        (diskPath) => Effect.map(digestOf(diskPath), (digest) => [diskPath, digest] as const),
+        { concurrency: AT_ONCE },
       ),
+    );
+    const hashed = pathJobs.map(({ files }) =>
+      files.map((file): HashedFile => ({ ...file, digest: digests.get(file.diskPath) ?? "" })),
     );
     const jobs = yield* Effect.forEach(
       Array.zip(pathJobs, hashed),
       ([{ given, customId }, files]) => {
         const parsed = z.safeParse(jobSubmissionSchema, {
           customId,
-          files: files.map(({ path, digest, sizeBytes }) => ({ path, digest, sizeBytes })),
+          files: files.map(Struct.pick(["path", "digest", "sizeBytes"])),
         });
         return parsed.success
           ? Effect.succeed(parsed.data)
@@ -593,10 +608,7 @@ function uploadMissing(client: ApiClient, files: readonly HashedFile[]) {
     const unique = Array.dedupeWith(files, (a, b) => a.digest === b.digest);
     const checked = yield* Effect.forEach(Array.chunksOf(unique, MAX_FILES_PER_CHECK), (chunk) =>
       hubCall((signal) =>
-        client.blobs.check(
-          { files: chunk.map(({ digest, sizeBytes }) => ({ digest, sizeBytes })) },
-          { signal },
-        ),
+        client.blobs.check({ files: chunk.map(Struct.pick(["digest", "sizeBytes"])) }, { signal }),
       ).pipe(
         Effect.retry(retryTransient),
         // The check answers its files in the order given.
@@ -609,26 +621,25 @@ function uploadMissing(client: ApiClient, files: readonly HashedFile[]) {
     const total = missing.reduce((sum, { sizeBytes }) => sum + sizeBytes, 0);
     let done = 0;
     let doneBytes = 0;
-    const show = Effect.sync(() => {
-      if (!onTerminal) return;
-      process.stderr.cursorTo(0);
-      process.stderr.clearLine(1);
-      process.stderr.write(
-        `Uploaded ${done} of ${missing.length} files, ${mib(doneBytes)} of ${mib(total)} MiB`,
-      );
-    });
+    const show = onTerminal
+      ? Effect.sync(() =>
+          logUpdateStderr(
+            `Uploaded ${done} of ${missing.length} files, ${mib(doneBytes)} of ${mib(total)} MiB`,
+          ),
+        )
+      : Effect.void;
     yield* show;
     yield* Effect.forEach(
       missing,
-      ({ file, digest, sizeBytes }) =>
-        // The check's upload `url` is this route; the body is read from disk anew for each try,
-        // and only as it is sent.
+      ({ diskPath, digest, sizeBytes }) =>
+        // Every upload the hub asks for today is a `put` to this route, which the client calls by
+        // the contract; the body is read from disk anew for each try, and only as it is sent.
         hubCall(async (signal) =>
           client.blobs.upload(
             {
               params: { digest },
               headers: { "content-length": sizeBytes },
-              body: (await openAsBlob(file)).stream(),
+              body: (await openAsBlob(diskPath)).stream(),
             },
             { signal },
           ),
@@ -642,24 +653,33 @@ function uploadMissing(client: ApiClient, files: readonly HashedFile[]) {
             }),
           ),
         ),
-      { concurrency: FILES_AT_ONCE, discard: true },
-    ).pipe(
-      Effect.ensuring(onTerminal ? Effect.sync(() => process.stderr.write("\n")) : Effect.void),
-    );
+      { concurrency: AT_ONCE, discard: true },
+    ).pipe(Effect.ensuring(endProgress));
   });
 }
+
+/** Leaves the progress `logUpdateStderr` shows on stderr in place, so what follows goes below it. */
+const endProgress = Effect.sync(() => {
+  if (process.stderr.isTTY) logUpdateStderr.done();
+});
 
 /**
  * The jobs in the JSONL file `file`, one job's JSON per line, as `batches add-jobs` takes each,
  * blank lines left out; each is checked as the hub checks it. A file whose first line is not JSON,
- * such as a PDF given as the positional by mistake, is refused with a pointer to `--each`.
+ * such as a PDF given as the positional by mistake, is refused with a pointer to `--each`, and a
+ * JSON array with how to make it JSONL. Read by hand rather than with Effect's `Ndjson`, which
+ * gives neither these hints nor a failing line's number.
  */
 function jobsFromJsonl(file: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const notJsonl = `${file} is not a JSONL file of jobs, one job's JSON per line; to make a job of each file or folder, use --each ${file}`;
     if ((yield* fs.stat(file)).type !== "File") return yield* Effect.fail(new Error(notJsonl));
-    const lines = (yield* fs.readFileString(file)).split("\n");
+    const content = yield* fs.readFileString(file);
+    const notJsonlYet = /^\s*[[{]/.test(content)
+      ? `${file} holds JSON over several lines, not one job's JSON per line; jq -c '.[]' ${file} makes a JSON array of jobs JSONL`
+      : notJsonl;
+    const lines = content.split("\n");
     const jobs: JobSubmission[] = [];
     for (const [index, line] of lines.entries()) {
       if (line.trim() === "") continue;
@@ -668,7 +688,7 @@ function jobsFromJsonl(file: string) {
         try: (): unknown => JSON.parse(line),
         catch: (error) =>
           jobs.length === 0
-            ? new Error(notJsonl)
+            ? new Error(notJsonlYet)
             : new Error(`${at}: ${ensureError(error).message}`),
       });
       const parsed = z.safeParse(jobSubmissionSchema, value);
@@ -706,7 +726,7 @@ function progressOf(batch: Batch, inCanary: boolean) {
       ? `; the rest wait for its Canary of ${batch.breaker.canary} jobs`
       : "";
   const pause = batch.pausedBy === "caller" ? "; paused" : "";
-  return `Batch ${batch.id}: ${counts}${canary}${pause}`;
+  return `${counts}${canary}${pause}`;
 }
 
 /** Whether waiting for `batch` is over: no job is unfinished, or its failure breaker paused it. */
@@ -715,9 +735,9 @@ function settled(batch: Batch) {
   return batch.pausedBy === "breaker" || queued + running + paused === 0;
 }
 
-/** Shows how `batch` stands on stderr's line, over what it showed before. */
-const showProgress = (client: ApiClient, batch: Batch) =>
-  Effect.gen(function* () {
+/** Shows how `batch` stands on stderr, over what it showed before. */
+function showProgress(client: ApiClient, batch: Batch) {
+  return Effect.gen(function* () {
     // The Batch read has no Canary of its own, so its newest queued job tells whether the
     // Canary still holds the rest.
     const newestQueued =
@@ -727,12 +747,9 @@ const showProgress = (client: ApiClient, batch: Batch) =>
           ).pipe(Effect.retry(retryTransient))
         : undefined;
     const inCanary = newestQueued?.jobs[0]?.blockedBy === "batchCanary";
-    yield* Effect.sync(() => {
-      process.stderr.cursorTo(0);
-      process.stderr.clearLine(1);
-      process.stderr.write(progressOf(batch, inCanary));
-    });
+    yield* Effect.sync(() => logUpdateStderr(progressOf(batch, inCanary)));
   });
+}
 
 /**
  * `batches submit --wait`: reads the Batch `batchId` until waiting for it is over, showing how it
@@ -757,7 +774,7 @@ function waitForOutputs(
         Effect.retry(retryTransient),
         Effect.tap((read) => (onTerminal ? showProgress(client, read) : Effect.void)),
         Effect.repeat({ schedule: pollSchedule, until: settled }),
-        Effect.ensuring(onTerminal ? Effect.sync(() => process.stderr.write("\n")) : Effect.void),
+        Effect.ensuring(endProgress),
       );
       // One read per job, a few at a time, until the API reads a Batch's outputs a page at a time.
       const read = yield* Effect.forEach(
@@ -767,7 +784,7 @@ function waitForOutputs(
             Effect.retry(retryTransient),
             Effect.map((readJob) => outputLine(customId, readJob)),
           ),
-        { concurrency: 8 },
+        { concurrency: AT_ONCE },
       );
       return { batch, read };
     });
@@ -821,7 +838,7 @@ function submitBatchCommand() {
   return os
     .meta({
       description:
-        "Creates a Batch running an agent given by its flags, with the jobs of a JSONL file, one job's JSON per line as batches add-jobs takes it, or with --each, a job for each file or folder: a file becomes a job with that file as its Input file, and a folder a job with every file in its tree, at its path in the folder, hidden ones left out; each job's custom ID is its path as given. --each uploads the files the hub does not hold yet. Prints the Batch, or, with --wait, waits for its jobs to end and prints one JSON line for each, with its output or its failure. Running the command again with the Batch's --custom-id adds only the jobs the Batch lacks.",
+        "Creates a Batch running an agent given by its flags, with the jobs of a JSONL file, one job's JSON per line as batches add-jobs takes it, or with --each, a job for each file or folder: a file becomes a job with that file as its Input file, and a folder a job with every file in its tree, at its path in the folder, hidden ones left out; each job's custom ID is its path as given, normalized. --each uploads the files the hub does not hold yet. Prints the Batch, or, with --wait, waits for its jobs to end and prints one JSON line for each, with its output or its failure. Running the command again with the Batch's --custom-id adds only the jobs the Batch lacks.",
       examples: [
         'agent-batch batches submit --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait > outputs.jsonl',
         "agent-batch batches submit jobs.jsonl --output-schema answer.schema.json",
@@ -829,7 +846,9 @@ function submitBatchCommand() {
     })
     .input(
       z.tuple([
-        // A default, as trpc-cli reads a positional without one as required.
+        // Several files, so that `submit invoices/*.pdf` is answered with --each rather than
+        // commander's "too many arguments"; a default, as trpc-cli reads a tuple's item without one
+        // as required, `z.optional` included.
         z._default(
           z.array(z.string()).check(
             z.meta({
@@ -848,10 +867,8 @@ function submitBatchCommand() {
                 z.describe("Files and folders, each made one job, instead of a JSONL file"),
               ),
           ),
-          instructions: z.optional(
-            agentSchema.shape.instructions.check(
-              z.describe("What the agent is told for every job"),
-            ),
+          instructions: agentSchema.shape.instructions.check(
+            z.describe("What the agent is told for every job"),
           ),
           outputSchema: z
             .string()
@@ -921,7 +938,7 @@ function submitBatchCommand() {
               ? yield* Effect.flatMap(jobsFromPaths(flags.each ?? []), hashJobs)
               : { jobs: yield* jobsFromJsonl(file), files: [] };
           const client = yield* apiClient;
-          const customId = yield* customIdOf(
+          const customId = yield* customIdOrPrintNew(
             flags.customId,
             (made) =>
               `Submitting with custom ID ${made}: if this command stops before every job is added, run this command again with --custom-id ${made} to add the rest.`,

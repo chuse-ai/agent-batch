@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -152,6 +152,7 @@ async function fakeHub(
 /** A new folder holding `files`, by path, and an Output schema. */
 async function folderWith(files: Record<string, string | Uint8Array>) {
   const root = await mkdtemp(path.join(tmpdir(), "batches-submit-"));
+  onTestFinished(() => rm(root, { recursive: true }));
   for (const [name, content] of Object.entries({ ...files, "schema.json": "{}" })) {
     await mkdir(path.dirname(path.join(root, name)), { recursive: true });
     await writeFile(path.join(root, name), content);
@@ -177,6 +178,7 @@ test("batches submit --each makes a job of each file and folder, named by its pa
     "claim/photos/front.jpg": photo,
     "claim/.DS_Store": "hidden",
     "claim/.git/HEAD": "hidden",
+    ".env": "hidden",
   });
   const hub = await fakeHub(() => ({ status: "succeeded", output: {} }), {
     stored: [digestOf("held")],
@@ -188,6 +190,7 @@ test("batches submit --each makes a job of each file and folder, named by its pa
     "invoices/b.pdf",
     "invoices//c.pdf",
     "claim/",
+    ".env",
   ]);
 
   expect(exitCode).toBe(0);
@@ -237,15 +240,34 @@ test("batches submit adds the jobs of a JSONL file in its order, at most 100 at 
   );
 });
 
-test("batches submit refuses a file that is not JSONL, pointing to --each, before sending anything", async () => {
-  const cwd = await folderWith({ "a.pdf": "%PDF-1.7" });
+test("batches submit refuses a file that is not JSONL before sending anything, pointing to --each or to JSONL", async () => {
+  const cwd = await folderWith({
+    "a.pdf": "%PDF-1.7",
+    "jobs.json": JSON.stringify([{ customId: "a", input: "A." }], null, 2),
+  });
   const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
 
-  const { exitCode, stderr } = await submit(hub.url, cwd, ["a.pdf"]);
+  const pdf = await submit(hub.url, cwd, ["a.pdf"]);
+  const json = await submit(hub.url, cwd, ["jobs.json"]);
 
-  expect(exitCode).toBe(1);
-  expect(stderr).toContain("use --each a.pdf");
+  expect(pdf).toMatchObject({ exitCode: 1, stderr: expect.stringContaining("use --each a.pdf") });
+  expect(json).toMatchObject({
+    exitCode: 1,
+    stderr: expect.stringContaining("jq -c '.[]' jobs.json"),
+  });
   expect(hub.adds).toEqual([]);
+});
+
+test("batches submit run again with its --custom-id sends the same jobs, so the hub adds only those it lacks", async () => {
+  const cwd = await folderWith({ "a.pdf": "a", "claim/form.txt": "form" });
+  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
+  const args = ["--each", "a.pdf", "claim", "--custom-id", "march"];
+
+  expect((await submit(hub.url, cwd, args)).exitCode).toBe(0);
+  expect((await submit(hub.url, cwd, args)).exitCode).toBe(0);
+
+  expect(hub.adds).toHaveLength(2);
+  expect(hub.adds[1]).toEqual(hub.adds[0]);
 });
 
 test("batches submit --wait prints each job's output or failure in order and exits 1 when one failed", async () => {
