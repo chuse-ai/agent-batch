@@ -1,5 +1,5 @@
 import { externals } from "nf3/plugin";
-import { defineConfig } from "vite-plus";
+import { configDefaults, defineConfig } from "vite-plus";
 
 export default defineConfig({
   pack: {
@@ -23,7 +23,20 @@ export default defineConfig({
     // The hub runs on Workers and in Docker alike, so the suite runs against each (ADR 0003), each
     // project with a Postgres of its own.
     projects: [
-      { extends: true, test: { name: "workers", provide: { hub: "workers" } } },
+      {
+        extends: true,
+        test: {
+          name: "workers",
+          provide: { hub: "workers" },
+          // These run a Runner against a server of their own, never the hub, so the Node project
+          // alone runs them.
+          exclude: [
+            ...configDefaults.exclude,
+            "tests/runner-reports.test.ts",
+            "tests/runner-stop.test.ts",
+          ],
+        },
+      },
       { extends: true, test: { name: "node", provide: { hub: "node" } } },
     ],
   },
