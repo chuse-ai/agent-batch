@@ -1,7 +1,8 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import type { FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import * as NodeChildProcessSpawner from "@effect/platform-node-shared/NodeChildProcessSpawner";
 import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
 import * as NodePath from "@effect/platform-node-shared/NodePath";
@@ -11,7 +12,7 @@ import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 import * as z from "zod/mini";
 
 import { startSystem } from "./harness.ts";
-import { callTool, reply } from "./scripted-model.ts";
+import { callTool, lastToolResult, reply } from "./scripted-model.ts";
 
 // The `agent-batch` command against a real hub and Runner, run as a caller runs it: in a
 // process of its own, through the link pnpm makes to its bin. What it prints, the error it prints
@@ -42,9 +43,17 @@ const NodeServices = NodeChildProcessSpawner.layer.pipe(
  * exit code, read as the Runner's `runCommand` reads a command's. A command that cannot start fails.
  */
 function agentBatch(...argv: string[]) {
+  return agentBatchIn(undefined, argv).pipe(
+    Effect.map(({ lines, ...rest }) => ({ printed: lines[0], ...rest })),
+    Effect.runPromise,
+  );
+}
+
+/** Runs `agent-batch` with `argv` in the folder `cwd`: each line of JSON it printed, and the rest. */
+function agentBatchIn(cwd: string | undefined, argv: readonly string[]) {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const handle = yield* spawner.spawn(ChildProcess.make(CLI, argv));
+    const handle = yield* spawner.spawn(ChildProcess.make(CLI, argv, { cwd }));
     const [stdout, stderr, exitCode] = yield* Effect.all(
       [
         Stream.mkString(Stream.decodeText(handle.stdout)),
@@ -54,11 +63,14 @@ function agentBatch(...argv: string[]) {
       { concurrency: "unbounded" },
     );
     return {
-      printed: stdout === "" ? undefined : (JSON.parse(stdout) as unknown),
+      lines: stdout
+        .split("\n")
+        .filter((line) => line !== "")
+        .map((line): unknown => JSON.parse(line)),
       stderr,
       exitCode,
     };
-  }).pipe(Effect.scoped, Effect.provide(NodeServices), Effect.runPromise);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices));
 }
 
 test("jobs submit prints the job it accepted from a file, and jobs wait prints it once it has ended", async () => {
@@ -92,3 +104,58 @@ test("a call the hub refuses prints its Problem Details and exits non-zero", asy
   expect(exitCode).toBe(1);
   expect(JSON.parse(stderr)).toMatchObject({ status: 404, title: "Not Found" });
 });
+
+// Each job lists the files in its `inputs/` folder, with their text, and submits the list.
+const listInputs: FauxResponseFactory = ({ messages }) =>
+  messages.some((message) => message.role === "toolResult")
+    ? callTool("submit_output", { value: lastToolResult(messages).text })
+    : callTool("bash", {
+        command: `cd inputs && find . -type f | sort | while read -r f; do printf '%s=%s;' "$f" "$(cat "$f")"; done`,
+      });
+
+// `--wait` reads every 10 seconds, so the jobs, still running at the first read, end by the second.
+test("batches submit --each uploads each file and folder as a job's Input files, and --wait --output-dir saves their outputs in order", async () => {
+  system.model.setResponses([listInputs, listInputs, listInputs, listInputs]);
+  const dir = await mkdtemp(path.join(tmpdir(), "agent-batch-cli-"));
+  await mkdir(path.join(dir, "claim/photos"), { recursive: true });
+  await writeFile(path.join(dir, "notes.txt"), "one");
+  await writeFile(path.join(dir, "claim/form.txt"), "form");
+  await writeFile(path.join(dir, "claim/photos/front.txt"), "front");
+  await writeFile(path.join(dir, "claim/.hidden"), "hidden");
+  await writeFile(path.join(dir, "schema.json"), JSON.stringify({ type: "string" }));
+
+  const { lines, exitCode } = await Effect.runPromise(
+    agentBatchIn(dir, [
+      "batches",
+      "submit",
+      "--each",
+      "./notes.txt",
+      "claim/",
+      "--output-schema",
+      "schema.json",
+      "--wait",
+      "--output-dir",
+      "outputs",
+    ]),
+  );
+  const saved = (await readFile(path.join(dir, "outputs/output.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line): unknown => JSON.parse(line));
+  await rm(dir, { recursive: true });
+
+  expect(exitCode).toBe(0);
+  expect(lines).toMatchObject([{ jobCounts: { succeeded: 2 } }]);
+  expect(saved).toEqual([
+    {
+      customId: "notes.txt",
+      status: "succeeded",
+      output: expect.stringMatching(/^\.\/notes\.txt=one;\s*$/),
+    },
+    {
+      customId: "claim",
+      status: "succeeded",
+      output: expect.stringMatching(/^\.\/form\.txt=form;\.\/photos\/front\.txt=front;\s*$/),
+    },
+  ]);
+}, 30_000);

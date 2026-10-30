@@ -8,6 +8,14 @@
 
 agent-batch runs real agents on unattended jobs. Give it one agent definition and a few hundred inputs, and each job comes back as JSON checked against your schema, or as a failure with its reason. The agent is [Pi](https://github.com/earendil-works/pi), working with real files and real shell commands in a sandbox of its own. The first five jobs run before the rest, and a Batch pauses itself when too many fail, so you can go to bed.
 
+Given a folder of invoices and a JSON Schema for what you want from each, one line runs them all:
+
+```sh
+npx agent-batch batches submit --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait --output-dir ./outputs
+```
+
+Each PDF is a job. Each line of `outputs/output.jsonl` is one invoice's JSON, and each line of `outputs/error.jsonl` one that failed, with why.
+
 It does this without giving every job its own sandbox, so you don't pay for agents to wait on the model. Four hundred jobs in their own 1 GB sandboxes hold 400 GB of memory; on one Runner, for jobs that mostly wait on the model, they fit in a 4 GB server.
 
 Try it on your machine with Docker and Node: `npx agent-batch stack start`, then [the first job](#an-everyday-chore-done-by-an-agent).
@@ -92,60 +100,44 @@ RUNNER_MAX_JOBS=100 npx agent-batch stack start --env RUNNER_MAX_JOBS
 
 Keep the agent, change the input. A Batch is many jobs sharing one agent definition; your first job was already a Batch of one. Say you have job postings and want, for each, what it really requires and how senior it is.
 
-The agent, once:
+The agent is its instructions and the schema each output must match, which goes in a file of its own:
 
 ```sh
-cat > agent.json <<'EOF'
+cat > postings.schema.json <<'EOF'
 {
-  "agent": {
-    "instructions": "The input is a job posting. Submit the requirements it treats as mandatory, the ones it treats as optional, and the seniority it is really asking for, judged from the responsibilities rather than the title.",
-    "outputContract": {
-      "schema": {
-        "type": "object",
-        "required": ["mustHave", "niceToHave", "seniority"],
-        "properties": {
-          "mustHave": { "type": "array", "items": { "type": "string" } },
-          "niceToHave": { "type": "array", "items": { "type": "string" } },
-          "seniority": { "type": "string", "enum": ["junior", "mid", "senior", "lead"] }
-        }
-      }
-    },
-    "runTimeoutSeconds": 300,
-    "modelBudgetUsd": 0.05
+  "type": "object",
+  "required": ["mustHave", "niceToHave", "seniority"],
+  "properties": {
+    "mustHave": { "type": "array", "items": { "type": "string" } },
+    "niceToHave": { "type": "array", "items": { "type": "string" } },
+    "seniority": { "type": "string", "enum": ["junior", "mid", "senior", "lead"] }
   }
 }
 EOF
-BATCH=$(npx agent-batch batches create --input agent.json | jq -er .id)
 ```
 
-Then one job per posting, each with its own text and custom ID, up to 100 per call:
+The jobs are one posting per line, each with its own text and custom ID:
 
 ```sh
-cat > postings.json <<'EOF'
-[
-  { "customId": "posting-0001",
-    "input": "Software Engineer II, Example Corp\nYou will own the billing service end to end and mentor two engineers. Required: 5+ years TypeScript, Postgres. Nice: Effect, Cloudflare Workers.\n" },
-  { "customId": "posting-0002",
-    "input": "Junior Developer, Example GmbH\nYou will fix bugs in our Node services with a senior engineer reviewing every change. Required: JavaScript. Nice: Docker.\n" }
-]
+cat > postings.jsonl <<'EOF'
+{"customId": "posting-0001", "input": "Software Engineer II, Example Corp\nYou will own the billing service end to end and mentor two engineers. Required: 5+ years TypeScript, Postgres. Nice: Effect, Cloudflare Workers.\n"}
+{"customId": "posting-0002", "input": "Junior Developer, Example GmbH\nYou will fix bugs in our Node services with a senior engineer reviewing every change. Required: JavaScript. Nice: Docker.\n"}
 EOF
-jq --arg id "$BATCH" '{id: $id, jobs: .}' postings.json \
-  | npx agent-batch batches add-jobs --input - | jq -r '.jobs[].job.id' > ids
-for id in $(cat ids); do
-  npx agent-batch jobs wait --id "$id" | jq -c 'if .status == "succeeded" then .output else {id, status} end'
-done
+BATCH=$(npx agent-batch batches submit postings.jsonl \
+  --instructions "The input is a job posting. Submit the requirements it treats as mandatory, the ones it treats as optional, and the seniority it is really asking for, judged from the responsibilities rather than the title." \
+  --output-schema postings.schema.json --wait --output-dir ./results | jq -r .id)
 ```
 
-Each line is one posting's output, already checked against the schema, or a failed job's ID and status. A run gave:
+Once every job has ended, the command prints the Batch, whose ID the commands below take, and saves one line per job, in the file's order: in `results/output.jsonl` the output of each that succeeded, already checked against the schema, and in `results/error.jsonl` the `failure` of each that did not, exiting 1 if any did not. A run's `results/output.jsonl`:
 
 ```json
-{"mustHave":["5+ years of TypeScript experience","Postgres"],"seniority":"senior","niceToHave":["Effect","Cloudflare Workers"]}
-{"mustHave":["JavaScript"],"seniority":"junior","niceToHave":["Docker"]}
+{"customId":"posting-0001","status":"succeeded","output":{"mustHave":["5+ years of TypeScript experience","Postgres"],"seniority":"senior","niceToHave":["Effect","Cloudflare Workers"]}}
+{"customId":"posting-0002","status":"succeeded","output":{"mustHave":["JavaScript"],"seniority":"junior","niceToHave":["Docker"]}}
 ```
 
 The first title said II; the responsibilities said senior.
 
-`--input <file>`, or `-` for stdin, gives any command its whole input as JSON; `npx agent-batch <command> --help` and the hub's reference at `/` list every field.
+`npx agent-batch <command> --help` lists a command's flags, and the hub's reference at `/` every field of the API.
 
 ## Stop watching your agents
 

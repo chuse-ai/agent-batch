@@ -12,7 +12,7 @@ import { writeFile } from "atomically";
 import { apiContract, createProblemDetailsLink } from "contract";
 import { Cause, Config, Effect, Exit, FileSystem, Layer, Path, Runtime, Stream } from "effect";
 import { Cookies } from "effect/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
 import ensureError from "ensure-error";
 import envPaths from "env-paths";
 import lockfile from "proper-lockfile";
@@ -639,7 +639,7 @@ function start(version: string, flags: StartFlags) {
         Effect.mapError(
           (error) =>
             new Error(
-              `${error.message}. The existing Runner was not stopped. Check agent-batch stack logs; to repair provider authentication, run agent-batch stack login --provider ${state.model.provider}, then agent-batch stack start.`,
+              `${error.message}. The existing Runner was not stopped. Check agent-batch stack logs; to repair provider authentication, run ${CommandLine.display(["agent-batch", "stack", "login", "--provider", state.model.provider])}, then agent-batch stack start.`,
             ),
         ),
       );
@@ -679,7 +679,7 @@ function start(version: string, flags: StartFlags) {
               )
             : "The existing Runner was not stopped";
           yield* say(
-            `Runner startup did not complete. ${disposition}; the hub and saved data remain. Check agent-batch stack status and agent-batch stack logs. If provider authentication is missing or needs repair, run agent-batch stack login --provider ${state.model.provider}, then agent-batch stack start.`,
+            `Runner startup did not complete. ${disposition}; the hub and saved data remain. Check agent-batch stack status and agent-batch stack logs. If provider authentication is missing or needs repair, run ${CommandLine.display(["agent-batch", "stack", "login", "--provider", state.model.provider])}, then agent-batch stack start.`,
           );
         }),
       ),
@@ -731,8 +731,12 @@ function runCredentialCommand(
   }).pipe(Effect.scoped);
 }
 
-/** Runs a command's `work` to its end, its failure an `Error` for trpc-cli to print. */
-function runToEnd(
+/**
+ * Runs a command's `work` to its end, its failure an `Error` for trpc-cli to print, with the exit
+ * code Effect's teardown gives it: 130 when a signal interrupted it, and an error's own
+ * `Runtime.errorExitCode`, else 1.
+ */
+export function runToEnd(
   work: Effect.Effect<
     void,
     unknown,
@@ -747,7 +751,12 @@ function runToEnd(
       teardown: (exit, onExit) => {
         if (Exit.isSuccess(exit)) resolve();
         else if (Cause.hasInterruptsOnly(exit.cause)) Runtime.defaultTeardown(exit, onExit);
-        else reject(ensureError(Cause.squash(exit.cause)));
+        else {
+          // Set before trpc-cli exits, as `bin.ts`'s exit keeps a code already set: 124 for a
+          // timed-out wait, say, rather than trpc-cli's 1.
+          process.exitCode = Runtime.getErrorExitCode(Cause.squash(exit.cause));
+          reject(ensureError(Cause.squash(exit.cause)));
+        }
       },
     });
   });
