@@ -8,6 +8,14 @@
 
 agent-batch runs real agents on unattended jobs. Give it one agent definition and a few hundred inputs, and each job comes back as JSON checked against your schema, or as a failure with its reason. The agent is [Pi](https://github.com/earendil-works/pi), working with real files and real shell commands in a sandbox of its own. The first five jobs run before the rest, and a Batch pauses itself when too many fail, so you can go to bed.
 
+Given a folder of invoices and a JSON Schema for what you want from each, one line runs them all:
+
+```sh
+npx agent-batch batches submit --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait > outputs.jsonl
+```
+
+Each PDF is a job, and each line of `outputs.jsonl` is one invoice's JSON, or why it failed.
+
 It does this without giving every job its own sandbox, so you don't pay for agents to wait on the model. Four hundred jobs in their own 1 GB sandboxes hold 400 GB of memory; on one Runner, for jobs that mostly wait on the model, they fit in a 4 GB server.
 
 Try it on your machine with Docker and Node: `npx agent-batch stack start`, then [the first job](#an-everyday-chore-done-by-an-agent).

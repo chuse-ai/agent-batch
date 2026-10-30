@@ -13,18 +13,20 @@ Without either, the commands call the hub `agent-batch stack` runs with the key 
 
 ## Input and output
 
-Each command takes its input as one flag per field, or whole as JSON: from a file with `--input <file>`, from stdin with `--input -`, or inline with `--json`. `jobs submit` takes JSON only, since a job's `input` field would otherwise take the `--input` flag. A command prints the API's answer as one line of JSON. An error the hub answers prints its Problem Details on stderr and exits with 1. Uploading a file's bytes, `PUT /blobs/{digest}`, takes no JSON, so it has no command; `blobs check` tells which files the hub already holds.
+Each command takes its input as one flag per field, or whole as JSON: from a file with `--input <file>`, from stdin with `--input -`, or inline with `--json`. `jobs submit` takes JSON only, since a job's `input` field would otherwise take the `--input` flag. A command prints the API's answer as one line of JSON. An error the hub answers prints its Problem Details on stderr and exits with 1. Uploading a file's bytes, `PUT /blobs/{digest}`, takes no JSON, so it has no command of its own; `batches submit --each` uploads files, and `blobs check` tells which files the hub already holds.
 
 ## Jobs and Batches
 
 ```sh
 agent-batch jobs submit --input job.json
 agent-batch jobs wait --id <job ID>
+agent-batch batches submit --each invoices/*.pdf --instructions "Extract the total." --output-schema schema.json --wait
 agent-batch jobs --help
 ```
 
 - `jobs submit` submits one job as a Batch of one, without a failure breaker: it creates the Batch, running the job's `agent`, and adds the job. It retries each call that got no answer or a server error, at most twice, under one custom ID, which names both the Batch and the job: yours, as `customId` in the job's JSON, or one it makes for this run and prints on stderr before it sends anything. Submitting again with that ID tells whether the job was accepted, also after the command was stopped; give a job an ID of your own to make submitting it safe to repeat.
 - `batches create` retries the same way, under the Batch's `customId` or one it makes and prints.
+- `batches submit` runs a whole Batch. Its jobs come from a JSONL file, one job's JSON per line as `batches add-jobs` takes it, or from `--each` with files and folders: each file becomes a job with that file as its one Input file, and each folder a job with every file in its tree at its path in the folder, hidden files and folders left out. A job's custom ID is its path as given, normalized, so `./invoices/a.pdf` is the job `invoices/a.pdf`. A file that is not JSONL is refused with a pointer to `--each`, and the two cannot be mixed. With `--each`, it hashes each file, asks the hub which it already holds and uploads the rest, five at a time, each retried as a call is, showing progress on stderr when that is a terminal. The agent comes from `--instructions` and `--output-schema`, a file holding the JSON Schema each output must match. It creates the Batch and adds the jobs in their order, so the first ones are the Canary, at most 100 at a time, retrying as `batches create` does under `--custom-id` or one it makes and prints; running the same command again with that ID adds only the jobs the Batch lacks. It prints the Batch. With `--wait`, it instead waits until no job is queued, running or paused, showing progress on stderr when that is a terminal, and prints one JSON line per job, in order: `{"customId", "status", "output"}`, or `"failure"` in place of `"output"` for a failed job. It exits with 0 when every job succeeded; 1 when one did not, when the Batch was cancelled, or when its failure breaker paused it, which ends the wait and says how to resume; and 124 when `--wait-timeout` seconds pass. Ctrl-C stops waiting, exits with 130 and leaves the Batch running.
 - `jobs wait` reads the job until it ends, waiting longer between reads, up to half a minute; a read that got no answer or a server error is retried as a submission is, and an error that remains ends the wait. It prints the job and exits with 1 unless it succeeded. A paused job keeps it waiting, as its work is still owed, until the job is resumed and ends or is cancelled. Stopping it leaves the job running.
 
 ## A hub and a Runner on this machine
