@@ -731,8 +731,12 @@ function runCredentialCommand(
   }).pipe(Effect.scoped);
 }
 
-/** Runs a command's `work` to its end, its failure an `Error` for trpc-cli to print. */
-function runToEnd(
+/**
+ * Runs a command's `work` to its end, its failure an `Error` for trpc-cli to print, with the exit
+ * code Effect's teardown gives it: 130 when a signal interrupted it, and an error's own
+ * `Runtime.errorExitCode`, else 1.
+ */
+export function runToEnd(
   work: Effect.Effect<
     void,
     unknown,
@@ -747,7 +751,13 @@ function runToEnd(
       teardown: (exit, onExit) => {
         if (Exit.isSuccess(exit)) resolve();
         else if (Cause.hasInterruptsOnly(exit.cause)) Runtime.defaultTeardown(exit, onExit);
-        else reject(ensureError(Cause.squash(exit.cause)));
+        else {
+          // Set before trpc-cli's exit, which keeps a code already set.
+          Runtime.defaultTeardown(exit, (code) => {
+            process.exitCode = code;
+          });
+          reject(ensureError(Cause.squash(exit.cause)));
+        }
       },
     });
   });

@@ -14,6 +14,7 @@ Without either, the commands call the hub `agent-batch stack` runs with the key 
 ```sh
 agent-batch jobs submit --input job.json
 agent-batch jobs wait --id <job ID>
+agent-batch batches submit invoices/*.pdf --instructions "Extract the total." --output-schema schema.json --wait
 agent-batch jobs --help
 ```
 
@@ -21,6 +22,7 @@ Each command takes its input as one flag per field, or whole as JSON: from a fil
 
 - `jobs submit` submits one job as a Batch of one, without a failure breaker: it creates the Batch, running the job's `agent`, and adds the job. It retries each call that got no answer or a server error, at most twice, under one custom ID, which names both the Batch and the job: yours, as `customId` in the job's JSON, or one it makes for this run and prints on stderr before it sends anything. Submitting again with that ID tells whether the job was accepted, also after the command was stopped; give a job an ID of your own to make submitting it safe to repeat.
 - `batches create` retries the same way, under the Batch's `customId` or one it makes and prints.
+- `batches submit` runs a whole Batch from files and folders: each file becomes a job with that file as its one Input file, and each folder a job with every file in its tree at its path in the folder, hidden files and folders left out. A job is named by its file's or folder's name, so two paths with the same name are refused, and its Input files keep their names. Files of any kind are sent as they are, read from disk as they are sent. The agent comes from `--instructions` and `--output-schema`, a file holding the JSON Schema each output must match. It creates the Batch and adds the jobs in the order given, so the first ones are the Canary, at most 100 or 8 MiB of files at a time, retrying as `batches create` does under `--custom-id` or one it makes and prints; running the same command again with that ID adds only the jobs the Batch lacks. It prints the Batch. With `--wait`, it instead waits until no job is queued, running or paused, showing progress on stderr when that is a terminal, and prints one JSON line per job, in order: `{"customId", "status", "output"}`, or `"failure"` in place of `"output"` for a failed job. It exits with 0 when every job succeeded; 1 when one did not, when the Batch was cancelled, or when its failure breaker paused it, which ends the wait and says how to resume; and 124 when `--wait-timeout` seconds pass. Ctrl-C stops waiting, exits with 130 and leaves the Batch running.
 - `jobs wait` reads the job until it ends, waiting longer between reads, up to half a minute; a read that got no answer or a server error is retried as a submission is, and an error that remains ends the wait. It prints the job and exits with 1 unless it succeeded. A paused job keeps it waiting, as its work is still owed, until the job is resumed and ends or is cancelled. Stopping it leaves the job running.
 
 Calls only a signed-in member can make, such as creating API keys, are not commands.
