@@ -36,8 +36,8 @@ catalog:
   "@earendil-works/pi-ai": ^1.4.0
   "@earendil-works/pi-durable": ^1.4.0
   "@earendil-works/pi-env": ^1.4.0
-  "@effect/platform-node-shared": ^4.0.5
-  "@effect/vitest": 4.0.5
+  "@effect/platform-node-shared": ^4.1.0
+  "@effect/vitest": 4.1.0
   "@hono/node-server": ^2.1.5
   "@orpc/client": 2.0.0-beta.44
   "@orpc/contract": 2.0.0-beta.44
@@ -59,7 +59,7 @@ catalog:
   chunk-data: ^0.1.0
   content-type: ^3.1.1
   crossws: ^0.4.15
-  effect: ^4.0.5
+  effect: ^4.1.0
   ensure-error: ^5.0.0
   env-paths: ^4.0.0
   generate-license-file: ^4.2.5

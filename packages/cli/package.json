@@ -63,7 +63,7 @@
     "node": ">=22.19.0"
   },
   "inlinedDependencies": {
-    "@effect/platform-node-shared": "4.0.5",
+    "@effect/platform-node-shared": "4.1.0",
     "@orpc/client": "2.0.0-beta.44",
     "@orpc/contract": "2.0.0-beta.44",
     "@orpc/json-schema": "2.0.0-beta.44",
@@ -78,7 +78,7 @@
     "atomically": "2.1.1",
     "commander": "14.0.3",
     "content-type": "3.1.1",
-    "effect": "4.0.5",
+    "effect": "4.1.0",
     "ensure-error": "5.0.0",
     "env-paths": "4.0.0",
     "filename-reserved-regex": "4.1.0",
