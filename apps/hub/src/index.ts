@@ -53,15 +53,12 @@ const app = createApp<Env>({
 
 export default {
   fetch: app.fetch,
-  // The Cron Trigger's sweep of Blobs nothing uses, every hour (`wrangler.jsonc`), logged when it
-  // fails, as the next one tries again.
+  // The Cron Trigger's sweep of Blobs nothing uses, every hour (`wrangler.jsonc`). A sweep that
+  // fails is logged and recorded by Cloudflare as a failed invocation; the next trigger tries again.
   scheduled: (_controller, env, context) => {
     context.waitUntil(
       Effect.runPromise(
-        sweepUnusedBlobs.pipe(
-          Effect.catchCause(Effect.logError),
-          Effect.provide(workersLayer(env)),
-        ),
+        sweepUnusedBlobs.pipe(Effect.tapCause(Effect.logError), Effect.provide(workersLayer(env))),
       ),
     );
   },
