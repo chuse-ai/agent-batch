@@ -599,8 +599,8 @@ function hashJobs(pathJobs: readonly PathJob[]) {
 
 /**
  * Uploads each of `files` the hub does not hold for the Organization yet, each content once, a few
- * at a time, each upload retried as any call is. Shows how far the uploads are on stderr when it
- * is a terminal.
+ * at a time, each upload retried as any call is. Shows how far the uploads are on stderr when a
+ * person watches.
  */
 function uploadMissing(client: ApiClient, files: readonly HashedFile[]) {
   return Effect.gen(function* () {
@@ -616,7 +616,7 @@ function uploadMissing(client: ApiClient, files: readonly HashedFile[]) {
     );
     const missing = checked.flat().flatMap(([file, answer]) => (answer.stored ? [] : [file]));
     if (missing.length === 0) return;
-    const onTerminal = process.stderr.isTTY;
+    const onTerminal = personWatches();
     const total = missing.reduce((sum, { sizeBytes }) => sum + sizeBytes, 0);
     let done = 0;
     let doneBytes = 0;
@@ -659,9 +659,18 @@ function uploadMissing(client: ApiClient, files: readonly HashedFile[]) {
   });
 }
 
+/**
+ * Whether a person watches the command: stdout and stderr both terminals, as openai-cli's
+ * `batchHumanTerminal` requires, so a command whose output a pipe or a file takes shows no
+ * progress, notices or receipts.
+ */
+function personWatches(): boolean {
+  return process.stdout.isTTY && process.stderr.isTTY;
+}
+
 /** Leaves the progress `logUpdateStderr` shows on stderr in place, so what follows goes below it. */
 const endProgress = Effect.sync(() => {
-  if (process.stderr.isTTY) logUpdateStderr.done();
+  if (personWatches()) logUpdateStderr.done();
 });
 
 /**
@@ -805,7 +814,7 @@ const saveOutputs = Effect.fnUntraced(function* (dir: string, lines: readonly Ou
       // `wx`, so a file made since the folder was prepared is not overwritten.
       yield* fs.writeFileString(file, content, { flag: "wx" });
     }
-    if (process.stderr.isTTY) {
+    if (personWatches()) {
       yield* Effect.sync(() =>
         process.stderr.write(kept.length > 0 ? `Saved "${file}"\n` : `No ${name} file saved.\n`),
       );
@@ -815,7 +824,7 @@ const saveOutputs = Effect.fnUntraced(function* (dir: string, lines: readonly Ou
 
 /**
  * `batches submit --wait`: reads the Batch `batchId` until waiting for it is over, showing how it
- * stands on stderr when that is a terminal, then, with `outputDir`, saves each of `jobs`' lines
+ * stands on stderr when a person watches, then, with `outputDir`, saves each of `jobs`' lines
  * there, prints the Batch, and fails unless every job succeeded, as openai-cli does. A caller's
  * pause keeps it waiting, as `jobs wait` does; its failure breaker's pause ends the wait, as the
  * breaker paused it for a flaw to fix first. A timeout or Ctrl-C stops the wait, saves nothing and
@@ -828,7 +837,7 @@ function waitForBatch(
   options: { again: string; timeout: Duration.Duration | undefined; outputDir: string | undefined },
 ) {
   return Effect.gen(function* () {
-    const onTerminal = process.stderr.isTTY;
+    const onTerminal = personWatches();
     const again = `${options.again} --wait`;
     // Where a person watches, the Batch's ID, in openai-cli's words, as nothing else prints it
     // before the wait ends.
