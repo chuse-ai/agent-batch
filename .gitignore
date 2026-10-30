@@ -42,3 +42,7 @@ dist-ssr
 
 # The Runner's data folder when it runs from source: its key and sign-in
 apps/runner/data/
+
+# The CLI package's README, a copy of the repository's that its build makes for npm; the CLI's
+# reference is docs/cli.md
+packages/cli/README.md

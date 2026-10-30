@@ -54,7 +54,7 @@ jobs:
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
-      # Stages the workspace's public packages, the CLI alone (ADR 0004), built by its prepublishOnly.
+      # Stages the workspace's public packages, the CLI alone (ADR 0004), built by its prepack.
       # npm's staged publishing: a maintainer approves the version with 2FA before it goes live, so
       # this workflow or its trust alone cannot put a version on npm.
       - run: vp pm stage publish -r

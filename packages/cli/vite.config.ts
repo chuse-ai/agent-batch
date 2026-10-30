@@ -15,6 +15,14 @@ const license =
 const UNUSED_PEERS = ["@trpc/server", "valibot", "@valibot/to-json-schema"];
 
 export default defineConfig({
+  run: {
+    tasks: {
+      // Vite Task does not cache a task that reads a file it also writes, as the copy below does
+      // with README.md, so README.md is left out of the inputs; it stays an output, which a cache
+      // hit puts back.
+      build: { command: "vp pack", cache: { input: [{ auto: true }, "!README.md"] } },
+    },
+  },
   pack: {
     // The package is the `agent-batch` command alone: a library export would freeze internals that
     // are still changing (ADR 0004), so it exports none, and needs no type declarations.
@@ -60,6 +68,10 @@ export default defineConfig({
         },
       },
     },
+    // npm shows the package's README as its page, so the package carries the repository's: a copy,
+    // since npm and pnpm leave a symlink pointing outside the package out of the tarball. `to` puts
+    // it at the package root, where npm looks; without it, it would go to `dist`.
+    copy: [{ from: "../../README.md", to: "." }],
     // The licences of the packages the bundle carries, beside it.
     plugins: [
       license({
