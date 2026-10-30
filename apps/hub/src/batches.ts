@@ -10,9 +10,8 @@ import {
   labelsSchema,
   NotFound,
 } from "contract";
-import { Array, Data, Effect } from "effect";
+import { Array, Effect, Order } from "effect";
 import { type Kysely, type NotNull, sql, type Transaction } from "kysely";
-import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { v7 as uuidv7 } from "uuid";
 import * as z from "zod/mini";
 
@@ -27,7 +26,8 @@ import {
   type RunnerId,
   type UsageRecordId,
 } from "./db/types.ts";
-import { prepareInputFiles, storeBatchInputFiles, storeInputFiles } from "./input-files.ts";
+import { lockHeldBlobs, storeInputFiles, unheldFileProblems } from "./input-files.ts";
+import { InvalidInput } from "./invalid-input.ts";
 import {
   contentHashOf,
   insertUsageRecords,
@@ -49,11 +49,6 @@ import type { HubSettings } from "./settings.ts";
 // breaker's resume of it, by a report that ends jobs (several Batches in the order of their IDs),
 // and by a job's resume. Placement locks jobs and reads their Batches without a lock, so it never
 // waits on a Batch (ADR 0033).
-
-/** Input a module refuses as the contract refuses invalid input, with each problem's path. */
-export class InvalidInput extends Data.TaggedError("InvalidInput")<{
-  problems: readonly { message: string; path: (string | number)[] }[];
-}> {}
 
 /** The breaker a creation asks for, as the Batch's row stores it: both null for none. */
 function breakerOf(given: BatchCreation["breaker"]) {
@@ -211,7 +206,6 @@ export function createBatch(
       customId === undefined
         ? undefined
         : contentHashOf({ agent, labels: creation.labels, breaker: apiBreakerOf(breaker) });
-    const [files] = yield* prepareInputFiles([agent.inputFiles]);
     const created = yield* database.query((db) =>
       db.transaction().execute(async (trx) => {
         const now = new Date();
@@ -245,10 +239,7 @@ export function createBatch(
           )
           .returning("id")
           .executeTakeFirst();
-        if (inserted) {
-          if (files) await storeBatchInputFiles(trx, inserted.id, files);
-          return { id: inserted.id, same: true };
-        }
+        if (inserted) return { id: inserted.id, same: true };
         // Only a creation with a custom ID can conflict.
         const existing = await trx
           .selectFrom("batch")
@@ -278,15 +269,22 @@ function problemsText(issues: readonly { message: string; path: (string | number
 }
 
 /**
- * What is wrong with `jobs`, to be added to a Batch with `labels` and agent's files named
- * `sharedFiles`, that the contract's schemas cannot check, with paths from the request: a custom ID
- * given twice, labels over the limit with the Batch's, and a file named like one of the agent's.
+ * Input files sorted by path, as a content hash compares them: the same files in another order are
+ * the same content.
  */
-function jobProblems(
-  jobs: readonly JobSubmission[],
-  labels: Batch["labels"],
-  sharedFiles: ReadonlySet<string>,
-) {
+function filesByPath(files: JobSubmission["files"]) {
+  return Array.sort(
+    files,
+    Order.mapInput(Order.String, (file: { path: string }) => file.path),
+  );
+}
+
+/**
+ * What is wrong with `jobs`, to be added to a Batch with `labels`, that the contract's schemas
+ * cannot check, with paths from the request: a custom ID given twice, labels over the limit with
+ * the Batch's, and a job with neither an input nor Input files.
+ */
+function jobProblems(jobs: readonly JobSubmission[], labels: Batch["labels"]) {
   const firstWithId = new Map<string, number>();
   return jobs.flatMap((job, index) => {
     const problems: { message: string; path: (string | number)[] }[] = [];
@@ -306,13 +304,14 @@ function jobProblems(
         path: ["jobs", index, "labels"],
       });
     }
-    for (const name of Object.keys(job.inputFiles)) {
-      if (sharedFiles.has(name)) {
-        problems.push({
-          message: "Must not be the name of one of the Batch's agent's Input files",
-          path: ["jobs", index, "inputFiles", name],
-        });
-      }
+    // A job with neither would be the same work as every other. Checked here, as Zod's `extend`
+    // refuses to replace a key of a refined object, and the CLI's `jobs submit` replaces the
+    // submission's `customId`.
+    if (job.input === undefined && job.files.length === 0) {
+      problems.push({
+        message: "Must be given for a job without Input files",
+        path: ["jobs", index, "input"],
+      });
     }
     return problems;
   });
@@ -331,38 +330,19 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
     const database = yield* Db;
     // A Batch's labels and agent never change, so they are read for the checks without a lock.
     const frozen = yield* database.query((db) =>
-      db
-        .selectFrom("batch")
-        .select((eb) => [
-          "labels",
-          jsonArrayFrom(
-            eb
-              .selectFrom("batchInputFile")
-              .select("batchInputFile.name")
-              .whereRef("batchInputFile.batchId", "=", "batch.id"),
-          ).as("files"),
-        ])
-        .where("id", "=", batchId)
-        .executeTakeFirst(),
+      db.selectFrom("batch").select("labels").where("id", "=", batchId).executeTakeFirst(),
     );
     if (!frozen) return yield* Effect.fail(new NotFound());
-    const problems = jobProblems(
-      jobs,
-      frozen.labels,
-      new Set(frozen.files.map(({ name }) => name)),
-    );
+    const problems = jobProblems(jobs, frozen.labels);
     if (problems.length > 0) return yield* Effect.fail(new InvalidInput({ problems }));
-    const prepared = yield* prepareInputFiles(jobs.map((job) => job.inputFiles));
-    // Each job with its content as a later add under the same custom ID must repeat it, and its
-    // Input files.
-    const given = Array.zipWith(jobs, prepared, (job, files) => ({
+    // Each job with its content as a later add under the same custom ID must repeat it.
+    const given = jobs.map((job) => ({
       job,
       contentHash: contentHashOf({
         input: job.input,
-        inputFiles: job.inputFiles,
+        files: filesByPath(job.files),
         labels: job.labels,
       }),
-      files,
     }));
     const added = yield* database.query((db) =>
       db.transaction().execute(async (trx) => {
@@ -370,14 +350,13 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
         // its Canary's places are taken once.
         const locked = await trx
           .selectFrom("batch")
-          .select(["labels", "cancelledAt", "canaryPlacesLeft"])
+          .select(["labels", "cancelledAt", "canaryPlacesLeft", "organizationId"])
           .where("id", "=", batchId)
           .forUpdate()
           .executeTakeFirstOrThrow();
-        // A cancelled Batch takes no jobs: a runnable one would undo the cancel unseen.
-        if (locked.cancelledAt !== null) return { kind: "cancelled" as const };
         // The jobs the Batch already has under these custom IDs, locked in the order of their IDs
-        // against their deletion, so the answer can read them back.
+        // against their deletion, so the answer can read them back; before their blobs, as a
+        // deletion locks a job and then its blobs.
         const existing = await trx
           .selectFrom("job")
           .select(["id", "customId", "contentHash"])
@@ -386,6 +365,17 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
           .orderBy("id")
           .forKeyShare()
           .execute();
+        // Its files' blobs, locked against deletion before any job names them; a Blob the
+        // Organization does not hold is invalid input, refused before a cancel.
+        const held = await lockHeldBlobs(
+          trx,
+          locked.organizationId,
+          jobs.flatMap((job) => job.files),
+        );
+        const unheld = unheldFileProblems(jobs, held);
+        if (unheld.length > 0) return { kind: "unheld" as const, unheld };
+        // A cancelled Batch takes no jobs: a runnable one would undo the cancel unseen.
+        if (locked.cancelledAt !== null) return { kind: "cancelled" as const };
         const byCustomId = new Map(existing.map((row) => [row.customId, row]));
         const reused = given.flatMap(({ job, contentHash }, index) => {
           const found = byCustomId.get(job.customId);
@@ -424,7 +414,7 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
           );
           await storeInputFiles(
             trx,
-            fresh.map(({ id, files }) => ({ jobId: id, prepared: files })),
+            fresh.map(({ id, job }) => ({ jobId: id, files: job.files })),
           );
           const taken = Math.min(fresh.length, locked.canaryPlacesLeft);
           if (taken > 0) {
@@ -461,6 +451,9 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
       return yield* Effect.fail(
         new ControlRefused({ message: "The Batch is cancelled, so it takes no new jobs" }),
       );
+    }
+    if (added.kind === "unheld") {
+      return yield* Effect.fail(new InvalidInput({ problems: added.unheld }));
     }
     if (added.kind === "reused") {
       return yield* Effect.fail(new CustomIdReused({ message: problemsText(added.reused) }));

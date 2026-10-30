@@ -5,10 +5,11 @@ import { Brand } from "effect";
 import type { ApikeyId as ApikeyIdType } from "./generated/agent_batch/Apikey.ts";
 import type { BatchId as BatchIdType } from "./generated/agent_batch/Batch.ts";
 import type { BlobSha256 as BlobSha256Type } from "./generated/agent_batch/Blob.ts";
-import type { InputFileName as InputFileNameType } from "./generated/agent_batch/InputFile.ts";
+import type { InputFilePath as InputFilePathType } from "./generated/agent_batch/InputFile.ts";
 import type { JobId as JobIdType } from "./generated/agent_batch/Job.ts";
 import type { JobEventChunkLastId } from "./generated/agent_batch/JobEventChunk.ts";
 import type { MemberId as MemberIdType } from "./generated/agent_batch/Member.ts";
+import type { OrganizationId } from "./generated/agent_batch/Organization.ts";
 import type { RunnerId as RunnerIdType } from "./generated/agent_batch/Runner.ts";
 import type { UploadId as UploadIdType } from "./generated/agent_batch/Upload.ts";
 import type { UploadChunkIndex as UploadChunkIndexType } from "./generated/agent_batch/UploadChunk.ts";
@@ -23,7 +24,7 @@ export type { default as JobStatus } from "./generated/agent_batch/JobStatus.ts"
 export type { default as JobControl } from "./generated/agent_batch/JobControl.ts";
 export type { default as JobFailureReason } from "./generated/agent_batch/JobFailureReason.ts";
 export type { JobDeletion as JobDeletionRow } from "./generated/agent_batch/JobDeletion.ts";
-export type { UsageRecordId };
+export type { OrganizationId, UsageRecordId };
 export type { NewUploadChunk } from "./generated/agent_batch/UploadChunk.ts";
 
 // Each ID type with its constructor under the same name, as Effect brands are declared. A string
@@ -40,8 +41,8 @@ export type ApikeyId = ApikeyIdType;
 export const ApikeyId = Brand.nominal<ApikeyId>();
 export type MemberId = MemberIdType;
 export const MemberId = Brand.nominal<MemberId>();
-export type InputFileName = InputFileNameType;
-export const InputFileName = Brand.nominal<InputFileName>();
+export type InputFilePath = InputFilePathType;
+export const InputFilePath = Brand.nominal<InputFilePath>();
 /** An event's ID in its job's journal, which a stored row of events is keyed by its last of. */
 export type EventId = JobEventChunkLastId;
 export const EventId = Brand.nominal<EventId>();

@@ -21,7 +21,7 @@ afterAll(() => system.stop());
 
 const SUBMISSION = {
   input: "Summarise the quarter.",
-  inputFiles: { "q3.md": { content: "Revenue grew 4%." } },
+  files: [{ path: "q3.md", content: "Revenue grew 4%." }],
   outputContract: {
     schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
   },

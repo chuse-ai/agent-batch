@@ -13,7 +13,7 @@ Without either, the commands call the hub `agent-batch stack` runs with the key 
 
 ## Input and output
 
-Each command takes its input as one flag per field, or whole as JSON: from a file with `--input <file>`, from stdin with `--input -`, or inline with `--json`. `jobs submit` takes JSON only, since a job's `input` field would otherwise take the `--input` flag. A command prints the API's answer as one line of JSON. An error the hub answers prints its Problem Details on stderr and exits with 1.
+Each command takes its input as one flag per field, or whole as JSON: from a file with `--input <file>`, from stdin with `--input -`, or inline with `--json`. `jobs submit` takes JSON only, since a job's `input` field would otherwise take the `--input` flag. A command prints the API's answer as one line of JSON. An error the hub answers prints its Problem Details on stderr and exits with 1. Uploading a file's bytes, `PUT /blobs/{digest}`, takes no JSON, so it has no command; `blobs check` tells which files the hub already holds.
 
 ## Jobs and Batches
 

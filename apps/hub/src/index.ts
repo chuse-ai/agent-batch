@@ -4,6 +4,7 @@ import { HTTPException } from "hono/http-exception";
 
 import { createApp } from "./app.ts";
 import { databaseAndAuthLayer } from "./auth/auth.ts";
+import { sweepUnusedBlobs } from "./blobs.ts";
 import { RunnerConnections } from "./platform.ts";
 import {
   authSettings,
@@ -44,8 +45,21 @@ function workersLayer(env: Env) {
   );
 }
 
-export default createApp<Env>({
+const app = createApp<Env>({
   run: (env, effect) => Effect.runPromise(Effect.provide(effect, workersLayer(env))),
   acceptRunner: (env, request, runnerId) =>
     env.RUNNER_CONNECTION.getByName(runnerId).fetch(request),
 });
+
+export default {
+  fetch: app.fetch,
+  // The Cron Trigger's sweep of Blobs nothing uses, every hour (`wrangler.jsonc`). A sweep that
+  // fails is logged and recorded by Cloudflare as a failed invocation; the next trigger tries again.
+  scheduled: (_controller, env, context) => {
+    context.waitUntil(
+      Effect.runPromise(
+        sweepUnusedBlobs.pipe(Effect.tapCause(Effect.logError), Effect.provide(workersLayer(env))),
+      ),
+    );
+  },
+} satisfies ExportedHandler<Env>;

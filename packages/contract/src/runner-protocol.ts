@@ -2,7 +2,7 @@ import { openapi } from "@orpc/openapi";
 import * as z from "zod/mini";
 
 import {
-  fileNameSchema,
+  filePathSchema,
   jobIdSchema,
   jobRefSchema,
   jsonTextSchema,
@@ -79,14 +79,15 @@ const positionSchema = z.int().check(z.nonnegative());
 
 /**
  * A job as the Runner needs it to run the job: its Batch's agent's instructions, null for none, and
- * Output contract, the job's input, and its Input files, its Batch's and its own, by name, SHA-256, size
- * and chunk size, never their bytes, which the Runner downloads from the hub a chunk at a time
- * (`runnerHttpContract.getInputFileChunk`), so an answer stays small whatever the files' size.
+ * Output contract, the job's input, null for a job that gives only its own files, and its Input
+ * files, its Batch's and its own, by path, digest, size and chunk size, never their bytes, which
+ * the Runner downloads from the hub a chunk at a time (`runnerHttpContract.getInputFileChunk`), so
+ * an answer stays small whatever the files' size.
  */
 export const jobContentSchema = z.object({
   instructions: z.nullable(instructionsSchema),
-  input: inputSchema,
-  inputFiles: z.array(listedInputFileSchema),
+  input: z.nullable(inputSchema),
+  files: z.array(listedInputFileSchema),
   outputContract: outputContractSchema,
 });
 export type JobContent = z.infer<typeof jobContentSchema>;
@@ -473,7 +474,7 @@ export const runnerHttpContract = {
     .meta(
       openapi({
         method: "GET",
-        path: "/jobs/{id}/input-files/{name}/chunks/{index}",
+        path: "/jobs/{id}/input-files/{+path}/chunks/{index}",
         // Not JSON, as every other call answers: read by its headers, which name a file.
         responseBodyHint: undefined,
         description:
@@ -484,7 +485,7 @@ export const runnerHttpContract = {
     .input(
       z.object({
         ...jobRefSchema.shape,
-        name: fileNameSchema.check(z.describe("The Input file's name.")),
+        path: filePathSchema.check(z.describe("The Input file's path, its `/` unencoded.")),
         index: z.int32().check(z.nonnegative(), z.describe("The chunk's position, from 0.")),
       }),
     )

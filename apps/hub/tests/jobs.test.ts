@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
+
 import { afterAll, beforeAll, expect, inject, test } from "vite-plus/test";
 import * as z from "zod/mini";
 
 import { DB_SCHEMA, openDatabase } from "../src/db/database.ts";
 import { JobId } from "../src/db/types.ts";
-import { OWNER, startSystem, submitJob } from "./harness.ts";
+import { OWNER, startSystem, submitJob, uploadContent } from "./harness.ts";
 
 const system = startSystem();
 
@@ -15,11 +17,15 @@ const AGENT = {
     schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
   },
 };
-const JOB = {
-  customId: "report-q3",
-  input: "Summarise the report in one sentence.",
-  inputFiles: { "q3.md": { content: "Revenue grew 4%." } },
-};
+/** The digest of no bytes. */
+const EMPTY = `sha256:${createHash("sha256").digest("hex")}`;
+
+/** An Input file at `path`, of no bytes. */
+function fileAt(path: string) {
+  return { path, digest: EMPTY, sizeBytes: 0 };
+}
+
+const JOB = { customId: "report-q3", input: "Summarise the report in one sentence." };
 
 /** A client sending a new API key with `permissions`, and the key's ID. */
 async function withKey(permissions: Record<string, string[]>, name = "jobs") {
@@ -42,7 +48,18 @@ test("a Batch is created and a job added to it, each with 200, and the job reads
   const created = await post(key, "/batches", { agent: AGENT });
   expect(created.status).toBe(200);
   const batch = z.parse(z.looseObject({ id: z.string() }), await created.json());
-  const response = await post(key, `/batches/${batch.id}/jobs`, { jobs: [JOB] });
+  // A file's bytes are uploaded first, as the request's body, and the job names them by digest.
+  const report = new TextEncoder().encode("Revenue grew 4%.");
+  const digest = `sha256:${createHash("sha256").update(report).digest("hex")}`;
+  const uploaded = await system.hub.fetch(`/blobs/${digest}`, {
+    method: "PUT",
+    headers: { "x-api-key": key, "content-type": "application/octet-stream" },
+    body: report,
+  });
+  expect(uploaded.status).toBe(200);
+  expect(await uploaded.json()).toEqual({ digest, sizeBytes: report.length });
+  const files = [{ path: "q3.md", digest, sizeBytes: report.length }];
+  const response = await post(key, `/batches/${batch.id}/jobs`, { jobs: [{ ...JOB, files }] });
   expect(response.status).toBe(200);
   const added = z.parse(
     z.object({
@@ -127,7 +144,7 @@ test("a key adds and reads jobs only with the permission for each", async () => 
   });
 });
 
-test("an invalid Output contract or Input file name is refused with 400", async () => {
+test("an invalid Output contract or Input file path is refused with 400", async () => {
   const { key, client } = await withKey({ job: ["create"] });
   const schemas = [
     { type: 5 },
@@ -141,13 +158,26 @@ test("an invalid Output contract or Input file name is refused with 400", async 
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   }
   const batch = await client.batches.create({ agent: AGENT });
-  for (const name of ["reports/q3.md", "../outside", "..", "a\\b"]) {
-    const inputFiles = { [name]: { content: "" } };
-    await expect(client.batches.create({ agent: { ...AGENT, inputFiles } })).rejects.toMatchObject({
-      code: "BAD_REQUEST",
-    });
+  // The file's Blob is held, so only its path can be refused: at a valid path it is taken.
+  await uploadContent(client, "");
+  await expect(
+    client.batches.addJobs({ id: batch.id, jobs: [{ ...JOB, files: [fileAt("a/b.txt")] }] }),
+  ).resolves.toMatchObject({ jobs: [{ created: true }] });
+  // A path is relative and stays inside `inputs`; a file name in it is valid on every system.
+  for (const path of ["/etc/passwd", "../outside", "a/../../b", "./a", "a//b", "a/", "", "a\\b"]) {
+    const files = [fileAt(path)];
     await expect(
-      client.batches.addJobs({ id: batch.id, jobs: [{ ...JOB, inputFiles }] }),
+      client.batches.addJobs({ id: batch.id, jobs: [{ ...JOB, files }] }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }
+  // A path cannot be given twice, nor be a file and a folder in one request.
+  for (const paths of [
+    ["a.txt", "a.txt"],
+    ["photos", "photos/front.jpg"],
+    ["photos/front.jpg", "photos"],
+  ]) {
+    await expect(
+      client.batches.addJobs({ id: batch.id, jobs: [{ ...JOB, files: paths.map(fileAt) }] }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   }
 

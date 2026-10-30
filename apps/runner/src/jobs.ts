@@ -415,7 +415,7 @@ export class JobRunner {
         // that exists means they were, and the agent may have changed them since. The job holds its
         // slot meanwhile. A download that fails fails the job, as a journal that does not open does.
         if (held.journalKnownAbsent) {
-          yield* downloadInputFiles(settings, ref.jobId, content.inputFiles).pipe(
+          yield* downloadInputFiles(settings, ref.jobId, content.files).pipe(
             // The failure is reported until the hub drops the run.
             Effect.catchTag("InputFileFailed", (error) =>
               Effect.logError("A job's Input files could not be downloaded", error.message).pipe(

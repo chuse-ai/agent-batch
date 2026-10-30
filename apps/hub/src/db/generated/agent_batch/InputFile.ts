@@ -8,13 +8,13 @@ import type { BlobSha256 } from "./Blob.js";
 import type { JobId } from "./Job.js";
 
 /** Identifier type for agent_batch.inputFile */
-export type InputFileName = Brand.Branded<string, "agent_batch.inputFile">;
+export type InputFilePath = Brand.Branded<string, "agent_batch.inputFile">;
 
 /** Represents the table agent_batch.inputFile */
 export default interface InputFileTable {
   jobId: ColumnType<JobId, JobId, JobId>;
 
-  name: ColumnType<InputFileName, InputFileName, InputFileName>;
+  path: ColumnType<InputFilePath, InputFilePath, InputFilePath>;
 
   sha256: ColumnType<BlobSha256, BlobSha256, BlobSha256>;
 }

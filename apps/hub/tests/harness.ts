@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -68,20 +69,51 @@ type AgentInput = Parameters<ApiClient["batches"]["create"]>[0]["agent"];
 /** What a job's add takes, as a caller writes it. */
 export type JobInput = Parameters<ApiClient["batches"]["addJobs"]>[0]["jobs"][number];
 
+/** An Input file as the tests give it: its path and its bytes, or text as UTF-8. */
+export interface FileContent {
+  path: string;
+  content: string | Uint8Array;
+}
+
 /** One job as the tests submit it: its agent's fields and its own, its custom ID optional. */
 export type OneJob = AgentInput &
-  Omit<JobInput, "customId" | "inputFiles"> & {
+  Omit<JobInput, "customId" | "files"> & {
     customId?: string;
-    /** The job's own Input files. */
-    inputFiles?: JobInput["inputFiles"];
+    /** The job's Input files, uploaded before it is added. */
+    files?: FileContent[];
   };
 
+/** Uploads `content`, text as UTF-8, and answers its digest and size, as a job names it. */
+export async function uploadContent(client: ApiClient, content: string | Uint8Array) {
+  const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+  const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+  return await client.blobs.upload({
+    params: { digest },
+    headers: { "content-length": bytes.length },
+    body: new Blob([bytes]).stream(),
+  });
+}
+
 /**
- * Submits `job` as the CLI's `jobs submit` does: a Batch of one, without a failure breaker, running
- * the job's agent, and the job added to it; returns the job as the add answers it.
+ * Uploads each of `files`, one at a time, as a client with few connections would, and answers them
+ * as a job names them.
+ */
+async function uploaded(client: ApiClient, files: readonly FileContent[]) {
+  const named = [];
+  for (const { path: filePath, content } of files) {
+    named.push({ path: filePath, ...(await uploadContent(client, content)) });
+  }
+  return named;
+}
+
+/**
+ * Submits `job` as the CLI's `jobs submit` does, after uploading its files: a Batch of one, without
+ * a failure breaker, running the job's agent, and the job added to it; returns the job as the add
+ * answers it.
  */
 export async function submitJob(client: ApiClient, job: OneJob) {
-  const { instructions, outputContract, runTimeoutSeconds, modelBudgetUsd, ...own } = job;
+  const { instructions, outputContract, runTimeoutSeconds, modelBudgetUsd, files, ...rest } = job;
+  const own = { ...rest, files: await uploaded(client, files ?? []) };
   const agent = {
     outputContract,
     ...(instructions === undefined ? {} : { instructions }),

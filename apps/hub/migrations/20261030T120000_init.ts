@@ -74,9 +74,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   // Input files' content is stored once per SHA-256 as a blob: a file many jobs share is stored
   // once, and its bytes sit in chunk rows of original bytes, each compressed as one zstd frame,
   // which a Runner downloads one at a time. A blob's bytes belong to the upload that wrote them, and
-  // the blob is reached through the upload: so an upload can write its chunks before its blob is
-  // known and verified, and publishing it copies no bytes. Today every upload is an inline file of
-  // a Batch's creation or of an add, written whole and published in the same transaction.
+  // the blob is reached through the upload: so an upload writes its chunks before its blob is known
+  // and verified, and publishing it copies no bytes. Today each upload is one request's body.
   await schema
     .createTable("blob")
     // The SHA-256 of the original bytes, as 32 raw bytes: the address of the blob, which a Runner
@@ -90,15 +89,24 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await schema
     .createTable("upload")
     .addColumn("id", "uuid", (col) => col.primaryKey())
-    // The blob the upload published: deleting the blob deletes its upload, and with it the bytes.
-    .addColumn("sha256", "bytea", (col) =>
-      col.notNull().references("blob.sha256").onDelete("cascade"),
-    )
+    // The verified SHA-256 of the upload's bytes, the blob it published; null until its size and
+    // SHA-256 are verified. Deleting the blob deletes its upload, and with it the bytes.
+    .addColumn("sha256", "bytea", (col) => col.references("blob.sha256").onDelete("cascade"))
     // How many original bytes each of its chunks holds but the last, chosen as the upload starts,
     // so the hub can choose another for new blobs without rewriting what it stored.
     .addColumn("chunkBytes", "integer", (col) => col.notNull().check(sql`"chunkBytes" > 0`))
+    // When an upload not yet published is removed with its chunks: one whose bytes failed
+    // verification or whose request was cut off. Ignored once published.
+    .addColumn("expiresAt", "timestamptz", (col) => col.notNull())
     // A blob's bytes are those of one upload, through which it is read.
     .addUniqueConstraint("upload_sha256_key", ["sha256"])
+    .execute();
+  // For the sweep of uploads that were never published.
+  await schema
+    .createIndex("upload_expiresAt_idx")
+    .on("upload")
+    .column("expiresAt")
+    .where(sql.ref("sha256"), "is", null)
     .execute();
 
   await schema
@@ -118,6 +126,37 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await sql`alter table agent_batch."uploadChunk" alter column bytes set storage external`.execute(
     db,
   );
+
+  // Content an organization uploaded, which its jobs may reference: a verified upload adds or renews
+  // the row, also when the bytes were already stored for another organization. An organization
+  // holds content while a row here has not expired, or while a job or Batch of its own references
+  // it; only content it holds is answered as stored, or accepted in its jobs.
+  await schema
+    .createTable("organizationBlob")
+    .addColumn("organizationId", "text", (col) =>
+      col.notNull().references("organization.id").onDelete("cascade"),
+    )
+    // The content the organization uploaded.
+    .addColumn("sha256", "bytea", (col) =>
+      col.notNull().references("blob.sha256").onDelete("cascade"),
+    )
+    // Seven days after the organization last uploaded the content. Until then the content is the
+    // organization's to reference, and is kept even when no job uses it.
+    .addColumn("expiresAt", "timestamptz", (col) => col.notNull())
+    .addPrimaryKeyConstraint("organizationBlob_pkey", ["organizationId", "sha256"])
+    .execute();
+  // For deleting a blob, and for finding whether anything still uses one.
+  await schema
+    .createIndex("organizationBlob_sha256_idx")
+    .on("organizationBlob")
+    .column("sha256")
+    .execute();
+  // For the sweep of expired rows.
+  await schema
+    .createIndex("organizationBlob_expiresAt_idx")
+    .on("organizationBlob")
+    .column("expiresAt")
+    .execute();
 
   // Every job belongs to a Batch: the jobs added to it run one agent, are released, paused and
   // cancelled as one, and are watched by its failure breaker. A Batch keeps only what its jobs
@@ -197,11 +236,12 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await schema
     .createTable("batchInputFile")
     .addColumn("batchId", "uuid", (col) => col.notNull().references("batch.id").onDelete("cascade"))
-    .addColumn("name", "text", (col) => col.notNull())
+    // The file's path under each of the Batch's jobs' `inputs` folder, relative, with folders.
+    .addColumn("path", "text", (col) => col.notNull())
     .addColumn("sha256", "bytea", (col) =>
       col.notNull().references("blob.sha256").onDelete("restrict"),
     )
-    .addPrimaryKeyConstraint("batchInputFile_pkey", ["batchId", "name"])
+    .addPrimaryKeyConstraint("batchInputFile_pkey", ["batchId", "path"])
     .execute();
   // For the reference check of deleting a blob, and for finding whether any Batch still uses one.
   await schema
@@ -218,8 +258,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("id", "uuid", (col) => col.primaryKey())
     .addColumn("organizationId", "text", (col) => col.notNull())
     .addColumn("status", sql`agent_batch."jobStatus"`, (col) => col.notNull())
-    // What the job gives its Batch's agent.
-    .addColumn("input", "text", (col) => col.notNull())
+    // What the job gives its Batch's agent. Null when the job gives its agent no text, only its own
+    // files.
+    .addColumn("input", "text")
     // The caller's own ID for the job, unique in its Batch.
     .addColumn("customId", "text", (col) => col.notNull())
     // SHA-256 of the job's RFC 8785 canonical JSON as added, without its custom ID, in hex, which an
@@ -345,12 +386,13 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await schema
     .createTable("inputFile")
     .addColumn("jobId", "uuid", (col) => col.notNull())
-    .addColumn("name", "text", (col) => col.notNull())
+    // The file's path under the job's `inputs` folder, relative, with folders.
+    .addColumn("path", "text", (col) => col.notNull())
     // A job's file refers to its blob, which cannot be deleted while any job's file refers to it.
     .addColumn("sha256", "bytea", (col) =>
       col.notNull().references("blob.sha256").onDelete("restrict"),
     )
-    .addPrimaryKeyConstraint("inputFile_pkey", ["jobId", "name"])
+    .addPrimaryKeyConstraint("inputFile_pkey", ["jobId", "path"])
     .addForeignKeyConstraint("inputFile_jobId_fkey", ["jobId"], "job", ["id"], (constraint) =>
       constraint.onDelete("cascade"),
     )
@@ -540,6 +582,7 @@ export async function down(db: Kysely<unknown>): Promise<void> {
     "job",
     "batchInputFile",
     "batch",
+    "organizationBlob",
     "uploadChunk",
     "upload",
     "blob",

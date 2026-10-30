@@ -30,10 +30,10 @@ const COPIED_ID_COLUMNS = {
 
 /**
  * Columns holding a value another table's identifier type already brands, by table and column, as
- * that table and its type: a Batch's Input file is named as a job's is, so a name is branded once.
+ * that table and its type: a Batch's Input file has a path as a job's does, so a path is branded once.
  */
 const SHARED_IDENTIFIER_COLUMNS = {
-  batchInputFile: { name: { table: "InputFile", type: "InputFileName" } },
+  batchInputFile: { path: { table: "InputFile", type: "InputFilePath" } },
 };
 
 /**

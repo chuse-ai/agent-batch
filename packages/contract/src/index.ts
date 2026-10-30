@@ -1,5 +1,9 @@
 export * from "./api.ts";
 export {
+  blobRefSchema,
+  digestSchema,
+  inputFileSchema,
+  MAX_FILE_BYTES,
   jsonTextSchema,
   type Labels,
   labelsSchema,

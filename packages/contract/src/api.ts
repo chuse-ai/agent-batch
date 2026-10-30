@@ -3,7 +3,10 @@ import { openapi } from "@orpc/openapi";
 import * as z from "zod/mini";
 
 import {
+  blobRefSchema,
   customIdSchema,
+  digestSchema,
+  fileSizeBytesSchema,
   inputFilesSchema,
   inputSchema,
   instructionsSchema,
@@ -12,6 +15,7 @@ import {
   labelKeySchema,
   labelsSchema,
   labelValueSchema,
+  MAX_FILE_BYTES,
   MAX_LABELS,
   modelBudgetUsdSchema,
   outputContractSchema,
@@ -198,15 +202,6 @@ export const agentSchema = z
         ),
       ),
     ),
-    // Defaults to none, so an agent without them is the same agent as one with an empty list.
-    inputFiles: z._default(
-      inputFilesSchema.check(
-        z.describe(
-          "Files every job's agent finds in its Workspace's `inputs/` folder, by name, beside the job's own; none by default.",
-        ),
-      ),
-      {},
-    ),
   })
   .register(z.globalRegistry, { id: "Agent" });
 export type Agent = z.infer<typeof agentSchema>;
@@ -272,19 +267,21 @@ export const jobSubmissionSchema = z
         "Your own ID for the job, unique in its Batch. Adding a job again with the same `customId` and the same content returns the job already added, so an add can be retried safely and a whole Batch added again to add only the jobs it lacks; with other content it is refused. A new job needs a new ID.",
       ),
     ),
-    input: inputSchema.check(
-      z.describe(
-        "What the job gives the Batch's agent to work on: the agent's first input, after its instructions.",
+    input: z.optional(
+      inputSchema.check(
+        z.describe(
+          "What the job gives the Batch's agent to work on: the agent's first input, after its instructions. Optional for a job with its own `files`, which are then what it works on; a job with neither is refused.",
+        ),
       ),
     ),
     // Defaults to none, so a job without them is the same job as one with an empty list.
-    inputFiles: z._default(
+    files: z._default(
       inputFilesSchema.check(
         z.describe(
-          "Files the job's agent finds in its Workspace's `inputs/` folder, by name, beside the agent's own; none by default. A name the agent's files already use is refused.",
+          "Files the job's agent finds in its Workspace's `inputs/` folder, at their paths; none by default. Each is a `path`, such as `invoice.pdf` or `claims/42/photo.jpg`, and the `digest` and `sizeBytes` of a Blob the Organization uploaded with `PUT /blobs/{digest}`, or that another of its jobs uses; any other Blob is refused.",
         ),
       ),
-      {},
+      [],
     ),
     labels: z._default(
       labelsSchema.check(
@@ -428,6 +425,34 @@ export const CustomIdReused = error("UNPROCESSABLE_CONTENT");
 // contract's schemas cannot check, such as an Output contract's schema.
 
 /**
+ * The most bytes a request's body may hold, other than an upload's, which may hold a file
+ * (`MAX_FILE_BYTES`): the hub reads such a body whole and parses it before handling the request,
+ * and a Workers isolate has 128 MB for every request it serves. A larger body is refused with 413.
+ */
+export const MAX_BODY_BYTES = 16 * 1024 * 1024;
+
+/** The most files one check of stored Blobs names. */
+export const MAX_FILES_PER_CHECK = 1000;
+
+/**
+ * Whether the Organization holds a file's Blob, as a check answers it, and if not, where to
+ * upload it: `transfer` names how, `put` being one request carrying the whole file, so other ways,
+ * such as resumable uploads, can follow.
+ */
+const blobCheckSchema = z.discriminatedUnion("stored", [
+  z.extend(blobRefSchema, { stored: z.literal(true) }),
+  z.extend(blobRefSchema, {
+    stored: z.literal(false),
+    upload: z.object({
+      transfer: z.literal("put"),
+      url: z
+        .string()
+        .check(z.describe("Where to `PUT` the file's bytes, relative to the hub's URL.")),
+    }),
+  }),
+]);
+
+/**
  * The hub's public HTTP API, for people and their programs. Callers sign in as a member or send an
  * API key in `x-api-key`. A Runner's own calls are `runnerHttpContract`'s.
  */
@@ -490,6 +515,62 @@ export const apiContract = {
       .errors({ FORBIDDEN: {}, [NotFound.code]: NotFound })
       .meta(openapi({ method: "DELETE", path: "/api-keys/{id}" }), ...byMember)
       .input(z.object({ id: z.string() })),
+  },
+  blobs: {
+    check: forOrganization
+      .errors({ BAD_REQUEST: {} })
+      .meta(
+        openapi({
+          method: "POST",
+          path: "/blobs/check",
+          description: `Answers, for each file named by \`digest\` and \`sizeBytes\`, in the order given, whether the Organization holds that Blob: \`stored: true\` when it uploaded it in the last seven days or one of its jobs uses it, so jobs may name it without uploading it again; otherwise \`stored: false\` and where to upload it. At most ${MAX_FILES_PER_CHECK} files per request. A file whose size is not that of the Blob the Organization holds with its digest is refused.`,
+        }),
+        ...byKey({ job: ["create"] }),
+      )
+      .input(
+        z.object({
+          files: z
+            .array(blobRefSchema)
+            .check(
+              z.minLength(1),
+              z.maxLength(MAX_FILES_PER_CHECK),
+              z.describe(`The files to check, 1 to ${MAX_FILES_PER_CHECK} per request.`),
+            ),
+        }),
+      )
+      .output(z.object({ files: z.array(blobCheckSchema) })),
+    upload: forOrganization
+      .errors({ BAD_REQUEST: {} })
+      .meta(
+        openapi({
+          method: "PUT",
+          path: "/blobs/{digest}",
+          // The body is handed over as it arrives, so the hub stores a file a chunk at a time.
+          inputStructure: "detailed",
+          requestBodyHint: "octet-stream",
+          description: `Uploads a file's bytes as the request's body, at most ${MAX_FILE_BYTES / 1024 / 1024} MiB, with \`Content-Length\`, under its \`digest\`, and answers once the hub has checked the bytes' size and SHA-256 and stored them as a Blob. The Organization then holds the Blob for seven days, renewed by each upload of it, and as long as any of its jobs uses it after that. Bytes whose size or SHA-256 differ from what the request names are refused, and nothing is stored.`,
+        }),
+        ...byKey({ job: ["create"] }),
+      )
+      .input(
+        z.object({
+          params: z.object({ digest: digestSchema }),
+          headers: z.object({
+            // Coerced from the header's text by the hub's coercion plugin.
+            "content-length": fileSizeBytesSchema.check(z.describe("The file's size in bytes.")),
+          }),
+          // A stream of the request's bytes, which oRPC hands over without reading it first; its
+          // JSON Schema is a file's.
+          body: z.instanceof(ReadableStream<Uint8Array>).check(
+            z.meta({
+              type: "string",
+              format: "binary",
+              contentMediaType: "application/octet-stream",
+            }),
+          ),
+        }),
+      )
+      .output(blobRefSchema),
   },
   batches: {
     create: forOrganization
@@ -663,7 +744,7 @@ export const apiContract = {
           method: "DELETE",
           path: "/jobs/{id}",
           description:
-            "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with `deletedAt` and a waiting `delete`, and then as not found. Its Usage record stays, and so does its Batch, with the agent's instructions, Output contract and Input files. An unfinished job is refused: cancel it first.",
+            "Deletes a finished job and answers with the job as it now reads. Its content goes from the hub at once, its Input files' Blobs included unless an upload under seven days old still holds them, and from its host once its Runner has deleted its journal and Workspace; until then the job reads without its content, with `deletedAt` and a waiting `delete`, and then as not found. Its Usage record stays, and so does its Batch, with the agent's instructions and Output contract. An unfinished job is refused: cancel it first.",
         }),
         ...byKeyOrMember({ job: ["delete"] }),
       )

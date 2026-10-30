@@ -50,21 +50,29 @@ export function downloadInputFiles(
 ): Effect.Effect<void, InputFileFailed> {
   const paths = jobPaths(jobsDir, jobId);
   const { downloads } = paths;
-  // The contract checks each name again as the run reaches the Runner (`fileNameSchema`), so no
-  // name leaves these folders.
-  const inputs = path.join(paths.workspace, "inputs");
+  const inputs = path.resolve(paths.workspace, "inputs");
   return Effect.gen(function* () {
     yield* fileSystem.makeDirectory(downloads, { recursive: true });
     yield* fileSystem.makeDirectory(inputs, { recursive: true });
-    for (const file of files) {
-      const temporary = path.join(downloads, file.name);
+    for (const [index, file] of files.entries()) {
+      // The contract checks each path as the run reaches the Runner (`filePathSchema`): relative,
+      // without `.` or `..`. Checked again here, where it becomes a place to write.
+      const target = path.resolve(inputs, file.path);
+      if (!target.startsWith(`${inputs}${path.sep}`)) {
+        yield* Effect.fail(
+          new InputFileFailed({ message: `The Input file ${file.path} is not inside \`inputs\`` }),
+        );
+      }
+      // By position, as a path's folders do not exist in `downloads/`.
+      const temporary = path.join(downloads, String(index));
       yield* downloadFile(hubHttp, fileSystem, jobId, file, temporary).pipe(
         Effect.retry({ times: 1, while: (error) => error instanceof Mismatch }),
         Effect.catchTag("Mismatch", (mismatch) =>
           Effect.fail(new InputFileFailed({ message: inputFileMessage(file, mismatch.reason) })),
         ),
       );
-      yield* fileSystem.rename(temporary, path.join(inputs, file.name));
+      yield* fileSystem.makeDirectory(path.dirname(target), { recursive: true });
+      yield* fileSystem.rename(temporary, target);
     }
     yield* fileSystem.remove(downloads, { recursive: true });
   }).pipe(
@@ -78,7 +86,7 @@ export function downloadInputFiles(
 
 /** Why downloading `file` failed, naming it. */
 function inputFileMessage(file: ListedInputFile, reason: string): string {
-  return `Downloading the Input file ${file.name} failed: ${reason}`;
+  return `Downloading the Input file ${file.path} failed: ${reason}`;
 }
 
 /** Bytes that were not those the hub listed, as the hub's checks or the transfer changed them. */
@@ -98,7 +106,7 @@ function downloadFile(
       const hash = createHash("sha256");
       let written = 0;
       for (let index = 0; written < file.originalSizeBytes; index++) {
-        const frame = yield* fetchChunk(hubHttp, jobId, file.name, index).pipe(
+        const frame = yield* fetchChunk(hubHttp, jobId, file.path, index).pipe(
           Effect.catchTag("ChunkUnavailable", (unavailable) =>
             Effect.fail(
               new InputFileFailed({ message: inputFileMessage(file, unavailable.reason) }),
@@ -126,10 +134,10 @@ function downloadFile(
         written += bytes.length;
         yield* out.writeAll(bytes);
       }
-      const sha256 = hash.digest("hex");
-      if (sha256 !== file.sha256) {
+      const digest = `sha256:${hash.digest("hex")}`;
+      if (digest !== file.digest) {
         yield* Effect.fail(
-          new Mismatch({ reason: `its SHA-256 is ${sha256}, not ${file.sha256} as listed` }),
+          new Mismatch({ reason: `its digest is ${digest}, not ${file.digest} as listed` }),
         );
       }
     }),
@@ -139,11 +147,11 @@ function downloadFile(
 /** How long one request for a chunk may take, so a hub that stops answering is asked again. */
 const CHUNK_TIMEOUT = Duration.seconds(60);
 
-/** Chunk `index` of the job's Input file `name`, as one zstd frame, asked for again while it may come. */
-function fetchChunk(hubHttp: HubHttpClient, jobId: string, name: string, index: number) {
+/** Chunk `index` of the job's Input file at `path`, as one zstd frame, asked for again while it may come. */
+function fetchChunk(hubHttp: HubHttpClient, jobId: string, filePath: string, index: number) {
   return Effect.tryPromise({
     try: async (signal) =>
-      (await hubHttp.getInputFileChunk({ id: jobId, name, index }, { signal })).bytes(),
+      (await hubHttp.getInputFileChunk({ id: jobId, path: filePath, index }, { signal })).bytes(),
     catch: (cause) => {
       // The status of an answer from the hub's side, a proxy's included, from the Problem Details
       // the contract's link keeps; an error oRPC raises itself, such as an answer the contract does

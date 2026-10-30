@@ -13,9 +13,11 @@ export type UploadId = Brand.Branded<string, "agent_batch.upload">;
 export default interface UploadTable {
   id: ColumnType<UploadId, UploadId, UploadId>;
 
-  sha256: ColumnType<BlobSha256, BlobSha256, BlobSha256>;
+  sha256: ColumnType<BlobSha256 | null, BlobSha256 | null, BlobSha256 | null>;
 
   chunkBytes: ColumnType<number, number, number>;
+
+  expiresAt: ColumnType<Date, Date | string, Date | string>;
 }
 
 export type Upload = Selectable<UploadTable>;

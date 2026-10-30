@@ -1,7 +1,15 @@
+import { problemOf } from "contract";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 import * as z from "zod/mini";
 
-import { type ApiClient, type JobInput, startSystem, submitJob, untilStatus } from "./harness.ts";
+import {
+  type ApiClient,
+  type JobInput,
+  startSystem,
+  submitJob,
+  untilStatus,
+  uploadContent,
+} from "./harness.ts";
 import { callTool, reply, untilAborted } from "./scripted-model.ts";
 
 // Batches, labels and the job list, against a real hub. The first tests run before any Runner has
@@ -14,6 +22,12 @@ beforeAll(() => system.start());
 afterAll(() => system.stop());
 
 const AGENT = { outputContract: { schema: { type: "integer" } } };
+
+/** The add's problem, as its error's Problem Details give it. */
+async function addProblem(client: ApiClient, id: string, jobs: JobInput[]) {
+  const refused = await client.batches.addJobs({ id, jobs }).catch((error: unknown) => error);
+  return problemOf(refused);
+}
 
 /** A job with the custom ID `customId`. */
 function jobNamed(customId: string, extra: Partial<JobInput> = {}): JobInput {
@@ -88,27 +102,38 @@ test("a custom ID used again with the same content returns what it named, and wi
 test("an add with an invalid job adds none, and its answer names every problem with its path", async () => {
   const client = await system.clientWithNewJobsKey();
   const batch = await client.batches.create({
-    agent: { ...AGENT, inputFiles: { "rates.csv": { content: "1.1" } } },
+    agent: AGENT,
     labels: { team: "billing" },
     breaker: false,
   });
   const many = Object.fromEntries(Array.from({ length: 64 }, (_, index) => [`l${index}`, "x"]));
 
-  // Problems only the hub sees, with the Batch: a custom ID given twice, a file named like one of
-  // the agent's, and labels over the limit with the Batch's.
-  const refused = await post(`/batches/${batch.id}/jobs`, {
-    jobs: [
-      jobNamed("a"),
-      jobNamed("a"),
-      jobNamed("b", { inputFiles: { "rates.csv": { content: "2.2" } } }),
-      jobNamed("c", { labels: many }),
-    ],
-  });
-  expect(refused.status).toBe(400);
-  const { detail } = z.parse(z.object({ detail: z.string() }), await refused.json());
-  for (const path of ["jobs[1].customId", 'jobs[2].inputFiles["rates.csv"]', "jobs[3].labels"]) {
-    expect(detail).toContain(path);
+  // Problems only the hub sees, with the Batch: a custom ID given twice, labels over the limit with
+  // the Batch's, and a job with neither input nor files.
+  const problem = await addProblem(client, batch.id, [
+    jobNamed("a"),
+    jobNamed("a"),
+    jobNamed("c", { labels: many }),
+    { customId: "d" },
+  ]);
+  expect(problem?.status).toBe(400);
+  for (const path of ["jobs[1].customId", "jobs[2].labels", "jobs[3].input"]) {
+    expect(problem?.detail).toContain(path);
   }
+
+  // Files whose content the Organization never uploaded, or of a size other than its content's.
+  const rates = await uploadContent(client, "2.2");
+  const unheld = await addProblem(client, batch.id, [
+    jobNamed("e", { files: [{ path: "rates.csv", ...rates }] }),
+    jobNamed("f", {
+      files: [{ path: "rates.csv", digest: `sha256:${"0".repeat(64)}`, sizeBytes: 3 }],
+    }),
+    jobNamed("g", { files: [{ path: "rates.csv", ...rates, sizeBytes: 4 }] }),
+  ]);
+  expect(unheld?.status).toBe(400);
+  expect(unheld?.detail).toContain("jobs[1].files[0].digest");
+  expect(unheld?.detail).toContain("jobs[2].files[0].sizeBytes");
+  expect(unheld?.detail).not.toContain("jobs[0]");
 
   // A label value holds any text of at most 256 characters, but no NUL.
   const invalid = await post(`/batches/${batch.id}/jobs`, {

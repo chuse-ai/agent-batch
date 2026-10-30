@@ -17,6 +17,9 @@
       "id": "00000000000000000000000000000000",
     },
   ],
+  // The sweep of uploads and content nothing uses any longer, at the top of every hour in UTC, as
+  // Cron Triggers run; the Node hub's `src/main.ts` sweeps on the same expression.
+  "triggers": { "crons": ["0 * * * *"] },
   "vars": {
     // The request header carrying the client's IP address, for Better Auth's rate limits.
     "CLIENT_IP_HEADER": "cf-connecting-ip",

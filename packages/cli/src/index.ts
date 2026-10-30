@@ -248,8 +248,11 @@ function commandsOf(router: object, path: readonly string[] = []): Commands {
     const at = [...path, name];
     if (value instanceof ProcedureContract) {
       // The command line authenticates with an API key only, so a call only a member makes has no
-      // command.
-      if (getAccess(value)?.key) commands[name] = command(value, at);
+      // command; nor does an upload, whose body is a file's bytes, which a command's JSON input
+      // cannot carry.
+      if (getAccess(value)?.key && getOpenAPIMeta(value)?.requestBodyHint !== "octet-stream") {
+        commands[name] = command(value, at);
+      }
     } else {
       const nested = commandsOf(value, at);
       if (Object.keys(nested).length > 0) commands[name] = nested;
