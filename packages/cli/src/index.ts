@@ -485,7 +485,10 @@ function jobsFromPaths(paths: readonly string[]) {
       }
       return { path: at, diskPath: file, sizeBytes };
     });
-    const isHidden = (given: string) => /^\.[^./]/.test(path.basename(given));
+    const isHidden = (given: string) => {
+      const name = path.basename(given);
+      return name.startsWith(".") && name !== "." && name !== "..";
+    };
     const hidden = paths.filter(isHidden);
     if (hidden.length > 0) {
       yield* Effect.sync(() =>
@@ -523,6 +526,7 @@ function jobsFromPaths(paths: readonly string[]) {
         return { given, customId, files };
       }),
     );
+    if (jobs.length === 0) return yield* Effect.fail(new Error("--each leaves no jobs to submit"));
     const firstWithId = new Map<string, string>();
     for (const { given, customId } of jobs) {
       const first = firstWithId.get(customId);
@@ -676,9 +680,12 @@ function jobsFromJsonl(file: string) {
     const notJsonl = `${file} is not a JSONL file of jobs, one job's JSON per line; to make a job of each file or folder, use --each ${file}`;
     if ((yield* fs.stat(file)).type !== "File") return yield* Effect.fail(new Error(notJsonl));
     const content = yield* fs.readFileString(file);
-    const notJsonlYet = /^\s*[[{]/.test(content)
-      ? `${file} holds JSON over several lines, not one job's JSON per line; jq -c '.[]' ${file} makes a JSON array of jobs JSONL`
-      : notJsonl;
+    const arrayHint = `${file} holds a JSON array, not one job's JSON per line; jq -c '.[]' ${file} makes it JSONL`;
+    const notJsonlYet = /^\s*\[/.test(content)
+      ? arrayHint
+      : /^\s*\{/.test(content)
+        ? `${file} holds JSON over several lines, not one job's JSON per line; jq -c . ${file} puts each on one line`
+        : notJsonl;
     const lines = content.split("\n");
     const jobs: JobSubmission[] = [];
     for (const [index, line] of lines.entries()) {
@@ -691,6 +698,7 @@ function jobsFromJsonl(file: string) {
             ? new Error(notJsonlYet)
             : new Error(`${at}: ${ensureError(error).message}`),
       });
+      if (Array.isArray(value)) return yield* Effect.fail(new Error(arrayHint));
       const parsed = z.safeParse(jobSubmissionSchema, value);
       if (!parsed.success) {
         return yield* Effect.fail(new Error(`${at}: ${z.prettifyError(parsed.error)}`));

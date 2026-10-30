@@ -243,7 +243,7 @@ test("batches submit adds the jobs of a JSONL file in its order, at most 100 at 
 test("batches submit refuses a file that is not JSONL before sending anything, pointing to --each or to JSONL", async () => {
   const cwd = await folderWith({
     "a.pdf": "%PDF-1.7",
-    "jobs.json": JSON.stringify([{ customId: "a", input: "A." }], null, 2),
+    "jobs.json": JSON.stringify([{ customId: "a", input: "A." }]),
   });
   const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
 
