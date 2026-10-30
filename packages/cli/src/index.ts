@@ -555,10 +555,10 @@ function digestOf(file: string) {
 }
 
 /**
- * How many files `batches submit` hashes or uploads, and how many jobs it reads, at once. Docker
- * and restic send five layers or packs at once; each upload holds one of the hub's database
- * connections while it writes, of the ten a Node hub's pool has, so five leave the hub room for
- * other callers.
+ * How many files `batches submit` hashes or uploads, and how many jobs it reads, at once. Five is a
+ * conventional value, as Docker sends five layers at once, not a measured one, so it is to be tuned
+ * from measurement. Each upload holds one of the hub's database connections while it writes, of
+ * the ten a Node hub's pool has, so five leave the hub room for other callers.
  */
 const AT_ONCE = 5;
 
