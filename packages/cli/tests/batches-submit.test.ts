@@ -240,22 +240,14 @@ test("batches submit adds the jobs of a JSONL file in its order, at most 100 at 
   );
 });
 
-test("batches submit refuses a file that is not JSONL before sending anything, pointing to --each or to JSONL", async () => {
-  const cwd = await folderWith({
-    "a.pdf": "%PDF-1.7",
-    "jobs.json": JSON.stringify([{ customId: "a", input: "A." }]),
-  });
+// Scripts that write JSONL leave stray whitespace lines, which openai-cli skips too.
+test("batches submit leaves out lines of a JSONL file that hold only whitespace", async () => {
+  const [a, b] = ["a", "b"].map((customId) => JSON.stringify({ customId, input: "A posting." }));
+  const cwd = await folderWith({ "jobs.jsonl": `${a}\n   \n\t\n${b}\n  ` });
   const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
 
-  const pdf = await submit(hub.url, cwd, ["a.pdf"]);
-  const json = await submit(hub.url, cwd, ["jobs.json"]);
-
-  expect(pdf).toMatchObject({ exitCode: 1, stderr: expect.stringContaining("use --each a.pdf") });
-  expect(json).toMatchObject({
-    exitCode: 1,
-    stderr: expect.stringContaining("jq -c '.[]' jobs.json"),
-  });
-  expect(hub.adds).toEqual([]);
+  expect((await submit(hub.url, cwd, ["jobs.jsonl"])).exitCode).toBe(0);
+  expect(hub.adds.flat().map((job) => job.customId)).toEqual(["a", "b"]);
 });
 
 // Root reads any folder, so the refusal shows only for another user.

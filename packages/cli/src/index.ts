@@ -664,41 +664,62 @@ const endProgress = Effect.sync(() => {
 });
 
 /**
+ * `bytes` with every line that holds only whitespace emptied, so that Ndjson's `ignoreEmptyLines`
+ * leaves it out, as openai-cli's `outerSpace` (`batch_records_scan.go`) skips such lines; Effect's
+ * skips only empty ones. Done on the bytes, as decoding them to text first would lose Ndjson's
+ * UTF-8 and line size checks. A line's leading whitespace waits until the line shows whether it
+ * holds more, across chunks.
+ */
+function withBlankLinesEmptied<E, R>(bytes: Stream.Stream<Uint8Array, E, R>) {
+  let held: Uint8Array[] = [];
+  let blank = true;
+  return Stream.map(bytes, (chunk) => {
+    const kept: Uint8Array[] = [];
+    let start = 0;
+    let whitespaceFrom = blank ? 0 : -1;
+    for (const [i, byte] of chunk.entries()) {
+      if (byte === 0x0a || byte === 0x0d) {
+        if (whitespaceFrom !== -1) {
+          held = [];
+          if (whitespaceFrom < i) {
+            kept.push(chunk.subarray(start, whitespaceFrom));
+            start = i;
+          }
+        }
+        whitespaceFrom = i + 1;
+      } else if (whitespaceFrom !== -1 && ![0x20, 0x09, 0x0b, 0x0c].includes(byte)) {
+        kept.push(...held);
+        held = [];
+        whitespaceFrom = -1;
+      }
+    }
+    blank = whitespaceFrom !== -1;
+    kept.push(chunk.subarray(start, blank ? whitespaceFrom : chunk.length));
+    if (blank) held.push(chunk.subarray(whitespaceFrom));
+    return Buffer.concat(kept);
+  });
+}
+
+/**
  * The jobs in the JSONL file `file`, one job's JSON per line, as `batches add-jobs` takes each,
  * blank lines left out, all read before any is sent; each is checked as the hub checks it. A line
  * may hold at most what one request to the hub carries. A problem names its job by its place among
- * the jobs, as Effect's `Ndjson` counts no lines. A file whose first job fails is told what it holds
- * instead, from how it starts: a JSON array, with how to make it JSONL; JSON over several lines,
- * with how to put it on one; anything else, such as a PDF given as the positional by mistake, with a
- * pointer to `--each`.
+ * the jobs, as Effect's `Ndjson` counts no lines.
  */
 function jobsFromJsonl(file: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const notJsonl = `${file} is not a JSONL file of jobs, one job's JSON per line; to make a job of each file or folder, use --each ${file}`;
-    const arrayHint = `${file} holds a JSON array, not one job's JSON per line; jq -c '.[]' ${file} makes it JSONL`;
-    if ((yield* fs.stat(file)).type !== "File") return yield* Effect.fail(new Error(notJsonl));
-    // What the file holds, from its first characters, a byte order mark left out.
-    const whatItHolds = Effect.map(
-      Stream.runCollect(fs.stream(file, { bytesToRead: 64 })),
-      (chunks) => {
-        const start = new TextDecoder().decode(Buffer.concat(chunks)).trimStart();
-        return start.startsWith("[")
-          ? arrayHint
-          : start.startsWith("{")
-            ? `${file} holds JSON over several lines, not one job's JSON per line; jq -c . ${file} puts each on one line`
-            : notJsonl;
-      },
-    );
+    if ((yield* fs.stat(file)).type !== "File") {
+      return yield* Effect.fail(new Error(`${file} is not a file`));
+    }
     const jobs: JobSubmission[] = [];
-    yield* fs.stream(file).pipe(
+    yield* withBlankLinesEmptied(fs.stream(file)).pipe(
       // Ndjson skips a leading BOM and accepts CRLF and CR line ends, as files saved on Windows
       // have them.
       Stream.pipeThroughChannel(
         Ndjson.decode({ ignoreEmptyLines: true, maxLineBytes: MAX_BODY_BYTES }),
       ),
       Stream.runForEach((value) => {
-        if (Array.isArray(value)) return Effect.fail(new Error(arrayHint));
         const parsed = z.safeParse(jobSubmissionSchema, value);
         if (!parsed.success) {
           return Effect.fail(
@@ -710,20 +731,13 @@ function jobsFromJsonl(file: string) {
       }),
       Effect.catchTag("NdjsonError", (error) => {
         const at = `${file}: job ${jobs.length + 1}`;
-        if (error.reason === "LineTooLarge") {
-          return Effect.fail(
-            new Error(
-              `${at} is longer than ${MAX_BODY_BYTES / 1024 / 1024} MiB, the most one request to the hub carries`,
-            ),
-          );
-        }
-        if (jobs.length === 0)
-          return Effect.flatMap(whatItHolds, (hint) => Effect.fail(new Error(hint)));
         return Effect.fail(
           new Error(
-            error.reason === "InvalidUtf8"
-              ? `${at} is not valid UTF-8`
-              : `${at}: ${ensureError(error.cause).message}`,
+            error.reason === "LineTooLarge"
+              ? `${at} is longer than ${MAX_BODY_BYTES / 1024 / 1024} MiB, the most one request to the hub carries`
+              : error.reason === "InvalidUtf8"
+                ? `${at} is not valid UTF-8`
+                : `${at}: ${ensureError(error.cause).message}`,
           ),
         );
       }),
