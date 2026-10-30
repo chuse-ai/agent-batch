@@ -464,7 +464,8 @@ const blobCheckSchema = z.discriminatedUnion("stored", [
  * Every input object is strict, so a parameter the API does not know, in the body or a read's query
  * string, such as one renamed or misspelled, is refused with 400 naming it, rather than ignored and
  * the request taken as if it were absent (ADR 0010). oRPC merges a read's query string into its
- * input and a write's body, so a write's query string never reaches the schema. Answers stay open,
+ * input and a write's body, so a write's query string never reaches the schema, nor does that of
+ * a read without input; none of these calls takes query parameters. Answers stay open,
  * so the hub may add fields to them without breaking callers that check them, and so do the
  * upload's headers, which carry far more than the API reads.
  */
