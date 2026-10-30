@@ -1,6 +1,8 @@
 # agent-batch
 
-[![npm](https://img.shields.io/npm/v/agent-batch)](https://www.npmjs.com/package/agent-batch) [![License: MIT](https://img.shields.io/npm/l/agent-batch)](LICENSE)
+<!-- Links to repository files are absolute because npmjs.com shows this file too, as the agent-batch package's README. -->
+
+[![npm](https://img.shields.io/npm/v/agent-batch)](https://www.npmjs.com/package/agent-batch) [![License: MIT](https://img.shields.io/npm/l/agent-batch)](https://github.com/chuse-ai/agent-batch/blob/main/LICENSE)
 
 > Map one agent over many inputs, on machines you own, and get back JSON that matches your schema
 
@@ -11,8 +13,8 @@ It does this without giving every job its own sandbox, so you don't pay for agen
 Try it on your machine with Docker and Node: `npx agent-batch stack start`, then [the first job](#an-everyday-chore-done-by-an-agent).
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/memory-dark.svg">
-  <img alt="Memory held by 400 jobs: 400 one-gigabyte sandboxes against 4 GB for one Runner, each square 1 GB, to scale" src="docs/images/memory-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/chuse-ai/agent-batch/main/docs/images/memory-dark.svg">
+  <img alt="Memory held by 400 jobs: 400 one-gigabyte sandboxes against 4 GB for one Runner, each square 1 GB, to scale" src="https://raw.githubusercontent.com/chuse-ai/agent-batch/main/docs/images/memory-light.svg">
 </picture>
 
 Open source, MIT, TypeScript. Early: versions are 0.x.
@@ -75,7 +77,7 @@ one Runner process (Node, on your machine)
 | CPU per job, CPU-heavy jobs (data scripts over large CSVs, code fixes with test runs) | **1.45–4.9× less**; 1.45× for the heaviest, where the jobs' own work dominates                                                                                                                                                                                                                                                                     | baseline                         |
 | Conditions                                                                            | Arm, 2 vCPU, 4 GB RAM, about €7 a month. The Runner from 0.2.0, with real commands in real sandboxes. Model responses replayed from real recordings: at 20× their recorded latency for the jobs held open, standing for a slow model; at their recorded timing for CPU. 425 needs systemd's `TasksMax` raised. Server cost only, not model tokens. | same server, same Runner image   |
 
-One container too many hung the host for about 30 minutes instead of failing a job. These are particular workloads on one machine, not a capacity guarantee. Method and results: [docs/benchmark.md](docs/benchmark.md).
+One container too many hung the host for about 30 minutes instead of failing a job. These are particular workloads on one machine, not a capacity guarantee. Method and results: [docs/benchmark.md](https://github.com/chuse-ai/agent-batch/blob/main/docs/benchmark.md).
 
 <!-- recording: a terminal, about 30 seconds, no narration, labelled "Hetzner CAX11, 2 vCPU, 4 GB". A Batch of a few hundred text jobs is added with the CLI; the 5 Canary jobs end first; then `jobs list --status running` and `--status succeeded` are re-run every few seconds and the counts move from running to succeeded; one `jobs get | jq .output` prints a validated JSON object. -->
 
@@ -206,18 +208,18 @@ The model is per Runner. `stack start --provider anthropic --model claude-sonnet
 - Every job wants a different model. The model is per Runner; run a Runner per model.
 - Your jobs must move between hosts. A job's journal and Workspace stay with the Runner that took it, and each data directory takes one Runner process.
 
-Full list: [docs/release-scope.md](docs/release-scope.md).
+Full list: [docs/release-scope.md](https://github.com/chuse-ai/agent-batch/blob/main/docs/release-scope.md).
 
 ## Host notes
 
-agent-batch needs Docker Engine 29+ with Compose 5+, and Node 22.19+. On Ubuntu 24.04, run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` before `stack start`, so the sandboxes can start, and add a file in `/etc/sysctl.d` to keep it. Ubuntu 25.04 and later are not supported yet. Logins, status, logs and upgrading: [docs/deploy.md](docs/deploy.md).
+agent-batch needs Docker Engine 29+ with Compose 5+, and Node 22.19+. On Ubuntu 24.04, run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` before `stack start`, so the sandboxes can start, and add a file in `/etc/sysctl.d` to keep it. Ubuntu 25.04 and later are not supported yet. Logins, status, logs and upgrading: [docs/deploy.md](https://github.com/chuse-ai/agent-batch/blob/main/docs/deploy.md).
 
 ## More than one machine
 
-`stack start` is for one machine. For a hub that Runners on other machines connect to, the repository's [`compose.yaml`](compose.yaml) runs the hub, Postgres and a Runner from the published images, `ghcr.io/chuse-ai/agent-batch-hub` and `ghcr.io/chuse-ai/agent-batch-runner` (linux/amd64 and arm64). Today you create API keys there with `curl` against the hub, because the CLI cannot sign in yet. Steps: [docs/deploy.md](docs/deploy.md#several-machines-docker-compose).
+`stack start` is for one machine. For a hub that Runners on other machines connect to, the repository's [`compose.yaml`](https://github.com/chuse-ai/agent-batch/blob/main/compose.yaml) runs the hub, Postgres and a Runner from the published images, `ghcr.io/chuse-ai/agent-batch-hub` and `ghcr.io/chuse-ai/agent-batch-runner` (linux/amd64 and arm64). Today you create API keys there with `curl` against the hub, because the CLI cannot sign in yet. Steps: [docs/deploy.md](https://github.com/chuse-ai/agent-batch/blob/main/docs/deploy.md#several-machines-docker-compose).
 
 ## Working on agent-batch
 
-Issues are welcome, including ones about this page. Outside pull requests are not accepted for now; [CONTRIBUTING.md](CONTRIBUTING.md) explains and has the development commands. `npx agent-batch --help` lists every command.
+Issues are welcome, including ones about this page. Outside pull requests are not accepted for now; [CONTRIBUTING.md](https://github.com/chuse-ai/agent-batch/blob/main/CONTRIBUTING.md) explains and has the development commands. `npx agent-batch --help` lists every command, and [docs/cli.md](https://github.com/chuse-ai/agent-batch/blob/main/docs/cli.md) describes them.
 
 agent-batch is made by FluteBlade at chuse. MIT licence.
