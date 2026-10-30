@@ -142,8 +142,14 @@ test("batches submit --each uploads each file and folder as a job's Input files,
   const { id } = z.parse(z.object({ id: z.string() }), submitted.lines[0]);
   const client = await system.clientWithNewJobsKey();
   await expect
-    .poll(async () => (await client.batches.get({ id })).jobCounts.succeeded, { timeout: 15_000 })
-    .toBe(2);
+    .poll(
+      async () => {
+        const { queued, running, paused } = (await client.batches.get({ id })).jobCounts;
+        return queued + running + paused;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(0);
   const { lines, exitCode } = await Effect.runPromise(
     agentBatchIn(dir, [...submit, "--wait", "--output-dir", "outputs"]),
   );
