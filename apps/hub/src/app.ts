@@ -13,6 +13,7 @@ import { ZodToJsonSchemaConverter } from "@orpc/zod";
 import {
   apiContract,
   getAccess,
+  MAX_BODY_BYTES,
   MAX_FILE_BYTES,
   NotFound,
   PROTOCOL_UNSUPPORTED,
@@ -336,13 +337,6 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
       }),
     },
   });
-
-/**
- * The most bytes a JSON request's body may hold: oRPC reads it whole and parses it before the
- * handler runs, and a Workers isolate has 128 MB for every request it serves. Provisional, until a
- * limit on a request is set; an upload's body, read as it arrives, has its own.
- */
-const MAX_BODY_BYTES = 16 * 1024 * 1024;
 
 // A query string's values arrive as text; this turns them into what the input's schema expects,
 // such as `after=42` into a number.

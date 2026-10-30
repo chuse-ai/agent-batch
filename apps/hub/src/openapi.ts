@@ -1,7 +1,13 @@
 import { OpenAPIGenerator } from "@orpc/openapi";
 import { ZodToJsonSchemaConverter } from "@orpc/zod";
 import { getCookies } from "better-auth/cookies";
-import { API_KEY_SECURITY_SCHEME, apiContract, problemDetailsSchema } from "contract";
+import {
+  API_KEY_SECURITY_SCHEME,
+  apiContract,
+  MAX_BODY_BYTES,
+  MAX_FILE_BYTES,
+  problemDetailsSchema,
+} from "contract";
 
 import packageJson from "../package.json" with { type: "json" };
 import { Auth } from "./auth/auth.ts";
@@ -24,7 +30,12 @@ export function generateOpenAPIDocument(sessionCookie: string) {
   return generator.generate(apiContract, {
     base: {
       // The hub's own version, which a release sets to the release's.
-      info: { title: "agent-batch", version: packageJson.version },
+      info: {
+        title: "agent-batch",
+        version: packageJson.version,
+        // A limit every call shares, which no one operation's description would carry.
+        description: `A request's body may hold at most ${MAX_BODY_BYTES / 1024 / 1024} MiB, and an upload's at most ${MAX_FILE_BYTES / 1024 / 1024} MiB; a larger body is refused with 413.`,
+      },
       components: {
         securitySchemes: {
           apiKey: API_KEY_SECURITY_SCHEME,

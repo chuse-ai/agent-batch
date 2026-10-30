@@ -424,6 +424,13 @@ export const CustomIdReused = error("UNPROCESSABLE_CONTENT");
 // removing a Runner raises `Forbidden` itself. The hub raises `BAD_REQUEST` itself only for what the
 // contract's schemas cannot check, such as an Output contract's schema.
 
+/**
+ * The most bytes a request's body may hold, other than an upload's, which may hold a file
+ * (`MAX_FILE_BYTES`): the hub reads such a body whole and parses it before handling the request,
+ * and a Workers isolate has 128 MB for every request it serves. A larger body is refused with 413.
+ */
+export const MAX_BODY_BYTES = 16 * 1024 * 1024;
+
 /** The most files one check of stored Blobs names. */
 export const MAX_FILES_PER_CHECK = 1000;
 
