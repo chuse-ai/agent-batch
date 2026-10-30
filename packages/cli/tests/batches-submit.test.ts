@@ -76,12 +76,12 @@ function jobOf(id: string, customId: string, status: Record<string, unknown>) {
  * A hub answering `batches submit`: it holds the Blobs with the digests in `stored` and those
  * uploaded to it, keeps each upload's bytes and each add's jobs, creates one Batch, and answers
  * each job's read with `ended(customId)`, or with 503 when `jobsUnreadable`, every job having ended
- * by the first read of the Batch, which it never answers when `stalled`. `batchRead` resolves on
- * that first read.
+ * by the Batch's read numbered `endedByRead`, the first unless given; it never answers a read of
+ * the Batch when `stalled`. `batchRead` resolves on the first read.
  */
 function fakeHub(
   ended: (customId: string) => Record<string, unknown>,
-  { stalled = false, jobsUnreadable = false, stored = [] as string[] } = {},
+  { stalled = false, jobsUnreadable = false, stored = [] as string[], endedByRead = 1 } = {},
 ) {
   const batchId = crypto.randomUUID();
   const held = new Set(stored);
@@ -89,6 +89,7 @@ function fakeHub(
   const adds: AddedJob[][] = [];
   const ids = new Map<string, string>();
   const { promise: batchRead, resolve: readBatch } = Promise.withResolvers<void>();
+  let batchReads = 0;
   const listener: RequestListener = async (request, response) => {
     const body = await buffer(request);
     const json = (): unknown => JSON.parse(body.toString());
@@ -129,6 +130,8 @@ function fakeHub(
     if (request.method === "GET" && request.url === `/batches/${batchId}`) {
       readBatch();
       if (stalled) return;
+      if (++batchReads < endedByRead)
+        return answer(response, batchOf(batchId, { queued: ids.size }));
       const counts: Record<string, number> = {};
       for (const each of ids.values()) {
         const status = String(ended(each)["status"]);
@@ -279,10 +282,13 @@ test("batches submit run again with its --custom-id sends the same jobs, so the 
 test("batches submit --wait --output-dir saves each job's line in order, those that succeeded apart from the rest, prints the Batch and exits 1 when one failed", async () => {
   const cwd = await folderWith({ "a.pdf": "a", "b.pdf": "b", "c.pdf": "c" });
   const failure = { reason: "noOutput", message: "The agent stopped without an output" };
-  const hub = fakeHub((customId) =>
-    customId === "b.pdf"
-      ? { status: "failed", failure }
-      : { status: "succeeded", output: { total: customId } },
+  // The jobs are still queued at the first read, so the wait reads again.
+  const hub = fakeHub(
+    (customId) =>
+      customId === "b.pdf"
+        ? { status: "failed", failure }
+        : { status: "succeeded", output: { total: customId } },
+    { endedByRead: 2 },
   );
   const args = ["--each", "a.pdf", "b.pdf", "c.pdf", "--wait", "--output-dir", "outputs"];
 

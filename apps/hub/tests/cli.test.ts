@@ -113,7 +113,9 @@ const listInputs: FauxResponseFactory = ({ messages }) =>
         command: `cd inputs && find . -type f | sort | while read -r f; do printf '%s=%s;' "$f" "$(cat "$f")"; done`,
       });
 
-// `--wait` reads every 10 seconds, so the jobs, still running at the first read, end by the second.
+// `--wait` reads every 10 seconds, so the test waits for the jobs through the API instead: run
+// again with the Batch's custom ID, as a caller runs it to wait, the command adds nothing and finds
+// them ended at its first read. The CLI's own tests cover a wait that reads again.
 test("batches submit --each uploads each file and folder as a job's Input files, and --wait --output-dir saves their outputs in order", async () => {
   system.model.setResponses([listInputs, listInputs, listInputs, listInputs]);
   const dir = await mkdtemp(path.join(tmpdir(), "agent-batch-cli-"));
@@ -123,20 +125,27 @@ test("batches submit --each uploads each file and folder as a job's Input files,
   await writeFile(path.join(dir, "claim/photos/front.txt"), "front");
   await writeFile(path.join(dir, "claim/.hidden"), "hidden");
   await writeFile(path.join(dir, "schema.json"), JSON.stringify({ type: "string" }));
+  const submit = [
+    "batches",
+    "submit",
+    "--each",
+    "./notes.txt",
+    "claim/",
+    "--output-schema",
+    "schema.json",
+    "--custom-id",
+    crypto.randomUUID(),
+  ];
 
+  const submitted = await Effect.runPromise(agentBatchIn(dir, submit));
+  expect(submitted.exitCode).toBe(0);
+  const { id } = z.parse(z.object({ id: z.string() }), submitted.lines[0]);
+  const client = await system.clientWithNewJobsKey();
+  await expect
+    .poll(async () => (await client.batches.get({ id })).jobCounts.succeeded, { timeout: 15_000 })
+    .toBe(2);
   const { lines, exitCode } = await Effect.runPromise(
-    agentBatchIn(dir, [
-      "batches",
-      "submit",
-      "--each",
-      "./notes.txt",
-      "claim/",
-      "--output-schema",
-      "schema.json",
-      "--wait",
-      "--output-dir",
-      "outputs",
-    ]),
+    agentBatchIn(dir, [...submit, "--wait", "--output-dir", "outputs"]),
   );
   const saved = (await readFile(path.join(dir, "outputs/output.jsonl"), "utf8"))
     .trim()
