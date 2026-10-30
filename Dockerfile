@@ -69,9 +69,9 @@ RUN vp run --no-cache runner#build && vp run --no-cache runner#notices \
 # encoding data libpoppler recommends for CJK and Cyrillic text (poppler-data), and libatomic1,
 # which Node's official Linux builds link from Node 25 on (nodejs/node#60790,
 # voidzero-dev/vite-plus#3219). It runs as a named user with a home and the data directory, as
-# Node's official image runs as its `node` user, uid 1000; `nobody` has neither. The container needs `--security-opt seccomp=unconfined --security-opt
-# systempaths=unconfined`, and `apparmor=unconfined` where the host has AppArmor, as BuildKit's
-# rootless image does ---
+# Node's official image runs as its `node` user, uid 1000; `nobody` has neither. The container needs
+# `--security-opt seccomp=unconfined --security-opt systempaths=unconfined`, and
+# `apparmor=unconfined` where the host has AppArmor, as BuildKit's rootless image does ---
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS runner
 RUN apt-get update \
   && apt-get install -y --no-install-recommends bubblewrap socat ripgrep poppler-utils poppler-data libatomic1 \
