@@ -4,7 +4,7 @@
 import type { Brand } from "effect";
 import type { ColumnType, Selectable, Insertable, Updateable } from "kysely";
 
-import type { BatchId } from "./Batch.js";
+import type { BatchRowId } from "./Batch.js";
 import type { BlobSha256 } from "./Blob.js";
 import type { InputFilePath } from "./InputFile.js";
 
@@ -13,7 +13,7 @@ export type BatchInputFilePath = Brand.Branded<string, "agent_batch.batchInputFi
 
 /** Represents the table agent_batch.batchInputFile */
 export default interface BatchInputFileTable {
-  batchId: ColumnType<BatchId, BatchId, BatchId>;
+  batchRowId: ColumnType<BatchRowId, BatchRowId, BatchRowId>;
 
   path: ColumnType<InputFilePath, InputFilePath, InputFilePath>;
 

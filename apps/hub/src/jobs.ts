@@ -34,7 +34,7 @@ import { deleteUnusedBlobs } from "./blobs.ts";
 import { Db, DB_SCHEMA } from "./db/database.ts";
 import {
   ApikeyId,
-  type BatchId,
+  type BatchRowId,
   type Database,
   type EventId,
   type JobId,
@@ -63,7 +63,7 @@ const MAX_PAGE_BYTES = 1024 * 1024;
 /** What a job's Usage record copies from the job's row at its end, beside the job's ID. */
 export const USAGE_COPIED_COLUMNS = [
   "organizationId",
-  "batchId",
+  "batchRowId",
   "labels",
   "status",
   "failureReason",
@@ -90,7 +90,6 @@ const JOB_COLUMNS = [
   "failureMessage",
   "pendingControl",
   "pendingControlRequestedAt",
-  "batchId",
   "customId",
   "labels",
 ] as const;
@@ -104,7 +103,10 @@ const PROGRESS_COLUMNS = ["totalTokens", "costUsd", "activity"] as const;
  */
 function toApiJob(
   job: Pick<JobRow, (typeof JOB_COLUMNS)[number]> &
-    Pick<JobProgressRow, (typeof PROGRESS_COLUMNS)[number]> & { blockedBy: BlockedBy | null },
+    Pick<JobProgressRow, (typeof PROGRESS_COLUMNS)[number]> & {
+      batchId: string;
+      blockedBy: BlockedBy | null;
+    },
 ): Job {
   const {
     status,
@@ -140,7 +142,7 @@ function toApiJob(
 export function blockedByOf(job: {
   status: Expression<JobRow["status"]>;
   placedAt: Expression<JobRow["placedAt"]>;
-  batchId: Expression<JobRow["batchId"]>;
+  batchRowId: Expression<JobRow["batchRowId"]>;
   inCanary: Expression<JobRow["inCanary"]>;
 }): AliasableExpression<BlockedBy | null> {
   const eb = expressionBuilder<Database>();
@@ -165,7 +167,7 @@ export function blockedByOf(job: {
                   batch
                     .selectFrom("job as canary")
                     .select("canary.id")
-                    .whereRef("canary.batchId", "=", job.batchId)
+                    .whereRef("canary.batchRowId", "=", job.batchRowId)
                     .where("canary.inCanary", "=", true)
                     .where("canary.status", "in", UNFINISHED),
                 ),
@@ -176,9 +178,20 @@ export function blockedByOf(job: {
             .end()
             .as("reason"),
         )
-        .whereRef("b.id", "=", job.batchId),
+        .whereRef("b.rowId", "=", job.batchRowId),
     )
     .end();
+}
+
+/** The ID the API shows of the Batch whose row is `batchRowId`, a job's Batch's (ADR 0036). */
+export function batchIdOf(batchRowId: Expression<BatchRowId>): AliasableExpression<string> {
+  const eb = expressionBuilder<Database>();
+  return eb
+    .selectFrom("batch as ofJob")
+    .select("ofJob.id")
+    .whereRef("ofJob.rowId", "=", batchRowId)
+    .$asScalar()
+    .$notNull();
 }
 
 /** The statuses of a job that has not ended. */
@@ -196,9 +209,10 @@ export async function readJobs(db: Kysely<Database>, ids: readonly JobId[]): Pro
       blockedByOf({
         status: eb.ref("j.status"),
         placedAt: eb.ref("j.placedAt"),
-        batchId: eb.ref("j.batchId"),
+        batchRowId: eb.ref("j.batchRowId"),
         inCanary: eb.ref("j.inCanary"),
       }).as("blockedBy"),
+      batchIdOf(eb.ref("j.batchRowId")).as("batchId"),
     ])
     .where("j.id", "=", (eb) => eb.fn.any(eb.val([...ids])))
     .execute();
@@ -501,9 +515,9 @@ function decide(control: Control, job: ControlledJob, now: Date, given: GivenLim
 async function lockBatchOfJob(trx: Transaction<Database>, jobId: JobId) {
   await trx
     .selectFrom("batch")
-    .select("batch.id")
-    .where("batch.id", "=", (eb) =>
-      eb.selectFrom("job").select("job.batchId").where("job.id", "=", jobId),
+    .select("batch.rowId")
+    .where("batch.rowId", "=", (eb) =>
+      eb.selectFrom("job").select("job.batchRowId").where("job.id", "=", jobId),
     )
     .forUpdate()
     .execute();
@@ -536,9 +550,11 @@ export function controlJob(jobId: JobId, control: Control, given: GivenLimits = 
             blockedByOf({
               status: eb.ref("job.status"),
               placedAt: eb.ref("job.placedAt"),
-              batchId: eb.ref("job.batchId"),
+              batchRowId: eb.ref("job.batchRowId"),
               inCanary: eb.ref("job.inCanary"),
             }).as("blockedBy"),
+            batchIdOf(eb.ref("job.batchRowId")).as("batchId"),
+            "job.batchRowId",
             "job.runnerId",
             "job.placedAt",
             // The Runner's row is locked, so a removal of the Runner waits for this control and then
@@ -586,8 +602,8 @@ export function controlJob(jobId: JobId, control: Control, given: GivenLimits = 
               .exists(
                 eb
                   .selectFrom("batch")
-                  .select("batch.id")
-                  .whereRef("batch.id", "=", "job.batchId")
+                  .select("batch.rowId")
+                  .whereRef("batch.rowId", "=", "job.batchRowId")
                   .where("batch.cancelledAt", "is not", null),
               )
               .$castTo<boolean>()
@@ -599,7 +615,12 @@ export function controlJob(jobId: JobId, control: Control, given: GivenLimits = 
         if (!job) return undefined;
         const decision = decide(control, job, now, given);
         if (decision.kind !== "changed") {
-          const shown = Struct.pick(job, [...JOB_COLUMNS, ...PROGRESS_COLUMNS, "blockedBy"]);
+          const shown = Struct.pick(job, [
+            ...JOB_COLUMNS,
+            ...PROGRESS_COLUMNS,
+            "batchId",
+            "blockedBy",
+          ]);
           return { decision, job: toApiJob(shown) };
         }
         // The job as the control left it; a control changes nothing of its progress.
@@ -612,14 +633,15 @@ export function controlJob(jobId: JobId, control: Control, given: GivenLimits = 
             blockedByOf({
               status: eb.ref("job.status"),
               placedAt: eb.ref("job.placedAt"),
-              batchId: eb.ref("job.batchId"),
+              batchRowId: eb.ref("job.batchRowId"),
               inCanary: eb.ref("job.inCanary"),
             }).as("blockedBy"),
+            batchIdOf(eb.ref("job.batchRowId")).as("batchId"),
           ])
           .executeTakeFirstOrThrow();
         if (FINAL_STATUSES.includes(changed.status)) await recordUsageOfEnd(trx, jobId);
         if (control === "resume" && job.status === "failed") {
-          await withdrawCountedFailure(trx, job.batchId, jobId);
+          await withdrawCountedFailure(trx, job.batchRowId, jobId);
         }
         return {
           decision,
@@ -653,21 +675,25 @@ export function controlJob(jobId: JobId, control: Control, given: GivenLimits = 
 
 /**
  * Withdraws, in the transaction `trx` that resumes the failed job `jobId`, its failure from the
- * breaker's counts of its Batch `batchId`, locked first, if they counted it: if its failure's Usage
+ * breaker's counts of its Batch's row `batchRowId`, locked first, if they counted it: if its failure's Usage
  * record, its latest, came after its Batch's current Canary began. The breaker counts a job once,
  * by its latest end, as a resumed job's next end is evidence about that job, not about the content
  * the jobs share. A failure the breaker did not count, as one before the Canary began, is left.
  * The record's ID orders it against the Canary's start, which the hub records under the Batch's
  * lock; the job's `endedAt` would not, as a Runner's clock gives it.
  */
-async function withdrawCountedFailure(trx: Transaction<Database>, batchId: BatchId, jobId: JobId) {
+async function withdrawCountedFailure(
+  trx: Transaction<Database>,
+  batchRowId: BatchRowId,
+  jobId: JobId,
+) {
   await trx
     .updateTable("batch as b")
     .set((eb) => ({
       countedEnds: eb("b.countedEnds", "-", eb.lit(1)),
       countedFailures: eb("b.countedFailures", "-", eb.lit(1)),
     }))
-    .where("b.id", "=", batchId)
+    .where("b.rowId", "=", batchRowId)
     .where("b.canary", "is not", null)
     .where("b.countedAfterUsageRecordId", "<", (eb) =>
       eb
@@ -1084,7 +1110,7 @@ async function readDeletedJob(db: Kysely<Database>, jobId: JobId): Promise<Job |
 export interface JobListQuery {
   statuses: readonly JobStatus[];
   labels?: Labels;
-  batchId?: BatchId;
+  batchId?: string;
   customId?: string;
   after?: JobId;
   limit: number;
@@ -1108,9 +1134,10 @@ export function listJobs(query: JobListQuery) {
           blockedByOf({
             status: eb.ref("j.status"),
             placedAt: eb.ref("j.placedAt"),
-            batchId: eb.ref("j.batchId"),
+            batchRowId: eb.ref("j.batchRowId"),
             inCanary: eb.ref("j.inCanary"),
           }).as("blockedBy"),
+          batchIdOf(eb.ref("j.batchRowId")).as("batchId"),
         ]);
       if (statuses.length > 0) {
         selection = selection.where("j.status", "=", (eb) => eb.fn.any(eb.val([...statuses])));
@@ -1120,7 +1147,11 @@ export function listJobs(query: JobListQuery) {
           eb("j.labels", "@>", eb.cast<Labels>(eb.val(JSON.stringify(labels)), "jsonb")),
         );
       }
-      if (batchId !== undefined) selection = selection.where("j.batchId", "=", batchId);
+      if (batchId !== undefined) {
+        selection = selection.where("j.batchRowId", "=", (eb) =>
+          eb.selectFrom("batch").select("batch.rowId").where("batch.id", "=", batchId),
+        );
+      }
       if (customId !== undefined) selection = selection.where("j.customId", "=", customId);
       if (after !== undefined) selection = selection.where("j.id", "<", after);
       const rows = await selection
@@ -1151,7 +1182,6 @@ const LISTED_JOB_COLUMNS = [
   "failureReason",
   "pendingControl",
   "pendingControlRequestedAt",
-  "batchId",
   "customId",
   "labels",
 ] as const satisfies readonly (typeof JOB_COLUMNS)[number][];

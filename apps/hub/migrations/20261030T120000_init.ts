@@ -164,16 +164,18 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   // and Canary. Its jobs' counts by status and their cost are read from the jobs themselves.
   await schema
     .createTable("batch")
-    .addColumn("id", "uuid", (col) => col.primaryKey())
+    // The hub's own key for the row, a UUIDv7, which other tables refer to and locks are ordered by;
+    // the API never shows it (ADR 0036).
+    .addColumn("rowId", "uuid", (col) => col.primaryKey())
     .addColumn("organizationId", "text", (col) =>
       col.notNull().references("organization.id").onDelete("cascade"),
     )
-    // The caller's own ID for the Batch, unique in the Organization; null when its creation gave
-    // none, which the unique constraint below ignores.
-    .addColumn("customId", "text")
-    // SHA-256 of the creation's RFC 8785 canonical JSON without the custom ID, in hex, which a
-    // creation naming the same custom ID compares; null when there is none to compare under.
-    .addColumn("contentHash", "text")
+    // The Batch's ID in the API, unique in the Organization: the one its creation gave, or a UUIDv4
+    // the hub made.
+    .addColumn("id", "text", (col) => col.notNull())
+    // SHA-256 of the creation's RFC 8785 canonical JSON without the ID, in hex, which a creation
+    // naming the same ID compares.
+    .addColumn("contentHash", "text", (col) => col.notNull())
     // The agent every job of the Batch runs, as the creation gave it, with the hub's default for
     // each limit it left out. Its Input files are `batchInputFile`'s.
     // What the agent is told beside the Runner's own instructions; null when the agent has none.
@@ -215,11 +217,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("countedFailures", "integer", (col) => col.notNull().defaultTo(0))
     // The places of its current Canary that no job has taken yet, which the jobs added next take.
     .addColumn("canaryPlacesLeft", "integer", (col) => col.notNull().defaultTo(0))
-    .addUniqueConstraint("batch_organizationId_customId_key", ["organizationId", "customId"])
-    .addCheckConstraint(
-      "batch_contentHash_check",
-      sql`("customId" is null) = ("contentHash" is null)`,
-    )
+    // The ID first, so a lookup by the ID alone, as each call makes while a deployment serves one
+    // Organization (ADR 0007), uses the constraint's index.
+    .addUniqueConstraint("batch_id_organizationId_key", ["id", "organizationId"])
     .addCheckConstraint(
       "batch_breaker_check",
       sql`(canary is null) = ("maxFailurePercent" is null)`,
@@ -235,13 +235,15 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   // with it; a blob cannot be deleted while a Batch's file refers to it.
   await schema
     .createTable("batchInputFile")
-    .addColumn("batchId", "uuid", (col) => col.notNull().references("batch.id").onDelete("cascade"))
+    .addColumn("batchRowId", "uuid", (col) =>
+      col.notNull().references("batch.rowId").onDelete("cascade"),
+    )
     // The file's path under each of the Batch's jobs' `inputs` folder, relative, with folders.
     .addColumn("path", "text", (col) => col.notNull())
     .addColumn("sha256", "bytea", (col) =>
       col.notNull().references("blob.sha256").onDelete("restrict"),
     )
-    .addPrimaryKeyConstraint("batchInputFile_pkey", ["batchId", "path"])
+    .addPrimaryKeyConstraint("batchInputFile_pkey", ["batchRowId", "path"])
     .execute();
   // For the reference check of deleting a blob, and for finding whether any Batch still uses one.
   await schema
@@ -314,8 +316,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("modelBudgetUsd", "numeric", (col) => col.notNull().check(sql`"modelBudgetUsd" > 0`))
     // The job's Batch. Nothing deletes a Batch yet; the Organization's deletion deletes its Batches
     // and jobs in the same statement, by which point no job refers to a Batch.
-    .addColumn("batchId", "uuid", (col) =>
-      col.notNull().references("batch.id").onDelete("no action"),
+    .addColumn("batchRowId", "uuid", (col) =>
+      col.notNull().references("batch.rowId").onDelete("no action"),
     )
     // Whether the job is in its Batch's current Canary, which runs before the rest are released.
     .addColumn("inCanary", "boolean", (col) => col.notNull().defaultTo(false))
@@ -331,7 +333,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     )
     // Adds to a Batch take its lock, so each finds the jobs those before it made; the constraint
     // backs that up.
-    .addUniqueConstraint("job_batchId_customId_key", ["batchId", "customId"])
+    .addUniqueConstraint("job_batchRowId_customId_key", ["batchRowId", "customId"])
     // A placement is sent to a Runner, so a job sent has one; a resumed job has its Runner, the one
     // holding its journal, before it is sent.
     .addCheckConstraint("job_placedAt_check", sql`"placedAt" is null or "runnerId" is not null`)
@@ -374,13 +376,17 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .execute();
   // A Batch's summary and its controls read its unfinished jobs; placement, its unfinished Canary.
   await schema
-    .createIndex("job_batchId_unfinished_idx")
+    .createIndex("job_batchRowId_unfinished_idx")
     .on("job")
-    .columns(["batchId", "inCanary"])
+    .columns(["batchRowId", "inCanary"])
     .where(sql.ref("status"), "in", ["queued", "running", "paused"])
     .execute();
   // Listing a Batch's jobs, newest first.
-  await schema.createIndex("job_batchId_id_idx").on("job").columns(["batchId", "id"]).execute();
+  await schema
+    .createIndex("job_batchRowId_id_idx")
+    .on("job")
+    .columns(["batchRowId", "id"])
+    .execute();
 
   // A job's own Input files.
   await schema
@@ -494,7 +500,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("hostDeletionOutcomeAt", "timestamptz")
     // The job's Batch and labels as it ended, to group cost by after the job is deleted. The Batch
     // is copied rather than referenced, as the Runner is.
-    .addColumn("batchId", "uuid", (col) => col.notNull())
+    .addColumn("batchRowId", "uuid", (col) => col.notNull())
     .addColumn("labels", "jsonb", (col) => col.notNull())
     .addForeignKeyConstraint(
       "usageRecord_organizationId_fkey",

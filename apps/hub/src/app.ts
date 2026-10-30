@@ -44,15 +44,7 @@ import {
 import { API_KEY_CONFIG, GRANTABLE_KEY_PERMISSIONS } from "./auth/options.ts";
 import { addJobs, cancelBatch, createBatch, getBatch, controlBatch } from "./batches.ts";
 import { checkBlobs, uploadBlob } from "./blobs.ts";
-import {
-  ApikeyId,
-  BatchId,
-  EventId,
-  InputFilePath,
-  JobId,
-  RunnerId,
-  UploadChunkIndex,
-} from "./db/types.ts";
+import { ApikeyId, EventId, InputFilePath, JobId, RunnerId, UploadChunkIndex } from "./db/types.ts";
 import { readInputFileChunk } from "./input-files.ts";
 import {
   type Control,
@@ -244,8 +236,7 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
       }),
       addJobs: os.batches.addJobs.effect(function* ({ input, context, errors }) {
         const key = yield* callerKey(context.caller);
-        // The ID enters the hub here.
-        const added = yield* addJobs(BatchId(input.id), input.jobs, submitterOf(key)).pipe(
+        const added = yield* addJobs(input.id, input.jobs, submitterOf(key)).pipe(
           Effect.catchTag("InvalidInput", ({ problems }) =>
             Effect.fail(invalidInput(errors, input, problems)),
           ),
@@ -254,22 +245,18 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
         return added;
       }),
       get: os.batches.get.effect(function* ({ input }) {
-        // The ID enters the hub here.
-        return yield* getBatch(BatchId(input.id));
+        return yield* getBatch(input.id);
       }),
       pause: os.batches.pause.effect(function* ({ input }) {
-        // The ID enters the hub here.
-        return (yield* controlBatch(BatchId(input.id), "pause")).batch;
+        return (yield* controlBatch(input.id, "pause")).batch;
       }),
       resume: os.batches.resume.effect(function* ({ input }) {
-        // The ID enters the hub here.
-        const { batch, hints } = yield* controlBatch(BatchId(input.id), "resume");
+        const { batch, hints } = yield* controlBatch(input.id, "resume");
         yield* Effect.forEach(hints, hintRunners, { discard: true });
         return batch;
       }),
       cancel: os.batches.cancel.effect(function* ({ input }) {
-        // The ID enters the hub here.
-        const { batch, hints } = yield* cancelBatch(BatchId(input.id));
+        const { batch, hints } = yield* cancelBatch(input.id);
         yield* Effect.forEach(hints, hintRunners, { discard: true });
         return batch;
       }),
@@ -280,7 +267,7 @@ const router = implement<typeof hubContract, ApiContext>(hubContract)
         return yield* listJobs({
           statuses: input.status ?? [],
           labels: input.labels,
-          batchId: input.batchId === undefined ? undefined : BatchId(input.batchId),
+          batchId: input.batchId,
           customId: input.customId,
           after: input.after === undefined ? undefined : JobId(input.after),
           limit: input.limit,

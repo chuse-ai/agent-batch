@@ -55,16 +55,32 @@ async function post(path: string, body: unknown) {
   });
 }
 
-test("a custom ID used again with the same content returns what it named, and with other content is refused", async () => {
+test("an ID used again with the same content returns what it named, and with other content is refused", async () => {
   const client = await system.clientWithNewJobsKey();
-  const creation = { customId: "invoices-2026-10", agent: AGENT, breaker: false } as const;
+  const creation = { id: "invoices-2026-10", agent: AGENT, breaker: false } as const;
   const batch = await client.batches.create(creation);
-  expect(batch).toMatchObject({ customId: "invoices-2026-10", status: "active", breaker: false });
+  expect(batch).toMatchObject({ id: "invoices-2026-10", status: "active", breaker: false });
   // The script runs again, from the start: the same Batch.
   expect((await client.batches.create(creation)).id).toBe(batch.id);
   await expect(client.batches.create({ ...creation, breaker: true })).rejects.toMatchObject({
     code: "UNPROCESSABLE_CONTENT",
   });
+  // An ID differing only in case names another Batch.
+  expect((await client.batches.create({ ...creation, id: "Invoices-2026-10" })).id).toBe(
+    "Invoices-2026-10",
+  );
+  // Without one, the hub makes a UUID.
+  expect((await client.batches.create({ agent: AGENT })).id).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+  // An ID outside the syntax is refused, given to create a Batch or to name one.
+  for (const id of ["-invoices", "invoices 2026", "x".repeat(101), ""]) {
+    expect((await post("/batches", { id, agent: AGENT })).status).toBe(400);
+  }
+  const named = await system.hub.fetch("/batches/invoices.2026", {
+    headers: { "x-api-key": await system.newJobsKey() },
+  });
+  expect(named.status).toBe(400);
 
   const first = await client.batches.addJobs({
     id: batch.id,

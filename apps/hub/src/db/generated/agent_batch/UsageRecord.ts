@@ -6,7 +6,7 @@ import type { Brand } from "effect";
 import type { ColumnType, Selectable, Insertable, Updateable } from "kysely";
 
 import type { ApikeyId } from "./Apikey.js";
-import type { BatchId } from "./Batch.js";
+import type { BatchRowId } from "./Batch.js";
 import type { default as HostDeletionOutcome } from "./HostDeletionOutcome.js";
 import type { JobId } from "./Job.js";
 import type { default as JobFailureReason } from "./JobFailureReason.js";
@@ -66,7 +66,7 @@ export default interface UsageRecordTable {
 
   hostDeletionOutcomeAt: ColumnType<Date | null, Date | string | null, Date | string | null>;
 
-  batchId: ColumnType<BatchId, BatchId, BatchId>;
+  batchRowId: ColumnType<BatchRowId, BatchRowId, BatchRowId>;
 
   labels: ColumnType<Labels, Labels, Labels>;
 }

@@ -3,7 +3,7 @@
 import { Brand } from "effect";
 
 import type { ApikeyId as ApikeyIdType } from "./generated/agent_batch/Apikey.ts";
-import type { BatchId as BatchIdType } from "./generated/agent_batch/Batch.ts";
+import type { BatchRowId as BatchRowIdType } from "./generated/agent_batch/Batch.ts";
 import type { BlobSha256 as BlobSha256Type } from "./generated/agent_batch/Blob.ts";
 import type { InputFilePath as InputFilePathType } from "./generated/agent_batch/InputFile.ts";
 import type { JobId as JobIdType } from "./generated/agent_batch/Job.ts";
@@ -33,8 +33,8 @@ export type { NewUploadChunk } from "./generated/agent_batch/UploadChunk.ts";
 // constructor checks its value yet; `Brand.make` can, once an ID has a format worth checking.
 export type JobId = JobIdType;
 export const JobId = Brand.nominal<JobId>();
-export type BatchId = BatchIdType;
-export const BatchId = Brand.nominal<BatchId>();
+export type BatchRowId = BatchRowIdType;
+export const BatchRowId = Brand.nominal<BatchRowId>();
 export type RunnerId = RunnerIdType;
 export const RunnerId = Brand.nominal<RunnerId>();
 export type ApikeyId = ApikeyIdType;

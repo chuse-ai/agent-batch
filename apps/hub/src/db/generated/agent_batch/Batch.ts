@@ -11,17 +11,17 @@ import type { MemberId } from "./Member.js";
 import type { OrganizationId } from "./Organization.js";
 
 /** Identifier type for agent_batch.batch */
-export type BatchId = Brand.Branded<string, "agent_batch.batch">;
+export type BatchRowId = Brand.Branded<string, "agent_batch.batch">;
 
 /** Represents the table agent_batch.batch */
 export default interface BatchTable {
-  id: ColumnType<BatchId, BatchId, BatchId>;
+  rowId: ColumnType<BatchRowId, BatchRowId, BatchRowId>;
 
   organizationId: ColumnType<OrganizationId, OrganizationId, OrganizationId>;
 
-  customId: ColumnType<string | null, string | null, string | null>;
+  id: ColumnType<string, string, string>;
 
-  contentHash: ColumnType<string | null, string | null, string | null>;
+  contentHash: ColumnType<string, string, string>;
 
   instructions: ColumnType<string | null, string | null, string | null>;
 

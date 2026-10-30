@@ -158,7 +158,7 @@ export function readInputFileChunk(
                 eb
                   .selectFrom("batchInputFile")
                   .select("batchInputFile.sha256")
-                  .whereRef("batchInputFile.batchId", "=", "job.batchId")
+                  .whereRef("batchInputFile.batchRowId", "=", "job.batchRowId")
                   .where("batchInputFile.path", "=", path),
               )
               .as("file"),
