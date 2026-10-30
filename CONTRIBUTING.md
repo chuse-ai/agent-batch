@@ -8,6 +8,7 @@ Issues are welcome: a bug report with the steps that reproduce it, or a request 
 
 The repository is a pnpm workspace run with Vite+ (`vp`). From a clone:
 
+- `vp install` installs the dependencies.
 - `vp run ready` checks everything is ready.
 - `vp run -r test` runs the tests.
 - `vp run -r build` builds the monorepo.

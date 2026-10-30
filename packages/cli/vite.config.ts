@@ -17,8 +17,9 @@ const UNUSED_PEERS = ["@trpc/server", "valibot", "@valibot/to-json-schema"];
 export default defineConfig({
   run: {
     tasks: {
-      // The build writes README.md, the copy below, which Vite Task also sees it read, so it would
-      // never cache the build; README.md stays an output, restored on a cache hit.
+      // Vite Task does not cache a task that reads a file it also writes, as the copy below does
+      // with README.md, so README.md is left out of the inputs; it stays an output, which a cache
+      // hit puts back.
       build: { command: "vp pack", cache: { input: [{ auto: true }, "!README.md"] } },
     },
   },
