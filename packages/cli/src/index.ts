@@ -32,6 +32,7 @@ import {
 } from "contract";
 import {
   Array,
+  ByteSize,
   Config,
   Duration,
   Effect,
@@ -396,17 +397,13 @@ function createBatchCommand() {
 }
 
 /**
- * How long a wait waits between reads: longer while it waits, from a second up to half a minute.
- * Jittered after the cap, so the reads of many callers stay spread: 20 to 30 s at most.
+ * How long a wait waits between reads: the first read is at once, then one every 10 seconds, as
+ * OpenAI's CLI waits for a batch.
  */
-const pollSchedule = Schedule.min([
-  Schedule.exponential("1 second"),
-  Schedule.spaced("25 seconds"),
-]).pipe(Schedule.jittered);
+const pollSchedule = Schedule.spaced("10 seconds");
 
 /**
- * `jobs wait`: reads the job until its status is final, waiting longer while nothing changes, from
- * a second up to half a minute; prints it, and exits non-zero unless it succeeded, as `gh run watch
+ * `jobs wait`: reads the job until its status is final, every 10 seconds; prints it, and exits non-zero unless it succeeded, as `gh run watch
  * --exit-status` does. Stopping the command leaves the job running.
  */
 function waitCommand() {
@@ -562,11 +559,6 @@ function digestOf(file: string) {
  */
 const AT_ONCE = 5;
 
-/** `bytes` in MiB, to a tenth. */
-function mib(bytes: number) {
-  return (bytes / 1024 / 1024).toFixed(1);
-}
-
 /** A file of a job with the digest of its content. */
 type HashedFile = LocalFile & { digest: string };
 
@@ -628,10 +620,12 @@ function uploadMissing(client: ApiClient, files: readonly HashedFile[]) {
     const total = missing.reduce((sum, { sizeBytes }) => sum + sizeBytes, 0);
     let done = 0;
     let doneBytes = 0;
+    // Sizes in MiB to a tenth, such as `5.0 MiB`.
+    const inMib: ByteSize.FormatOptions = { unit: "MiB", precision: 1, trailingZeros: true };
     const show = onTerminal
       ? Effect.sync(() =>
           logUpdateStderr(
-            `Uploaded ${done} of ${missing.length} files, ${mib(doneBytes)} of ${mib(total)} MiB`,
+            `Uploaded ${done} of ${missing.length} files, ${ByteSize.format(ByteSize.bytes(doneBytes), inMib)} of ${ByteSize.format(ByteSize.bytes(total), inMib)}`,
           ),
         )
       : Effect.void;

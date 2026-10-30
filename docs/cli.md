@@ -31,7 +31,7 @@ agent-batch jobs --help
   - It adds the jobs in their order, at most 100 at a time, so the first are the Canary, retrying as `batches create` does under `--custom-id` or one it makes and prints; running the same command again with that ID adds only the jobs the Batch lacks. It prints the Batch.
   - With `--wait`, it waits until no job is queued, running or paused, then prints one JSON line per job, in order: `{"customId", "status", "output"}`, `"failure"` in place of `"output"` for a failed job, and neither for a job cancelled or not ended. It exits with 0 when every job succeeded; 1 when one did not, when the Batch was cancelled, or when its failure breaker paused it, which ends the wait and says how to resume; and 124 when `--wait-timeout` seconds pass. Ctrl-C stops waiting, exits with 130 and leaves the Batch running.
   - Progress, of uploads and of the wait, goes to stderr, only when it is a terminal.
-- `jobs wait` reads the job until it ends, waiting longer between reads, up to half a minute; a read that got no answer or a server error is retried as a submission is, and an error that remains ends the wait. It prints the job and exits with 1 unless it succeeded. A paused job keeps it waiting, as its work is still owed, until the job is resumed and ends or is cancelled. Stopping it leaves the job running.
+- `jobs wait` reads the job until it ends, every 10 seconds; a read that got no answer or a server error is retried as a submission is, and an error that remains ends the wait. It prints the job and exits with 1 unless it succeeded. A paused job keeps it waiting, as its work is still owed, until the job is resumed and ends or is cancelled. Stopping it leaves the job running.
 
 ## A hub and a Runner on this machine
 

@@ -113,6 +113,7 @@ const listInputs: FauxResponseFactory = ({ messages }) =>
         command: `cd inputs && find . -type f | sort | while read -r f; do printf '%s=%s;' "$f" "$(cat "$f")"; done`,
       });
 
+// `--wait` reads every 10 seconds, so the jobs, still running at the first read, end by the second.
 test("batches submit --each uploads each file and folder as a job's Input files, and --wait prints their outputs in order", async () => {
   system.model.setResponses([listInputs, listInputs, listInputs, listInputs]);
   const dir = await mkdtemp(path.join(tmpdir(), "agent-batch-cli-"));
@@ -150,4 +151,4 @@ test("batches submit --each uploads each file and folder as a job's Input files,
       output: expect.stringMatching(/^\.\/form\.txt=form;\.\/photos\/front\.txt=front;\s*$/),
     },
   ]);
-});
+}, 30_000);
