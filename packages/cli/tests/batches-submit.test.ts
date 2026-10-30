@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { RequestListener, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
@@ -9,9 +8,7 @@ import { buffer } from "node:stream/consumers";
 import { expect, onTestFinished, test } from "vite-plus/test";
 import * as z from "zod/mini";
 
-import { runCommand } from "./run-command.ts";
-
-const BIN = path.join(import.meta.dirname, "../src/bin.ts");
+import { runCli } from "./run-cli.ts";
 
 const addSchema = z.object({
   jobs: z.array(
@@ -79,9 +76,10 @@ function jobOf(id: string, customId: string, status: Record<string, unknown>) {
  * A hub answering `batches submit`: it holds the Blobs with the digests in `stored` and those
  * uploaded to it, keeps each upload's bytes and each add's jobs, creates one Batch, and answers
  * each job's read with `ended(customId)`, or with 503 when `jobsUnreadable`, every job having ended
- * by the first read of the Batch, which it never answers when `stalled`.
+ * by the first read of the Batch, which it never answers when `stalled`. `batchRead` resolves on
+ * that first read.
  */
-async function fakeHub(
+function fakeHub(
   ended: (customId: string) => Record<string, unknown>,
   { stalled = false, jobsUnreadable = false, stored = [] as string[] } = {},
 ) {
@@ -90,7 +88,8 @@ async function fakeHub(
   const uploads: { digest: string; bytes: Uint8Array }[] = [];
   const adds: AddedJob[][] = [];
   const ids = new Map<string, string>();
-  const hub = createServer(async (request: IncomingMessage, response) => {
+  const { promise: batchRead, resolve: readBatch } = Promise.withResolvers<void>();
+  const listener: RequestListener = async (request, response) => {
     const body = await buffer(request);
     const json = (): unknown => JSON.parse(body.toString());
     if (request.method === "POST" && request.url === "/blobs/check") {
@@ -128,6 +127,7 @@ async function fakeHub(
       });
     }
     if (request.method === "GET" && request.url === `/batches/${batchId}`) {
+      readBatch();
       if (stalled) return;
       const counts: Record<string, number> = {};
       for (const each of ids.values()) {
@@ -143,16 +143,8 @@ async function fakeHub(
       return answer(response, jobOf(jobId, customId, ended(customId)));
     }
     response.writeHead(404).end();
-  });
-  hub.on("error", () => {});
-  onTestFinished(() => {
-    hub.closeAllConnections();
-    hub.close();
-  });
-  hub.listen(0, "127.0.0.1");
-  await once(hub, "listening");
-  const { port } = z.parse(z.object({ port: z.int() }), hub.address());
-  return { url: `http://127.0.0.1:${port}`, uploads, adds };
+  };
+  return { listener, uploads, adds, batchRead };
 }
 
 /** A new folder holding `files`, by path, and an Output schema. */
@@ -166,12 +158,17 @@ async function folderWith(files: Record<string, string | Uint8Array>) {
   return root;
 }
 
-function submit(url: string, cwd: string, args: readonly string[]) {
-  return runCommand(
-    process.execPath,
-    [BIN, "batches", "submit", ...args, "--output-schema", "schema.json"],
-    { cwd, env: { AGENT_BATCH_URL: url, AGENT_BATCH_API_KEY: "key" }, extendEnv: true },
-  );
+function submit(
+  hub: RequestListener,
+  cwd: string,
+  args: readonly string[],
+  clockFrom?: Promise<unknown>,
+) {
+  return runCli(["batches", "submit", ...args, "--output-schema", "schema.json"], {
+    hub,
+    cwd,
+    clockFrom,
+  });
 }
 
 test("batches submit --each makes a job of each file and folder, named by its path, and uploads only the Blobs the hub lacks, each once", async () => {
@@ -186,11 +183,11 @@ test("batches submit --each makes a job of each file and folder, named by its pa
     "claim/.git/HEAD": "hidden",
     ".env": "hidden",
   });
-  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }), {
+  const hub = fakeHub(() => ({ status: "succeeded", output: {} }), {
     stored: [digestOf("held")],
   });
 
-  const { exitCode } = await submit(hub.url, cwd, [
+  const { exitCode } = await submit(hub.listener, cwd, [
     "--each",
     "./invoices/a.pdf",
     "invoices/b.pdf",
@@ -235,9 +232,9 @@ test("batches submit adds the jobs of a JSONL file in its order, at most 100 at 
     JSON.stringify({ customId: `posting-${index}`, input: `Posting ${index}.` }),
   );
   const cwd = await folderWith({ "jobs.jsonl": `${lines.join("\n")}\n` });
-  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
+  const hub = fakeHub(() => ({ status: "succeeded", output: {} }));
 
-  const { exitCode } = await submit(hub.url, cwd, ["jobs.jsonl"]);
+  const { exitCode } = await submit(hub.listener, cwd, ["jobs.jsonl"]);
 
   expect(exitCode).toBe(0);
   expect(hub.adds.map((jobs) => jobs.length)).toEqual([100, 1]);
@@ -253,9 +250,9 @@ test.skipIf(process.getuid?.() === 0)(
     const cwd = await folderWith({ "claim/form.txt": "form", "claim/2024/scan.txt": "scan" });
     const locked = path.join(cwd, "claim/2024");
     await chmod(locked, 0o000);
-    const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
+    const hub = fakeHub(() => ({ status: "succeeded", output: {} }));
 
-    const refused = await submit(hub.url, cwd, ["--each", "claim"]).finally(() =>
+    const refused = await submit(hub.listener, cwd, ["--each", "claim"]).finally(() =>
       chmod(locked, 0o755),
     );
 
@@ -269,11 +266,11 @@ test.skipIf(process.getuid?.() === 0)(
 
 test("batches submit run again with its --custom-id sends the same jobs, so the hub adds only those it lacks", async () => {
   const cwd = await folderWith({ "a.pdf": "a", "claim/form.txt": "form" });
-  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
+  const hub = fakeHub(() => ({ status: "succeeded", output: {} }));
   const args = ["--each", "a.pdf", "claim", "--custom-id", "march"];
 
-  expect((await submit(hub.url, cwd, args)).exitCode).toBe(0);
-  expect((await submit(hub.url, cwd, args)).exitCode).toBe(0);
+  expect((await submit(hub.listener, cwd, args)).exitCode).toBe(0);
+  expect((await submit(hub.listener, cwd, args)).exitCode).toBe(0);
 
   expect(hub.adds).toHaveLength(2);
   expect(hub.adds[1]).toEqual(hub.adds[0]);
@@ -282,14 +279,14 @@ test("batches submit run again with its --custom-id sends the same jobs, so the 
 test("batches submit --wait --output-dir saves each job's line in order, those that succeeded apart from the rest, prints the Batch and exits 1 when one failed", async () => {
   const cwd = await folderWith({ "a.pdf": "a", "b.pdf": "b", "c.pdf": "c" });
   const failure = { reason: "noOutput", message: "The agent stopped without an output" };
-  const hub = await fakeHub((customId) =>
+  const hub = fakeHub((customId) =>
     customId === "b.pdf"
       ? { status: "failed", failure }
       : { status: "succeeded", output: { total: customId } },
   );
   const args = ["--each", "a.pdf", "b.pdf", "c.pdf", "--wait", "--output-dir", "outputs"];
 
-  const { exitCode, stdout } = await submit(hub.url, cwd, args);
+  const { exitCode, stdout } = await submit(hub.listener, cwd, args);
 
   expect(exitCode).toBe(1);
   expect(JSON.parse(stdout)).toMatchObject({ jobCounts: { succeeded: 2, failed: 1 } });
@@ -307,9 +304,9 @@ test("batches submit --wait --output-dir saves each job's line in order, those t
 
 test("batches submit --wait --output-dir prints the Batch even when its jobs' lines cannot be saved, and exits 1", async () => {
   const cwd = await folderWith({ "a.pdf": "a" });
-  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }), { jobsUnreadable: true });
+  const hub = fakeHub(() => ({ status: "succeeded", output: {} }), { jobsUnreadable: true });
 
-  const { exitCode, stdout } = await submit(hub.url, cwd, [
+  const { exitCode, stdout } = await submit(hub.listener, cwd, [
     "--each",
     "a.pdf",
     "--wait",
@@ -323,9 +320,9 @@ test("batches submit --wait --output-dir prints the Batch even when its jobs' li
 
 test("batches submit --output-dir refuses a folder already holding a result file before sending anything", async () => {
   const cwd = await folderWith({ "a.pdf": "a", "outputs/error.jsonl": "" });
-  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
+  const hub = fakeHub(() => ({ status: "succeeded", output: {} }));
 
-  const refused = await submit(hub.url, cwd, [
+  const refused = await submit(hub.listener, cwd, [
     "--each",
     "a.pdf",
     "--wait",
@@ -343,15 +340,15 @@ test("batches submit --output-dir refuses a folder already holding a result file
 
 test("batches submit --wait-timeout ends the command when it passes, with 124, even while a read hangs", async () => {
   const cwd = await folderWith({ "a.pdf": "a" });
-  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }), { stalled: true });
+  const hub = fakeHub(() => ({ status: "succeeded", output: {} }), { stalled: true });
 
-  const { exitCode, stderr } = await submit(hub.url, cwd, [
-    "--each",
-    "a.pdf",
-    "--wait",
-    "--wait-timeout",
-    "1s",
-  ]);
+  // The clock runs once the Batch's read hangs.
+  const { exitCode, stderr } = await submit(
+    hub.listener,
+    cwd,
+    ["--each", "a.pdf", "--wait", "--wait-timeout", "1s"],
+    hub.batchRead,
+  );
 
   expect(exitCode).toBe(124);
   expect(stderr).toContain("Stopped waiting after 1s; the Batch carries on.");
@@ -362,9 +359,9 @@ test("batches submit --wait-timeout ends the command when it passes, with 124, e
 // waiting a thousandth as long.
 test("batches submit refuses a --wait-timeout without a unit before sending anything", async () => {
   const cwd = await folderWith({ "a.pdf": "a" });
-  const hub = await fakeHub(() => ({ status: "succeeded", output: {} }));
+  const hub = fakeHub(() => ({ status: "succeeded", output: {} }));
 
-  const refused = await submit(hub.url, cwd, [
+  const refused = await submit(hub.listener, cwd, [
     "--each",
     "a.pdf",
     "--wait",
