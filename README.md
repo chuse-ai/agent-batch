@@ -11,10 +11,10 @@ agent-batch runs real agents on unattended jobs. Give it one agent definition an
 Given a folder of invoices and a JSON Schema for what you want from each, one line runs them all:
 
 ```sh
-npx agent-batch batches submit --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait --output-dir ./outputs
+npx agent-batch batches submit --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait --output-dir ./results
 ```
 
-Each PDF is a job. Each line of `outputs/output.jsonl` is one invoice's JSON, and each line of `outputs/error.jsonl` one that failed, with why.
+Each PDF is a job. Each line of `results/output.jsonl` is one invoice's JSON, and each line of `results/error.jsonl` one that failed, with why.
 
 It does this without giving every job its own sandbox, so you don't pay for agents to wait on the model. Four hundred jobs in their own 1 GB sandboxes hold 400 GB of memory; on one Runner, for jobs that mostly wait on the model, they fit in a 4 GB server.
 
@@ -123,12 +123,12 @@ cat > postings.jsonl <<'EOF'
 {"customId": "posting-0001", "input": "Software Engineer II, Example Corp\nYou will own the billing service end to end and mentor two engineers. Required: 5+ years TypeScript, Postgres. Nice: Effect, Cloudflare Workers.\n"}
 {"customId": "posting-0002", "input": "Junior Developer, Example GmbH\nYou will fix bugs in our Node services with a senior engineer reviewing every change. Required: JavaScript. Nice: Docker.\n"}
 EOF
-BATCH=$(npx agent-batch batches submit postings.jsonl \
+npx agent-batch batches submit postings.jsonl --id postings \
   --instructions "The input is a job posting. Submit the requirements it treats as mandatory, the ones it treats as optional, and the seniority it is really asking for, judged from the responsibilities rather than the title." \
-  --output-schema postings.schema.json --wait --output-dir ./results | jq -r .id)
+  --output-schema postings.schema.json --wait --output-dir ./results
 ```
 
-Once every job has ended, the command prints the Batch, whose ID the commands below take, and saves one line per job, in the file's order: in `results/output.jsonl` the output of each that succeeded, already checked against the schema, and in `results/error.jsonl` the `failure` of each that did not, exiting 1 if any did not. A run's `results/output.jsonl`:
+`--id` names the Batch, which the commands below take. Once every job has ended, the command prints the Batch and saves one line per job, in the file's order: in `results/output.jsonl` the output of each that succeeded, already checked against the schema, and in `results/error.jsonl` the `failure` of each that did not, exiting 1 if any did not. A run's `results/output.jsonl`:
 
 ```json
 {"customId":"posting-0001","status":"succeeded","output":{"mustHave":["5+ years of TypeScript experience","Postgres"],"seniority":"senior","niceToHave":["Effect","Cloudflare Workers"]}}
@@ -145,14 +145,14 @@ Two postings you can watch. Four hundred you count. With four hundred, this happ
 
 1. By default, the first 5 jobs run before the others. This is the Canary. If any fails, the Batch pauses before the rest start, so a prompt that breaks every job is caught after five, not four hundred.
 2. After the Canary, if more than 10% of the jobs that have ended since it began failed, the Batch pauses. This is the failure breaker. It judges from the first jobs to end, so a run of early failures pauses a large Batch quickly.
-3. `batches resume --id "$BATCH"` carries on where it stopped; `batches pause`, `cancel` and `get` work the same way, as do single jobs, and ended jobs can be deleted.
+3. `batches resume --id postings` carries on where it stopped; `batches pause`, `cancel` and `get` work the same way, as do single jobs, and ended jobs can be deleted.
 
 The hub records every job's events (what the agent did), activity, usage in tokens and cost, and output. A Batch counts its jobs by status, and jobs can be listed by status, label, Batch and custom ID:
 
 ```sh
-npx agent-batch batches get --id "$BATCH" | jq -c .jobCounts   # {"queued":0,"running":0,...,"succeeded":2,...}
-npx agent-batch jobs list --batch-id "$BATCH" --status failed
-npx agent-batch jobs list --batch-id "$BATCH" --status succeeded   # listed jobs carry no output: read one with jobs get
+npx agent-batch batches get --id postings | jq -c .jobCounts   # {"queued":0,"running":0,...,"succeeded":2,...}
+npx agent-batch jobs list --batch-id postings --status failed
+npx agent-batch jobs list --batch-id postings --status succeeded   # listed jobs carry no output: read one with jobs get
 ```
 
 Jobs can be added continuously (`add-jobs`, `jobs submit`) and read continuously (`jobs wait`, `jobs list`). A job's journal is on disk, so a restarted Runner recovers its jobs where they stopped. A prompt that gives wrong but valid answers passes the Canary. Read some outputs.

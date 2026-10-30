@@ -334,7 +334,7 @@ export function submitterOf(key: { id: string; name: string | null; metadata: un
 }
 
 /**
- * The `content` of a job or a Batch, without the custom ID that names it, as the hex SHA-256 of its
+ * The `content` of a job or a Batch, without the ID that names it, as the hex SHA-256 of its
  * RFC 8785 canonical JSON: the same content always hashes the same, however its JSON was written.
  */
 export function contentHashOf(content: object) {
