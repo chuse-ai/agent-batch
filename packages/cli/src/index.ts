@@ -37,6 +37,7 @@ import {
 import {
   Array,
   ByteSize,
+  Cause,
   Config,
   Duration,
   Effect,
@@ -222,18 +223,30 @@ function givenOrNewId(given: string | undefined) {
 }
 
 /**
- * `work`, which on a failure or an interrupt, such as Ctrl-C, prints `hint` on stderr when the ID
- * the command runs under was made, not given, so the person can run it again under that ID. The
- * made ID is shown only then, not up front, to keep what a run that ends well prints short; a run
- * killed outright never shows it, so running it again makes a new one.
+ * `work`, which on an interrupt, such as Ctrl-C, or a failure that leaves unknown what the hub did,
+ * prints `hint` on stderr when the ID the command runs under was made, not given, so the person can
+ * run it again under that ID. The hub's answer refusing a call is known, and running the command
+ * again as it is would be refused again, so it gets no hint. The made ID is shown only then, not up
+ * front, to keep what a run that ends well prints short; a run killed outright never shows it, so
+ * running it again makes a new one.
  */
 function hintMadeIdOnStop<A, E, R>(
   work: Effect.Effect<A, E, R>,
   { made }: { made: boolean },
   hint: string,
 ) {
+  const refused = (cause: Cause.Cause<E>) =>
+    !Cause.hasInterrupts(cause) &&
+    Option.exists(
+      Cause.findErrorOption(cause),
+      (error) => error instanceof ORPCError && !isTransient(error),
+    );
   return made
-    ? work.pipe(Effect.onError(() => Effect.sync(() => process.stderr.write(`${hint}\n`))))
+    ? work.pipe(
+        Effect.onError((cause) =>
+          refused(cause) ? Effect.void : Effect.sync(() => process.stderr.write(`${hint}\n`)),
+        ),
+      )
     : work;
 }
 

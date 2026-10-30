@@ -15,7 +15,7 @@ The generated ID is a UUIDv4, as AWS Step Functions generates a UUID for an exec
 - A server ID only, as OpenAI's batches: its reasons, one ID scheme across many object types and global uniqueness at scale, hardly hold for a hub scoped to its Organization, and a script retrying a creation would need a key of its own beside the ID.
 - A UUIDv7 as the generated ID: its time order is the row key's job, and an outward ID needs only to be unique.
 - Lowercase, DNS-style IDs, as Kubernetes and Google's AIP-122: further from what callers of AI batch APIs already use. Broad Unicode with a list of forbidden characters, as Step Functions and Temporal: an ID would need escaping in paths.
-- Zod's `base64url` or `nanoid` formats for the syntax: the first adds length rules of its own, the second a fixed length of 21.
+- Zod's `base64url` or `nanoid` formats for the syntax: the first adds length rules of its own, the second a fixed length, 21 by default.
 
 ## Consequences
 
