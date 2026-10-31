@@ -33,7 +33,7 @@ Accuracy measures the model on these tasks, not agent-batch.
 
 ## 500 at once
 
-On 2026-10-29, 500 of workload A's invoices ran on the same server, the model replayed 20 times slower, with the server stripped of its own services and the Runner's process cap lifted.
+On 2026-10-29, 500 of workload A's invoices ran on the same server, the model replayed 20 times slower, with the Runner's process cap lifted.
 
 | Jobs | Runner        | Result                                                  | Server memory at most | CPU at most |
 | ---- | ------------- | ------------------------------------------------------- | --------------------- | ----------- |
