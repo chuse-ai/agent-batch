@@ -6,25 +6,23 @@ import * as z from "zod/mini";
 
 import { runCli } from "./run-cli.ts";
 
-// `jobs submit` creates a Batch of one and adds its job under one custom ID, and retries a call that
-// got no answer with that ID, so the hub accepts the Batch and the job at most once; the hub's own
-// tests check that one custom ID makes one Batch and one job.
+// `jobs submit` creates a Batch of one and adds its job under one ID, and retries a call that got no
+// answer with that ID, so the hub accepts the Batch and the job at most once; the hub's own tests
+// check that one ID makes one Batch and one job.
 
-test("jobs submit retries an add whose connection dropped with the custom ID it printed and created the Batch with", async () => {
-  const batchId = crypto.randomUUID();
-  const created: unknown[] = [];
+test("jobs submit retries an add whose connection dropped with the ID it created the Batch with, and prints the ID once it gives up", async () => {
+  const created: string[] = [];
   const added: unknown[] = [];
   // Answers the Batch's creation, then reads each add and drops its connection without answering.
   const hub: RequestListener = async (request, response) => {
     const body: unknown = JSON.parse(await text(request));
     if (request.url === "/batches") {
-      const { customId } = z.parse(z.object({ customId: z.string() }), body);
-      created.push(customId);
+      const { id } = z.parse(z.object({ id: z.string() }), body);
+      created.push(id);
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
         JSON.stringify({
-          id: batchId,
-          customId,
+          id,
           createdAt: new Date().toISOString(),
           status: "active",
           pausedBy: null,
@@ -36,7 +34,7 @@ test("jobs submit retries an add whose connection dropped with the custom ID it 
       );
       return;
     }
-    expect(request.url).toBe(`/batches/${batchId}/jobs`);
+    expect(request.url).toBe(`/batches/${created[0]}/jobs`);
     const { jobs } = z.parse(z.object({ jobs: z.array(z.object({ customId: z.string() })) }), body);
     added.push(...jobs.map((job) => job.customId));
     request.socket.destroy();
@@ -58,5 +56,5 @@ test("jobs submit retries an add whose connection dropped with the custom ID it 
   expect(added).toHaveLength(3);
   expect(new Set([...created, ...added]).size).toBe(1);
   expect(exitCode).toBe(1);
-  expect(stderr).toContain(`Submitting with custom ID ${String(created[0])}`);
+  expect(stderr).toContain(`The job's custom ID is ${created[0]}`);
 });

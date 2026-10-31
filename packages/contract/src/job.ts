@@ -192,10 +192,26 @@ export const inputSchema = textSchema.check(z.minLength(1));
 export const instructionsSchema = textSchema.check(z.minLength(1));
 
 /**
- * A caller's own ID for a job or a Batch: adding or creating it again with the same content
- * returns the one already accepted, and with other content is refused.
+ * A caller's own ID for a job: adding it again with the same content returns the one already
+ * accepted, and with other content is refused.
  */
 export const customIdSchema = textSchema.check(z.minLength(1), z.maxLength(255));
+
+/**
+ * A Batch's ID, which names it in paths: 1 to 100 letters, digits, `_` and `-`, not beginning with
+ * `-`, all of which a URL path carries as they are. Compared exactly, so `Invoices` and `invoices`
+ * are two Batches. The syntax is Cloudflare Workflows' for an instance ID (ADR 0036).
+ */
+export const batchIdSchema = z
+  .string()
+  .check(
+    z.minLength(1),
+    z.maxLength(100),
+    z.regex(
+      /^[A-Za-z0-9_][A-Za-z0-9_-]*$/,
+      "Must be letters, digits, `_` and `-`, not beginning with `-`",
+    ),
+  );
 
 /**
  * A label's key, in Kubernetes's syntax, so it reads as one parameter of a list's

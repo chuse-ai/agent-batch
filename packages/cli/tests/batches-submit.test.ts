@@ -40,7 +40,6 @@ function answer(response: ServerResponse, body: unknown) {
 function batchOf(id: string, jobCounts: Partial<Record<string, number>> = {}) {
   return {
     id,
-    customId: "batch",
     createdAt: new Date().toISOString(),
     status: "active",
     pausedBy: null,
@@ -74,16 +73,26 @@ function jobOf(id: string, customId: string, status: Record<string, unknown>) {
 
 /**
  * A hub answering `batches submit`: it holds the Blobs with the digests in `stored` and those
- * uploaded to it, keeps each upload's bytes and each add's jobs, creates one Batch, and answers
+ * uploaded to it, keeps each upload's bytes and each add's jobs, creates one Batch under the ID
+ * each creation gives, kept in `batchIds`, and answers
  * each job's read with `ended(customId)`, or with 503 when `jobsUnreadable`, every job having ended
  * by the Batch's read numbered `endedByRead`, the first unless given; it never answers a read of
- * the Batch when `stalled`. `batchRead` resolves on the first read.
+ * the Batch when `stalled`, and refuses with 422 the add numbered `refusedAdd`, if given.
+ * `batchRead` resolves on the first read.
  */
 function fakeHub(
   ended: (customId: string) => Record<string, unknown>,
-  { stalled = false, jobsUnreadable = false, stored = [] as string[], endedByRead = 1 } = {},
+  {
+    stalled = false,
+    jobsUnreadable = false,
+    stored = [] as string[],
+    endedByRead = 1,
+    refusedAdd = 0,
+  } = {},
 ) {
-  const batchId = crypto.randomUUID();
+  // The ID the first creation gave; the hub creates one Batch.
+  let batchId = "";
+  const batchIds: string[] = [];
   const held = new Set(stored);
   const uploads: { digest: string; bytes: Uint8Array }[] = [];
   const adds: AddedJob[][] = [];
@@ -113,10 +122,19 @@ function fakeHub(
       return answer(response, { digest: uploaded, sizeBytes: body.length });
     }
     if (request.method === "POST" && request.url === "/batches") {
+      const { id } = z.parse(z.object({ id: z.string() }), json());
+      batchIds.push(id);
+      batchId ||= id;
       return answer(response, batchOf(batchId));
     }
     if (request.method === "POST" && request.url === `/batches/${batchId}/jobs`) {
       const { jobs } = z.parse(addSchema, json());
+      if (adds.length + 1 === refusedAdd) {
+        response.writeHead(422, { "content-type": "application/problem+json" });
+        return response.end(
+          JSON.stringify({ type: "about:blank", title: "Unprocessable Content", status: 422 }),
+        );
+      }
       adds.push(jobs);
       return answer(response, {
         batch: batchOf(batchId, { queued: ids.size + jobs.length }),
@@ -147,7 +165,7 @@ function fakeHub(
     }
     response.writeHead(404).end();
   };
-  return { listener, uploads, adds, batchRead };
+  return { listener, uploads, adds, batchIds, batchRead };
 }
 
 /** A new folder holding `files`, by path, and an Output schema. */
@@ -190,7 +208,7 @@ test("batches submit --each makes a job of each file and folder, named by its pa
     stored: [digestOf("held")],
   });
 
-  const { exitCode } = await submit(hub.listener, cwd, [
+  const { exitCode, stderr } = await submit(hub.listener, cwd, [
     "--each",
     "./invoices/a.pdf",
     "invoices/b.pdf",
@@ -200,6 +218,9 @@ test("batches submit --each makes a job of each file and folder, named by its pa
   ]);
 
   expect(exitCode).toBe(0);
+  // The Batch's ID the command made is shown only when it stops early.
+  expect(hub.batchIds).toHaveLength(1);
+  expect(stderr).not.toContain(hub.batchIds[0]);
   expect(hub.adds.flat()).toEqual([
     {
       customId: "invoices/a.pdf",
@@ -228,6 +249,22 @@ test("batches submit --each makes a job of each file and folder, named by its pa
       { digest: digestOf(photo), bytes: photo },
     ].toSorted((a, b) => a.digest.localeCompare(b.digest)),
   );
+});
+
+// The jobs added before the refusal are queued under the made ID, which a rerun needs to carry on
+// rather than make a second Batch.
+test("batches submit prints the ID it made when the hub refuses an add after the Batch exists", async () => {
+  const lines = Array.from({ length: 101 }, (_, index) =>
+    JSON.stringify({ customId: `posting-${index}`, input: `Posting ${index}.` }),
+  );
+  const cwd = await folderWith({ "jobs.jsonl": `${lines.join("\n")}\n` });
+  const hub = fakeHub(() => ({ status: "succeeded", output: {} }), { refusedAdd: 2 });
+
+  const { exitCode, stderr } = await submit(hub.listener, cwd, ["jobs.jsonl"]);
+
+  expect(exitCode).toBe(1);
+  expect(hub.adds.map((jobs) => jobs.length)).toEqual([100]);
+  expect(stderr).toContain(`--id ${hub.batchIds[0]}`);
 });
 
 test("batches submit adds the jobs of a JSONL file in its order, at most 100 at a time", async () => {
@@ -267,14 +304,15 @@ test.skipIf(process.getuid?.() === 0)(
   },
 );
 
-test("batches submit run again with its --custom-id sends the same jobs, so the hub adds only those it lacks", async () => {
+test("batches submit run again with its --id sends the same jobs, so the hub adds only those it lacks", async () => {
   const cwd = await folderWith({ "a.pdf": "a", "claim/form.txt": "form" });
   const hub = fakeHub(() => ({ status: "succeeded", output: {} }));
-  const args = ["--each", "a.pdf", "claim", "--custom-id", "march"];
+  const args = ["--each", "a.pdf", "claim", "--id", "march"];
 
   expect((await submit(hub.listener, cwd, args)).exitCode).toBe(0);
   expect((await submit(hub.listener, cwd, args)).exitCode).toBe(0);
 
+  expect(hub.batchIds).toEqual(["march", "march"]);
   expect(hub.adds).toHaveLength(2);
   expect(hub.adds[1]).toEqual(hub.adds[0]);
 });
@@ -344,7 +382,7 @@ test("batches submit --output-dir refuses a folder already holding a result file
   expect(hub.adds).toEqual([]);
 });
 
-test("batches submit --wait-timeout ends the command when it passes, with 124, even while a read hangs", async () => {
+test("batches submit --wait-timeout ends the command when it passes, with 124, even while a read hangs, and shows the Batch's ID it made to wait again", async () => {
   const cwd = await folderWith({ "a.pdf": "a" });
   const hub = fakeHub(() => ({ status: "succeeded", output: {} }), { stalled: true });
 
@@ -359,6 +397,7 @@ test("batches submit --wait-timeout ends the command when it passes, with 124, e
   expect(exitCode).toBe(124);
   expect(stderr).toContain("Stopped waiting after 1s; the Batch carries on.");
   expect(stderr).not.toContain("Stopped waiting; the Batch carries on.");
+  expect(stderr).toContain(`run this command again with --id ${hub.batchIds[0]}`);
 });
 
 // `ms` reads a number without a unit as milliseconds, so one meant as seconds is refused rather than

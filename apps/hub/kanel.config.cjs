@@ -13,14 +13,15 @@ const JSON_COLUMN_TYPES = {
 
 /**
  * Columns holding another table's ID without referencing it, by table and column: the row's ID is
- * copied so that it outlives the row. Kanel brands only referencing columns, so these are branded here.
+ * copied so that it outlives the row. Kanel brands only referencing columns, so these are branded here,
+ * with the table's `<Table>Id` type, or, given as `{ table, type }`, the type its key column names.
  */
 const COPIED_ID_COLUMNS = {
   job: { runnerId: "Runner", submitterKeyId: "Apikey", submitterMemberId: "Member" },
   batch: { submitterKeyId: "Apikey", submitterMemberId: "Member" },
   usageRecord: {
     jobId: "Job",
-    batchId: "Batch",
+    batchUid: { table: "Batch", type: "BatchUid" },
     runnerId: "Runner",
     submitterKeyId: "Apikey",
     submitterMemberId: "Member",
@@ -53,16 +54,18 @@ function getPropertyMetadata(property, details, generateFor, builtinMetadata) {
     };
     return { ...builtinMetadata, typeOverride: { name: jsonType, typeImports: [typeImport] } };
   }
-  const table = COPIED_ID_COLUMNS[details.name]?.[property.name];
-  if (table) {
+  const copied = COPIED_ID_COLUMNS[details.name]?.[property.name];
+  if (copied) {
+    const { table, type } =
+      typeof copied === "string" ? { table: copied, type: `${copied}Id` } : copied;
     const typeImport = {
-      name: `${table}Id`,
+      name: type,
       path: `${OUTPUT_PATH}/${details.schemaName}/${table}`,
       isAbsolute: false,
       isDefault: false,
       importAsType: true,
     };
-    return { ...builtinMetadata, typeOverride: { name: `${table}Id`, typeImports: [typeImport] } };
+    return { ...builtinMetadata, typeOverride: { name: type, typeImports: [typeImport] } };
   }
   const shared = SHARED_IDENTIFIER_COLUMNS[details.name]?.[property.name];
   if (shared) {

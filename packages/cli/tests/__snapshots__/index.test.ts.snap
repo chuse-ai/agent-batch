@@ -10,14 +10,14 @@ exports[`the commands and their flags 1`] = `
         {
           "arguments": [],
           "commands": [],
-          "description": "Creates a Batch, without jobs, and answers with it: the \`agent\` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with \`POST /batches/{id}/jobs\`. The hub checks the Output contract's schema, refusing one that is invalid, describes a list or refers outside itself. A \`customId\` makes the creation safe to retry: the same \`customId\` with the same \`agent\`, \`labels\` and \`breaker\` answers with the Batch already created, and with any of them different is refused.",
+          "description": "Creates a Batch, without jobs, and answers with it: the \`agent\` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with \`POST /batches/{id}/jobs\`. The hub checks the Output contract's schema, refusing one that is invalid, describes a list or refers outside itself. Its \`id\`, given or made, names it in every call. Giving the \`id\` makes the creation safe to retry: the same \`id\` with the same \`agent\`, \`labels\` and \`breaker\` answers with the Batch already created, and with any of them different is refused.",
           "name": "create",
           "options": [
             {
-              "attributeName": "customId",
-              "description": "Your own ID for the Batch, unique in the Organization; none by default. Creating a Batch again with the same \`customId\` and the same \`agent\`, \`labels\` and \`breaker\` returns the Batch already created, so a creation can be retried safely; with any of them different it is refused. A new Batch needs a new ID.; Min length: 1; Max length: 255",
-              "flags": "--custom-id [string]",
-              "name": "custom-id",
+              "attributeName": "id",
+              "description": "The Batch's ID, unique in the Organization, which names it in every call; a UUID is made for it when left out. 1 to 100 letters, digits, \`_\` and \`-\`, not beginning with \`-\`, compared exactly, so \`Invoices\` and \`invoices\` are two Batches. Creating a Batch again with the same \`id\` and the same \`agent\`, \`labels\` and \`breaker\` returns the Batch already created, so a creation can be retried safely; with any of them different it is refused. A new Batch needs a new ID.; Min length: 1; Max length: 100; Pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*$",
+              "flags": "--id [string]",
+              "name": "id",
               "negate": false,
               "optional": true,
               "required": false,
@@ -75,7 +75,7 @@ exports[`the commands and their flags 1`] = `
           "options": [
             {
               "attributeName": "id",
-              "description": "The Batch's ID.; Format: uuid; Pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "description": "The Batch's ID.; Min length: 1; Max length: 100; Pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*$",
               "flags": "--id <string>",
               "name": "id",
               "negate": false,
@@ -115,7 +115,7 @@ exports[`the commands and their flags 1`] = `
           "options": [
             {
               "attributeName": "id",
-              "description": "The Batch's ID.; Format: uuid; Pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "description": "The Batch's ID.; Min length: 1; Max length: 100; Pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*$",
               "flags": "--id <string>",
               "name": "id",
               "negate": false,
@@ -144,7 +144,7 @@ exports[`the commands and their flags 1`] = `
           "options": [
             {
               "attributeName": "id",
-              "description": "The Batch's ID.; Format: uuid; Pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "description": "The Batch's ID.; Min length: 1; Max length: 100; Pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*$",
               "flags": "--id <string>",
               "name": "id",
               "negate": false,
@@ -173,7 +173,7 @@ exports[`the commands and their flags 1`] = `
           "options": [
             {
               "attributeName": "id",
-              "description": "The Batch's ID.; Format: uuid; Pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "description": "The Batch's ID.; Min length: 1; Max length: 100; Pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*$",
               "flags": "--id <string>",
               "name": "id",
               "negate": false,
@@ -202,7 +202,7 @@ exports[`the commands and their flags 1`] = `
           "options": [
             {
               "attributeName": "id",
-              "description": "The Batch's ID.; Format: uuid; Pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "description": "The Batch's ID.; Min length: 1; Max length: 100; Pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*$",
               "flags": "--id <string>",
               "name": "id",
               "negate": false,
@@ -233,7 +233,7 @@ exports[`the commands and their flags 1`] = `
             },
           ],
           "commands": [],
-          "description": "Creates a Batch running an agent given by its flags, with the jobs of a JSONL file, one job's JSON per line as batches add-jobs takes it, or with --each, a job for each file or folder: a file becomes a job with that file as its Input file, and a folder a job with every file in its tree, at its path in the folder, hidden ones left out; each job's custom ID is its path as given, normalized. --each uploads the files the hub does not hold yet. Prints the Batch, with --wait once its jobs have ended, and with --output-dir saves each job's output or failure in that folder. Running the command again with the Batch's --custom-id adds only the jobs the Batch lacks.",
+          "description": "Creates a Batch running an agent given by its flags, with the jobs of a JSONL file, one job's JSON per line as batches add-jobs takes it, or with --each, a job for each file or folder: a file becomes a job with that file as its Input file, and a folder a job with every file in its tree, at its path in the folder, hidden ones left out; each job's custom ID is its path as given, normalized. --each uploads the files the hub does not hold yet. Prints the Batch, with --wait once its jobs have ended, or then on a terminal the tokens and cost it used, and with --output-dir saves each job's output or failure in that folder. Running the command again with the Batch's --id adds only the jobs the Batch lacks.",
           "name": "submit",
           "options": [
             {
@@ -267,10 +267,10 @@ exports[`the commands and their flags 1`] = `
               "variadic": false,
             },
             {
-              "attributeName": "customId",
-              "description": "Your own ID for the Batch; one is made and printed when left out. Running the command again with it returns the same Batch and adds only the jobs it lacks.; Min length: 1; Max length: 255",
-              "flags": "--custom-id [string]",
-              "name": "custom-id",
+              "attributeName": "id",
+              "description": "The Batch's ID, 1 to 100 letters, digits, _ and -, not beginning with -; one is made when left out, and printed if the command stops early or, without --wait, in the hint for following the Batch. Running the command again with it returns the same Batch and adds only the jobs it lacks.; Min length: 1; Max length: 100; Pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*$",
+              "flags": "--id [string]",
+              "name": "id",
               "negate": false,
               "optional": true,
               "required": false,
@@ -598,7 +598,7 @@ exports[`the commands and their flags 1`] = `
             },
             {
               "attributeName": "batchId",
-              "description": "The Batch the job belongs to.; Format: uuid; Pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "description": "The ID of the Batch the job belongs to.; Min length: 1; Max length: 100; Pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*$",
               "flags": "--batch-id [string]",
               "name": "batch-id",
               "negate": false,

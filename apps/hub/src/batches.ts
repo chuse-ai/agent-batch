@@ -5,7 +5,7 @@ import {
   type BatchCreation,
   BREAKER_DEFAULTS,
   ControlRefused,
-  CustomIdReused,
+  IdReused,
   type JobSubmission,
   labelsSchema,
   NotFound,
@@ -18,7 +18,7 @@ import * as z from "zod/mini";
 import { getOrganization } from "./auth/auth.ts";
 import { Db, DB_SCHEMA, jsonRows } from "./db/database.ts";
 import {
-  BatchId,
+  BatchUid,
   type Database,
   JobId,
   type JobStatus,
@@ -68,12 +68,12 @@ function apiBreakerOf(row: { canary: number | null; maxFailurePercent: number | 
 }
 
 /**
- * The Batch `batchId` as the API reports it, with its jobs' counts and usage read from them; or
- * nothing when there is no such Batch.
+ * The Batch `which`, by its `uid` or by the ID the API shows, as the API reports it, with its
+ * jobs' counts and usage read from them; or nothing when there is no such Batch.
  */
 export async function readBatch(
   db: Kysely<Database>,
-  batchId: BatchId,
+  which: { uid: BatchUid } | { id: string },
 ): Promise<Batch | undefined> {
   const row = await db
     .selectFrom("batch as b")
@@ -82,7 +82,7 @@ export async function readBatch(
         eb
           .selectFrom("job as j")
           .innerJoin("jobProgress as p", "p.jobId", "j.id")
-          .whereRef("j.batchId", "=", "b.id")
+          .whereRef("j.batchUid", "=", "b.uid")
           .select((agg) => {
             const count = (status: JobStatus) =>
               agg.fn.countAll<number>().filterWhere("j.status", "=", status).as(status);
@@ -105,7 +105,6 @@ export async function readBatch(
     )
     .select([
       "b.id",
-      "b.customId",
       "b.createdAt",
       "b.labels",
       "b.canary",
@@ -121,7 +120,12 @@ export async function readBatch(
       "j.totalTokens",
       "j.costUsd",
     ])
-    .where("b.id", "=", batchId)
+    .$call((query) =>
+      "uid" in which
+        ? query.where("b.uid", "=", which.uid)
+        : // A deployment serves one Organization, so the ID alone finds the Batch (ADR 0007).
+          query.where("b.id", "=", which.id),
+    )
     .executeTakeFirst();
   if (!row) return undefined;
   const unfinished = row.queued + row.running + row.paused;
@@ -130,7 +134,6 @@ export async function readBatch(
   const cancelWaits = row.cancelledAt !== null && unfinished > 0;
   return {
     id: row.id,
-    customId: row.customId,
     createdAt: row.createdAt,
     status:
       row.cancelledAt !== null && !cancelWaits
@@ -156,11 +159,11 @@ export async function readBatch(
   };
 }
 
-/** The Batch `batchId`, or a 404 error. */
-export function getBatch(batchId: BatchId) {
+/** The Batch `id`, or a 404 error. */
+export function getBatch(id: string) {
   return Effect.gen(function* () {
     const database = yield* Db;
-    const batch = yield* database.query((db) => readBatch(db, batchId));
+    const batch = yield* database.query((db) => readBatch(db, { id }));
     if (!batch) return yield* Effect.fail(new NotFound());
     return batch;
   });
@@ -184,9 +187,10 @@ function agentProblems(agent: Agent, settings: HubSettings["jobLimits"]) {
 }
 
 /**
- * Creates the Batch `creation` asks for, without jobs, and returns it; or fails with its problems,
- * or with a 422 error for a custom ID the Organization already used for a Batch with other content.
- * A creation with an earlier Batch's custom ID and the same content returns that Batch.
+ * Creates the Batch `creation` asks for, without jobs, under the ID it gives or a UUIDv4, and
+ * returns it; or fails with its problems, or with a 422 error for an ID the Organization already
+ * used for a Batch with other content. A creation with an earlier Batch's ID and the same content
+ * returns that Batch.
  */
 export function createBatch(
   creation: BatchCreation,
@@ -199,24 +203,28 @@ export function createBatch(
     const database = yield* Db;
     const organization = yield* getOrganization;
     const breaker = breakerOf(creation.breaker);
-    const { customId, agent } = creation;
-    // The content a creation under the same custom ID must repeat, with the breaker as it resolves,
-    // so `true` and the defaults spelled out are the same.
-    const contentHash =
-      customId === undefined
-        ? undefined
-        : contentHashOf({ agent, labels: creation.labels, breaker: apiBreakerOf(breaker) });
+    const { agent } = creation;
+    // A UUIDv4 when the creation gives none, as a retry key is: random, so it says nothing of
+    // when the Batch was made, which its `uid`, a UUIDv7, orders by (ADR 0036).
+    const id = creation.id ?? crypto.randomUUID();
+    // The content a creation under the same ID must repeat, with the breaker as it resolves, so
+    // `true` and the defaults spelled out are the same.
+    const contentHash = contentHashOf({
+      agent,
+      labels: creation.labels,
+      breaker: apiBreakerOf(breaker),
+    });
     const created = yield* database.query((db) =>
       db.transaction().execute(async (trx) => {
         const now = new Date();
-        // A concurrent creation with the same custom ID waits here for the first to commit, then
-        // inserts nothing; the select after it sees the committed Batch.
+        // A concurrent creation with the same ID waits here for the first to commit, then inserts
+        // nothing; the select after it sees the committed Batch.
         const inserted = await trx
           .insertInto("batch")
           .values({
-            id: BatchId(uuidv7()),
+            uid: BatchUid(uuidv7()),
             organizationId: organization.id,
-            customId,
+            id,
             contentHash,
             instructions: agent.instructions,
             outputContract: agent.outputContract,
@@ -234,30 +242,27 @@ export function createBatch(
             breakerTrippedAt: null,
             cancelledAt: null,
           })
-          .onConflict((conflict) =>
-            conflict.constraint("batch_organizationId_customId_key").doNothing(),
-          )
-          .returning("id")
+          .onConflict((conflict) => conflict.constraint("batch_id_organizationId_key").doNothing())
+          .returning("uid")
           .executeTakeFirst();
-        if (inserted) return { id: inserted.id, same: true };
-        // Only a creation with a custom ID can conflict.
+        if (inserted) return { uid: inserted.uid, same: true };
         const existing = await trx
           .selectFrom("batch")
-          .select(["id", "contentHash"])
+          .select(["uid", "contentHash"])
+          .where("id", "=", id)
           .where("organizationId", "=", organization.id)
-          .where("customId", "=", customId ?? null)
           .executeTakeFirstOrThrow();
-        return { id: existing.id, same: existing.contentHash === contentHash };
+        return { uid: existing.uid, same: existing.contentHash === contentHash };
       }),
     );
     if (!created.same) {
       return yield* Effect.fail(
-        new CustomIdReused({
-          message: "The custom ID was already used for a Batch with other content",
-        }),
+        new IdReused({ message: "The ID was already used for a Batch with other content" }),
       );
     }
-    return yield* getBatch(created.id);
+    const batch = yield* database.query((db) => readBatch(db, { uid: created.uid }));
+    if (!batch) return yield* Effect.die(new Error(`The Batch ${id} vanished after its creation`));
+    return batch;
   });
 }
 
@@ -325,14 +330,17 @@ function jobProblems(jobs: readonly JobSubmission[], labels: Batch["labels"]) {
  * ID the Batch has for a job with other content. New jobs take the Batch's labels beneath their own
  * and its agent's limits, and the Canary's places left, in order.
  */
-export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submitter: Submitter) {
+export function addJobs(batchId: string, jobs: readonly JobSubmission[], submitter: Submitter) {
   return Effect.gen(function* () {
     const database = yield* Db;
-    // A Batch's labels and agent never change, so they are read for the checks without a lock.
+    // A Batch's row, labels and agent never change, so they are read for the checks without a
+    // lock, and its row is locked by its `uid` below. A deployment serves one Organization, so the
+    // ID alone finds the Batch (ADR 0007).
     const frozen = yield* database.query((db) =>
-      db.selectFrom("batch").select("labels").where("id", "=", batchId).executeTakeFirst(),
+      db.selectFrom("batch").select(["uid", "labels"]).where("id", "=", batchId).executeTakeFirst(),
     );
     if (!frozen) return yield* Effect.fail(new NotFound());
+    const { uid } = frozen;
     const problems = jobProblems(jobs, frozen.labels);
     if (problems.length > 0) return yield* Effect.fail(new InvalidInput({ problems }));
     // Each job with its content as a later add under the same custom ID must repeat it.
@@ -351,7 +359,7 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
         const locked = await trx
           .selectFrom("batch")
           .select(["labels", "cancelledAt", "canaryPlacesLeft", "organizationId"])
-          .where("id", "=", batchId)
+          .where("uid", "=", uid)
           .forUpdate()
           .executeTakeFirstOrThrow();
         // The jobs the Batch already has under these custom IDs, locked in the order of their IDs
@@ -360,7 +368,7 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
         const existing = await trx
           .selectFrom("job")
           .select(["id", "customId", "contentHash"])
-          .where("batchId", "=", batchId)
+          .where("batchUid", "=", uid)
           .where("customId", "=", (eb) => eb.fn.any(eb.val(jobs.map((job) => job.customId))))
           .orderBy("id")
           .forKeyShare()
@@ -401,7 +409,7 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
         if (fresh.length > 0) {
           await insertJobs(
             trx,
-            batchId,
+            uid,
             fresh.map(({ id, job, contentHash }, order) => ({
               id,
               customId: job.customId,
@@ -421,7 +429,7 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
             await trx
               .updateTable("batch")
               .set((eb) => ({ canaryPlacesLeft: eb("canaryPlacesLeft", "-", taken) }))
-              .where("id", "=", batchId)
+              .where("uid", "=", uid)
               .execute();
           }
         }
@@ -432,7 +440,7 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
         const readById = new Map(read.map((job) => [job.id, job]));
         // The Batch is never deleted, and every job is read in the transaction that found or
         // created it, under its lock.
-        const batch = await readBatch(trx, batchId);
+        const batch = await readBatch(trx, { uid });
         if (!batch) throw new Error(`The Batch ${batchId} vanished under its lock`);
         return {
           kind: "added" as const,
@@ -456,20 +464,20 @@ export function addJobs(batchId: BatchId, jobs: readonly JobSubmission[], submit
       return yield* Effect.fail(new InvalidInput({ problems: added.unheld }));
     }
     if (added.kind === "reused") {
-      return yield* Effect.fail(new CustomIdReused({ message: problemsText(added.reused) }));
+      return yield* Effect.fail(new IdReused({ message: problemsText(added.reused) }));
     }
     return added.added;
   });
 }
 
 /**
- * Inserts the new `jobs` of the Batch `batchId`, given as one JSON parameter, in the transaction
+ * Inserts the new `jobs` of the Batch whose row is `uid`, given as one JSON parameter, in the transaction
  * `trx`: each queued, with the Batch's limits, copied in SQL, and with the progress row its
  * Runner's reports update, starting from nothing stored and nothing used.
  */
 async function insertJobs(
   trx: Transaction<Database>,
-  batchId: BatchId,
+  uid: BatchUid,
   jobs: Pick<NewJob, "id" | "customId" | "input" | "labels" | "contentHash" | "inCanary">[],
   submitter: Submitter,
 ) {
@@ -482,7 +490,7 @@ async function insertJobs(
         .columns([
           "id",
           "organizationId",
-          "batchId",
+          "batchUid",
           "status",
           "input",
           "labels",
@@ -500,14 +508,14 @@ async function insertJobs(
           qb
             .selectFrom((eb) => jsonRows(eb, jobs))
             .crossJoin("batch")
-            .where("batch.id", "=", batchId)
+            .where("batch.uid", "=", uid)
             .select((eb) => {
               const field = (name: "id" | "customId" | "input" | "contentHash" | "inCanary") =>
                 eb.ref("row.value", "->>").key(name);
               return [
                 eb.cast<JobId>(field("id"), "uuid").as("id"),
                 "batch.organizationId",
-                "batch.id as batchId",
+                "batch.uid as batchUid",
                 eb.cast<JobStatus>(eb.val("queued"), jobStatus).as("status"),
                 field("input").as("input"),
                 eb.ref("row.value", "->").key("labels").as("labels"),
@@ -538,18 +546,18 @@ type BatchDecision =
   | { kind: "changed"; hints: (RunnerId | "live")[] };
 
 /**
- * Starts a new Canary of the Batch `batchId`, of `canary` jobs, in the transaction `trx` that holds
+ * Starts a new Canary of the Batch whose row is `uid`, of `canary` jobs, in the transaction `trx` that holds
  * the Batch's lock: the jobs of the last one leave it, the first `canary` jobs not yet sent to a
  * Runner join it in the order they were added, and the places left go to the jobs added next.
  * Returns how many places are left.
  */
-async function startCanary(trx: Transaction<Database>, batchId: BatchId, canary: number) {
+async function startCanary(trx: Transaction<Database>, uid: BatchUid, canary: number) {
   const { joined } = await trx
     .with("candidate", (qb) =>
       qb
         .selectFrom("job")
         .select("id")
-        .where("batchId", "=", batchId)
+        .where("batchUid", "=", uid)
         .where("status", "=", "queued")
         .where("placedAt", "is", null)
         .orderBy("id")
@@ -572,7 +580,7 @@ async function startCanary(trx: Transaction<Database>, batchId: BatchId, canary:
             .$castTo<boolean>()
             .as("joins"),
         ])
-        .where("job.batchId", "=", batchId)
+        .where("job.batchUid", "=", uid)
         .where((eb) =>
           eb.or([
             eb("job.inCanary", "=", true),
@@ -601,25 +609,27 @@ async function startCanary(trx: Transaction<Database>, batchId: BatchId, canary:
 }
 
 /**
- * Pauses or resumes the Batch `batchId` and returns it, with the Runners to tell to sync now, or
+ * Pauses or resumes the Batch `id` and returns it, with the Runners to tell to sync now, or
  * fails with a 404 error or, for a cancelled Batch, a 409. A pause blocks the jobs not yet sent to
  * a Runner, and those added later. A resume releases them; a resume of the breaker's pause, or of a
  * caller's pause during which the breaker's rule tripped, restarts the breaker's counts and starts a
  * new Canary, since whoever releases it allows a new trial. Pausing a paused Batch, or resuming one
  * not paused, changes nothing.
  */
-export function controlBatch(batchId: BatchId, control: "pause" | "resume") {
+export function controlBatch(id: string, control: "pause" | "resume") {
   return Effect.gen(function* () {
     const database = yield* Db;
     const controlled = yield* database.query((db) =>
       db.transaction().execute(async (trx) => {
+        // A deployment serves one Organization, so the ID alone finds the Batch (ADR 0007).
         const batch = await trx
           .selectFrom("batch")
-          .select(["pausedBy", "breakerTrippedAt", "cancelledAt", "canary"])
-          .where("id", "=", batchId)
+          .select(["uid", "pausedBy", "breakerTrippedAt", "cancelledAt", "canary"])
+          .where("id", "=", id)
           .forUpdate()
           .executeTakeFirst();
         if (!batch) return undefined;
+        const { uid } = batch;
         const decision = ((): BatchDecision => {
           if (batch.cancelledAt !== null) return { kind: "refused", why: "The Batch is cancelled" };
           if (control === "pause") {
@@ -635,13 +645,13 @@ export function controlBatch(batchId: BatchId, control: "pause" | "resume") {
             await trx
               .updateTable("batch")
               .set({ pausedBy: "caller", pausedAt: now })
-              .where("id", "=", batchId)
+              .where("uid", "=", uid)
               .execute();
           } else {
             const released = { pausedBy: null, pausedAt: null, breakerTrippedAt: null };
             const breakerResume = batch.pausedBy === "breaker" || batch.breakerTrippedAt !== null;
             if (breakerResume && batch.canary !== null) {
-              const placesLeft = await startCanary(trx, batchId, batch.canary);
+              const placesLeft = await startCanary(trx, uid, batch.canary);
               await trx
                 .updateTable("batch")
                 .set((eb) => ({
@@ -658,14 +668,14 @@ export function controlBatch(batchId: BatchId, control: "pause" | "resume") {
                   countedFailures: 0,
                   canaryPlacesLeft: placesLeft,
                 }))
-                .where("id", "=", batchId)
+                .where("uid", "=", uid)
                 .execute();
             } else {
-              await trx.updateTable("batch").set(released).where("id", "=", batchId).execute();
+              await trx.updateTable("batch").set(released).where("uid", "=", uid).execute();
             }
           }
         }
-        return { decision, batch: await readBatch(trx, batchId) };
+        return { decision, batch: await readBatch(trx, { uid }) };
       }),
     );
     return yield* settle(controlled);
@@ -673,36 +683,41 @@ export function controlBatch(batchId: BatchId, control: "pause" | "resume") {
 }
 
 /**
- * Cancels the Batch `batchId` and returns it, with the Runners to tell to sync now, or fails with a
+ * Cancels the Batch `id` and returns it, with the Runners to tell to sync now, or fails with a
  * 404 error. Each unfinished job is cancelled by a job's own rules: at once where no Runner may be
  * running it, that is one not yet sent to a Runner or paused, and otherwise by a cancel that waits
  * for its Runner, replacing a waiting pause. The cancel also ends the Batch's pause, and is final,
  * also for a Batch whose jobs have all ended: it takes no new jobs, and resumes none. Cancelling a
  * cancelled Batch changes nothing.
  */
-export function cancelBatch(batchId: BatchId) {
+export function cancelBatch(id: string) {
   const jobStatus = sql.id(DB_SCHEMA, "jobStatus");
   return Effect.gen(function* () {
     const database = yield* Db;
     const now = new Date();
     const controlled = yield* database.query((db) =>
       db.transaction().execute(async (trx) => {
+        // A deployment serves one Organization, so the ID alone finds the Batch (ADR 0007).
         const batch = await trx
           .selectFrom("batch")
-          .select("cancelledAt")
-          .where("id", "=", batchId)
+          .select(["uid", "cancelledAt"])
+          .where("id", "=", id)
           .forUpdate()
           .executeTakeFirst();
         if (!batch) return undefined;
+        const { uid } = batch;
         if (batch.cancelledAt !== null) {
-          return { decision: { kind: "unchanged" } as const, batch: await readBatch(trx, batchId) };
+          return {
+            decision: { kind: "unchanged" } as const,
+            batch: await readBatch(trx, { uid }),
+          };
         }
         // Its unfinished jobs, locked in the order of their IDs, as a report and a Runner's removal
         // lock jobs.
         await trx
           .selectFrom("job")
           .select("id")
-          .where("batchId", "=", batchId)
+          .where("batchUid", "=", uid)
           .where("status", "in", UNFINISHED)
           .orderBy("id")
           .forUpdate()
@@ -710,7 +725,7 @@ export function cancelBatch(batchId: BatchId) {
         await trx
           .updateTable("batch")
           .set({ cancelledAt: now, pausedBy: null, pausedAt: null, breakerTrippedAt: null })
-          .where("id", "=", batchId)
+          .where("uid", "=", uid)
           .execute();
         // Jobs no Runner may be running end now, each with the Usage record of its end.
         await insertUsageRecords(
@@ -731,7 +746,7 @@ export function cancelBatch(batchId: BatchId) {
                   recordedTotalTokens: eb.ref("jobProgress.totalTokens"),
                   recordedCostUsd: eb.ref("jobProgress.costUsd"),
                 }))
-                .where("job.batchId", "=", batchId)
+                .where("job.batchUid", "=", uid)
                 .where((eb) =>
                   eb.or([
                     eb("job.status", "=", "paused"),
@@ -764,7 +779,7 @@ export function cancelBatch(batchId: BatchId) {
         const waiting = await trx
           .updateTable("job")
           .set({ pendingControl: "cancel", pendingControlRequestedAt: now })
-          .where("batchId", "=", batchId)
+          .where("batchUid", "=", uid)
           .where("status", "in", ["queued", "running"])
           .where("placedAt", "is not", null)
           .where((eb) => eb("pendingControl", "is distinct from", "cancel"))
@@ -775,7 +790,7 @@ export function cancelBatch(batchId: BatchId) {
         const hints = Array.dedupe(waiting.map(({ runnerId }) => runnerId));
         return {
           decision: { kind: "changed", hints } as const,
-          batch: await readBatch(trx, batchId),
+          batch: await readBatch(trx, { uid }),
         };
       }),
     );
@@ -797,25 +812,25 @@ function settle(controlled: { decision: BatchDecision; batch: Batch | undefined 
 
 /**
  * Locks, in the transaction `trx`, the Batches with a breaker of the jobs `jobIds`, in the order of
- * their IDs, before a report that ends them is applied, as a Batch is locked before its jobs
- * (ADR 0033); returns their IDs.
+ * their rows' IDs, before a report that ends them is applied, as a Batch is locked before its jobs
+ * (ADR 0033); returns their rows' IDs.
  */
 export async function lockBreakerBatches(trx: Transaction<Database>, jobIds: readonly JobId[]) {
   if (jobIds.length === 0) return [];
   const rows = await trx
     .selectFrom("batch")
-    .select("id")
-    .where("id", "in", (eb) =>
+    .select("uid")
+    .where("uid", "in", (eb) =>
       eb
         .selectFrom("job")
-        .select("batchId")
+        .select("batchUid")
         .where("id", "=", eb.fn.any(eb.val([...jobIds]))),
     )
     .where("canary", "is not", null)
-    .orderBy("id")
+    .orderBy("uid")
     .forUpdate()
     .execute();
-  return rows.map(({ id }) => id);
+  return rows.map(({ uid }) => uid);
 }
 
 /**
@@ -835,7 +850,7 @@ export async function lockBreakerBatches(trx: Transaction<Database>, jobIds: rea
 export async function countEndsAndPauseTrippedBatches(
   trx: Transaction<Database>,
   recorded: readonly UsageRecordId[],
-  batches: readonly BatchId[],
+  batches: readonly BatchUid[],
   now: Date,
 ) {
   if (recorded.length === 0 || batches.length === 0) return;
@@ -847,7 +862,7 @@ export async function countEndsAndPauseTrippedBatches(
         .select((eb) => {
           const failed = eb("u.status", "=", "failed");
           return [
-            "u.batchId",
+            "u.batchUid",
             eb.fn
               .countAll<number>()
               .filterWhere(eb.or([eb("u.status", "=", "succeeded"), failed]))
@@ -860,8 +875,8 @@ export async function countEndsAndPauseTrippedBatches(
           ];
         })
         .where("u.id", "=", (eb) => eb.fn.any(eb.val([...recorded])))
-        .where("u.batchId", "=", (eb) => eb.fn.any(eb.val([...batches])))
-        .groupBy("u.batchId"),
+        .where("u.batchUid", "=", (eb) => eb.fn.any(eb.val([...batches])))
+        .groupBy("u.batchUid"),
     )
     .updateTable("batch as b")
     .from("counted as c")
@@ -882,7 +897,7 @@ export async function countEndsAndPauseTrippedBatches(
             eb
               .selectFrom("job as canary")
               .select("canary.id")
-              .whereRef("canary.batchId", "=", "b.id")
+              .whereRef("canary.batchUid", "=", "b.uid")
               .where("canary.inCanary", "=", true)
               .where("canary.status", "in", UNFINISHED),
           ),
@@ -921,6 +936,6 @@ export async function countEndsAndPauseTrippedBatches(
           .end(),
       };
     })
-    .whereRef("b.id", "=", "c.batchId")
+    .whereRef("b.uid", "=", "c.batchUid")
     .execute();
 }

@@ -3,6 +3,7 @@ import { openapi } from "@orpc/openapi";
 import * as z from "zod/mini";
 
 import {
+  batchIdSchema,
   blobRefSchema,
   customIdSchema,
   digestSchema,
@@ -132,8 +133,8 @@ const jobBaseSchema = z.object({
    * without its content, and as not found once they are gone.
    */
   deletedAt: z.optional(z.date()),
-  /** The job's Batch. Absent once the job is deleted, as its content is. */
-  batchId: z.optional(z.uuid()),
+  /** The job's Batch, by its `id`. Absent once the job is deleted, as its content is. */
+  batchId: z.optional(batchIdSchema),
   /** The caller's own ID for the job, unique in its Batch. Absent once the job is deleted. */
   customId: z.optional(z.string()),
   /** The job's labels, its Batch's included. Absent once the job is deleted, as its content is. */
@@ -224,10 +225,10 @@ const breakerSchema = z.union([
 /** A Batch as a caller creates it. */
 export const batchCreationSchema = z
   .strictObject({
-    customId: z.optional(
-      customIdSchema.check(
+    id: z.optional(
+      batchIdSchema.check(
         z.describe(
-          "Your own ID for the Batch, unique in the Organization; none by default. Creating a Batch again with the same `customId` and the same `agent`, `labels` and `breaker` returns the Batch already created, so a creation can be retried safely; with any of them different it is refused. A new Batch needs a new ID.",
+          "The Batch's ID, unique in the Organization, which names it in every call; a UUID is made for it when left out. 1 to 100 letters, digits, `_` and `-`, not beginning with `-`, compared exactly, so `Invoices` and `invoices` are two Batches. Creating a Batch again with the same `id` and the same `agent`, `labels` and `breaker` returns the Batch already created, so a creation can be retried safely; with any of them different it is refused. A new Batch needs a new ID.",
         ),
       ),
     ),
@@ -305,9 +306,8 @@ export const batchStatusSchema = z.enum(["active", "paused", "cancelled"]);
 /** A Batch as the hub reports it. */
 export const batchSchema = z
   .object({
-    id: z.uuid(),
-    /** The caller's own ID for the Batch; null when it was created without one. */
-    customId: z.nullable(z.string()),
+    /** The ID its creation gave it, or the UUID made for it. */
+    id: batchIdSchema,
     createdAt: z.date(),
     /**
      * `active` while it releases its jobs, an empty Batch and one whose jobs have all ended included,
@@ -360,7 +360,9 @@ export const addedJobsSchema = z
 export type AddedJobs = z.infer<typeof addedJobsSchema>;
 
 /** A Batch as a call names it. */
-export const batchRefSchema = z.strictObject({ id: z.uuid().check(z.describe("The Batch's ID.")) });
+export const batchRefSchema = z.strictObject({
+  id: batchIdSchema.check(z.describe("The Batch's ID.")),
+});
 
 /**
  * A job as a list reports it: without its content, so without its output, its failure's message
@@ -415,10 +417,10 @@ export const Forbidden = error("FORBIDDEN");
  */
 export const ControlRefused = error("CONFLICT");
 /**
- * A Batch created, or jobs added, under a custom ID already used for one with other content; its
- * message names each.
+ * A Batch created under an ID, or jobs added under custom IDs, already used for one with other
+ * content; its message names each.
  */
-export const CustomIdReused = error("UNPROCESSABLE_CONTENT");
+export const IdReused = error("UNPROCESSABLE_CONTENT");
 
 // Calls a member's role does not allow fail with `FORBIDDEN`, and invalid ones with `BAD_REQUEST`.
 // Where Better Auth decides, the hub passes its `FORBIDDEN` through, declared without a factory;
@@ -581,7 +583,7 @@ export const apiContract = {
   },
   batches: {
     create: forOrganization
-      .errors({ BAD_REQUEST: {}, [CustomIdReused.code]: CustomIdReused })
+      .errors({ BAD_REQUEST: {}, [IdReused.code]: IdReused })
       .meta(
         // One status, 200, whether the Batch is new or a retry's, as for an add: no caller acts on
         // the difference, and a status per answer would make the typed client answer this one call
@@ -590,7 +592,7 @@ export const apiContract = {
           method: "POST",
           path: "/batches",
           description:
-            "Creates a Batch, without jobs, and answers with it: the `agent` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with `POST /batches/{id}/jobs`. The hub checks the Output contract's schema, refusing one that is invalid, describes a list or refers outside itself. A `customId` makes the creation safe to retry: the same `customId` with the same `agent`, `labels` and `breaker` answers with the Batch already created, and with any of them different is refused.",
+            "Creates a Batch, without jobs, and answers with it: the `agent` every job added to it runs, set once, its labels and its failure breaker. Add its jobs with `POST /batches/{id}/jobs`. The hub checks the Output contract's schema, refusing one that is invalid, describes a list or refers outside itself. Its `id`, given or made, names it in every call. Giving the `id` makes the creation safe to retry: the same `id` with the same `agent`, `labels` and `breaker` answers with the Batch already created, and with any of them different is refused.",
         }),
         ...byKey({ job: ["create"] }),
       )
@@ -601,7 +603,7 @@ export const apiContract = {
         BAD_REQUEST: {},
         [NotFound.code]: NotFound,
         [ControlRefused.code]: ControlRefused,
-        [CustomIdReused.code]: CustomIdReused,
+        [IdReused.code]: IdReused,
       })
       .meta(
         openapi({
@@ -821,7 +823,9 @@ export const apiContract = {
                 ),
               ),
           ),
-          batchId: z.optional(z.uuid().check(z.describe("The Batch the job belongs to."))),
+          batchId: z.optional(
+            batchIdSchema.check(z.describe("The ID of the Batch the job belongs to.")),
+          ),
           customId: z.optional(
             customIdSchema.check(
               z.describe(

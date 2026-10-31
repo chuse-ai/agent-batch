@@ -37,7 +37,7 @@ The small, lasting record of a job's outcome and cost (labels, Batch, model, sta
 _Avoid_: billing record, receipt
 
 **Batch**:
-Jobs that run one agent, added to it over one or more requests, and released, paused and cancelled as one; every job belongs to one, and a job submitted alone is a Batch of one. Pausing a Batch blocks its jobs rather than pausing them, and cancelling it is final: it takes no new jobs and resumes none.
+Jobs that run one agent, added to it over one or more requests, and released, paused and cancelled as one; every job belongs to one, and a job submitted alone is a Batch of one. Its ID, unique in the Organization, is the one its creator gave or one the hub made; creating it again under that ID with the same content returns it, so creating can be retried. Pausing a Batch blocks its jobs rather than pausing them, and cancelling it is final: it takes no new jobs and resumes none.
 _Avoid_: group, campaign, members (a member is a person)
 
 **Agent**:
@@ -53,7 +53,7 @@ What a job gives its Batch's agent to work on, as text, beside its Input files; 
 _Avoid_: prompt, query
 
 **Custom ID**:
-The caller's own ID for a job, unique in its Batch, or for a Batch, unique in the organization. Giving it again with the same content returns what it named, so adding or creating can be retried.
+The caller's own ID for a job, unique in its Batch. Giving it again with the same content returns the job, so adding can be retried. A Batch has no custom ID: its own ID is the caller's when the caller gives one.
 _Avoid_: key, idempotency key (a key is an API key)
 
 **Blocked**:

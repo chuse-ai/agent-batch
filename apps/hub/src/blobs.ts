@@ -94,8 +94,8 @@ export function heldBy(eb: ExpressionBuilder<Database, "blob">, organizationId: 
     eb.exists(
       eb
         .selectFrom("batchInputFile")
-        .innerJoin("batch", "batch.id", "batchInputFile.batchId")
-        .select("batchInputFile.batchId")
+        .innerJoin("batch", "batch.uid", "batchInputFile.batchUid")
+        .select("batchInputFile.batchUid")
         .whereRef("batchInputFile.sha256", "=", "blob.sha256")
         .where("batch.organizationId", "=", organizationId),
     ),
@@ -117,7 +117,7 @@ export function inUse(eb: ExpressionBuilder<Database, "blob">) {
     eb.exists(
       eb
         .selectFrom("batchInputFile")
-        .select("batchInputFile.batchId")
+        .select("batchInputFile.batchUid")
         .whereRef("batchInputFile.sha256", "=", "blob.sha256"),
     ),
     eb.exists(

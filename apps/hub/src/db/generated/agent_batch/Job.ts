@@ -6,7 +6,7 @@ import type { Brand } from "effect";
 import type { ColumnType, Selectable, Insertable, Updateable } from "kysely";
 
 import type { ApikeyId } from "./Apikey.js";
-import type { BatchId } from "./Batch.js";
+import type { BatchUid } from "./Batch.js";
 import type { default as JobControl } from "./JobControl.js";
 import type { default as JobFailureReason } from "./JobFailureReason.js";
 import type { default as JobStatus } from "./JobStatus.js";
@@ -71,7 +71,7 @@ export default interface JobTable {
 
   modelBudgetUsd: ColumnType<number, number, number>;
 
-  batchId: ColumnType<BatchId, BatchId, BatchId>;
+  batchUid: ColumnType<BatchUid, BatchUid, BatchUid>;
 
   inCanary: ColumnType<boolean, boolean | undefined, boolean>;
 
