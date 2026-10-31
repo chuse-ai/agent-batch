@@ -114,7 +114,7 @@ const listInputs: FauxResponseFactory = ({ messages }) =>
       });
 
 // `--wait` reads every 10 seconds, so the test waits for the jobs through the API instead: run
-// again with the Batch's custom ID, as a caller runs it to wait, the command adds nothing and finds
+// again with the Batch's ID, as a caller runs it to wait, the command adds nothing and finds
 // them ended at its first read. The CLI's own tests cover a wait that reads again.
 test("batches submit --each uploads each file and folder as a job's Input files, and --wait --output-dir saves their outputs in order", async () => {
   system.model.setResponses([listInputs, listInputs, listInputs, listInputs]);
@@ -125,6 +125,7 @@ test("batches submit --each uploads each file and folder as a job's Input files,
   await writeFile(path.join(dir, "claim/photos/front.txt"), "front");
   await writeFile(path.join(dir, "claim/.hidden"), "hidden");
   await writeFile(path.join(dir, "schema.json"), JSON.stringify({ type: "string" }));
+  const id = crypto.randomUUID();
   const submit = [
     "batches",
     "submit",
@@ -133,13 +134,12 @@ test("batches submit --each uploads each file and folder as a job's Input files,
     "claim/",
     "--output-schema",
     "schema.json",
-    "--custom-id",
-    crypto.randomUUID(),
+    "--id",
+    id,
   ];
 
   const submitted = await Effect.runPromise(agentBatchIn(dir, submit));
   expect(submitted.exitCode).toBe(0);
-  const { id } = z.parse(z.object({ id: z.string() }), submitted.lines[0]);
   const client = await system.clientWithNewJobsKey();
   await expect
     .poll(
