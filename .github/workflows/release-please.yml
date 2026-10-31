@@ -53,7 +53,7 @@ jobs:
         # push's run may be the one that creates the release; it publishes the release's commit.
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
-      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+      - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
       # Stages the workspace's public packages, the CLI alone (ADR 0004), built by its prepack.
       # npm's staged publishing: a maintainer approves the version with 2FA before it goes live, so
       # this workflow or its trust alone cannot put a version on npm.
