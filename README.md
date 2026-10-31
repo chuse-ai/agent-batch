@@ -11,7 +11,7 @@ agent-batch runs real agents on unattended jobs. Give it one agent definition an
 Given a folder of invoices and a JSON Schema for what you want from each, one line runs them all:
 
 ```sh
-npx agent-batch batches submit --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait --output-dir ./results
+npx agent-batch batches submit --id invoices --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait --output-dir ./results
 ```
 
 Each PDF is a job. Each line of `results/output.jsonl` is one invoice's JSON, and each line of `results/error.jsonl` one that failed, with why.

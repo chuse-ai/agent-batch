@@ -889,9 +889,12 @@ const saveJobLines = Effect.fnUntraced(function* (
         Stream.run(fs.sink(file, { flag: "wx", mode: 0o600 })),
       );
     }
-    // Only the files saved are named, as openai-cli does.
-    if (kept.length > 0 && personWatches()) {
-      yield* Effect.sync(() => process.stderr.write(`Saved "${file}"\n`));
+    // Each file is named whether or not it was saved, as openai-cli says of each file a Batch
+    // returns or lacks.
+    if (personWatches()) {
+      yield* Effect.sync(() =>
+        process.stderr.write(kept.length > 0 ? `Saved "${file}"\n` : `No ${name} file saved.\n`),
+      );
     }
   }
 });
@@ -1009,7 +1012,7 @@ function submitBatchCommand() {
       description:
         "Creates a Batch running an agent given by its flags, with the jobs of a JSONL file, one job's JSON per line as batches add-jobs takes it, or with --each, a job for each file or folder: a file becomes a job with that file as its Input file, and a folder a job with every file in its tree, at its path in the folder, hidden ones left out; each job's custom ID is its path as given, normalized. --each uploads the files the hub does not hold yet. Prints the Batch, with --wait once its jobs have ended, and with --output-dir saves each job's output or failure in that folder. Running the command again with the Batch's --id adds only the jobs the Batch lacks.",
       examples: [
-        'agent-batch batches submit --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait --output-dir ./results',
+        'agent-batch batches submit --id invoices --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait --output-dir ./results',
         "agent-batch batches submit jobs.jsonl --output-schema answer.schema.json",
       ],
     })
