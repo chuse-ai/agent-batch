@@ -802,7 +802,8 @@ function progressOf(batch: Batch, inCanary: boolean) {
   }
   const counts = Object.entries({ succeeded, failed, cancelled, running, paused, queued })
     .filter(([status, count]) => count > 0 || status === "succeeded" || status === "failed")
-    .map(([status, count]) => `${count} ${status}`)
+    // Each running job is one agent loop in a Runner, which is what the count shows.
+    .map(([status, count]) => `${count} ${status === "running" ? "agents running" : status}`)
     .join(", ");
   const canary =
     inCanary && batch.breaker !== false
