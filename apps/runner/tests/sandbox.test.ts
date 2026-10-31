@@ -184,9 +184,13 @@ it("a job's temporary files go to its temp directory", () =>
   }));
 
 it("aborting or timing out a command stops it without touching another job's, and closing a job stops what it left running", () =>
-  withJob((other) =>
+  withJob((other, { workspace: othersWorkspace }) =>
     withJob(async (job) => {
-      const othersCommand = run(other, "sleep 3; echo still running");
+      // Runs until the test, having stopped this job's commands, lets it end.
+      const othersCommand = run(
+        other,
+        "until [ -e done ]; do sleep 0.05; done; echo still running",
+      );
 
       const { context, cancel } = withCancel(BACKGROUND_CONTEXT);
       let started = Date.now();
@@ -201,6 +205,7 @@ it("aborting or timing out a command stops it without touching another job's, an
       expect(timedOut.ok ? undefined : timedOut.error.code).toBe("timeout");
       expect(Date.now() - started).toBeLessThan(5_000);
 
+      await writeFile(path.join(othersWorkspace, "done"), "");
       expect((await othersCommand).output).toBe("still running\n");
 
       const { sleeping } = await leaveSleepRunning(job);
