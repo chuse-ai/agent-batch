@@ -164,9 +164,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   // and Canary. Its jobs' counts by status and their cost are read from the jobs themselves.
   await schema
     .createTable("batch")
-    // The hub's own key for the row, a UUIDv7, which other tables refer to and locks are ordered by;
-    // the API never shows it (ADR 0036).
-    .addColumn("rowId", "uuid", (col) => col.primaryKey())
+    // The hub's own ID for the Batch, a UUIDv7, which other tables refer to and locks are ordered by,
+    // and which tells apart Batches that had the same ID over time; the API never shows it (ADR 0036).
+    .addColumn("uid", "uuid", (col) => col.primaryKey())
     .addColumn("organizationId", "text", (col) =>
       col.notNull().references("organization.id").onDelete("cascade"),
     )
@@ -235,15 +235,15 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   // with it; a blob cannot be deleted while a Batch's file refers to it.
   await schema
     .createTable("batchInputFile")
-    .addColumn("batchRowId", "uuid", (col) =>
-      col.notNull().references("batch.rowId").onDelete("cascade"),
+    .addColumn("batchUid", "uuid", (col) =>
+      col.notNull().references("batch.uid").onDelete("cascade"),
     )
     // The file's path under each of the Batch's jobs' `inputs` folder, relative, with folders.
     .addColumn("path", "text", (col) => col.notNull())
     .addColumn("sha256", "bytea", (col) =>
       col.notNull().references("blob.sha256").onDelete("restrict"),
     )
-    .addPrimaryKeyConstraint("batchInputFile_pkey", ["batchRowId", "path"])
+    .addPrimaryKeyConstraint("batchInputFile_pkey", ["batchUid", "path"])
     .execute();
   // For the reference check of deleting a blob, and for finding whether any Batch still uses one.
   await schema
@@ -316,8 +316,8 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("modelBudgetUsd", "numeric", (col) => col.notNull().check(sql`"modelBudgetUsd" > 0`))
     // The job's Batch. Nothing deletes a Batch yet; the Organization's deletion deletes its Batches
     // and jobs in the same statement, by which point no job refers to a Batch.
-    .addColumn("batchRowId", "uuid", (col) =>
-      col.notNull().references("batch.rowId").onDelete("no action"),
+    .addColumn("batchUid", "uuid", (col) =>
+      col.notNull().references("batch.uid").onDelete("no action"),
     )
     // Whether the job is in its Batch's current Canary, which runs before the rest are released.
     .addColumn("inCanary", "boolean", (col) => col.notNull().defaultTo(false))
@@ -333,7 +333,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     )
     // Adds to a Batch take its lock, so each finds the jobs those before it made; the constraint
     // backs that up.
-    .addUniqueConstraint("job_batchRowId_customId_key", ["batchRowId", "customId"])
+    .addUniqueConstraint("job_batchUid_customId_key", ["batchUid", "customId"])
     // A placement is sent to a Runner, so a job sent has one; a resumed job has its Runner, the one
     // holding its journal, before it is sent.
     .addCheckConstraint("job_placedAt_check", sql`"placedAt" is null or "runnerId" is not null`)
@@ -376,17 +376,13 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .execute();
   // A Batch's summary and its controls read its unfinished jobs; placement, its unfinished Canary.
   await schema
-    .createIndex("job_batchRowId_unfinished_idx")
+    .createIndex("job_batchUid_unfinished_idx")
     .on("job")
-    .columns(["batchRowId", "inCanary"])
+    .columns(["batchUid", "inCanary"])
     .where(sql.ref("status"), "in", ["queued", "running", "paused"])
     .execute();
   // Listing a Batch's jobs, newest first.
-  await schema
-    .createIndex("job_batchRowId_id_idx")
-    .on("job")
-    .columns(["batchRowId", "id"])
-    .execute();
+  await schema.createIndex("job_batchUid_id_idx").on("job").columns(["batchUid", "id"]).execute();
 
   // A job's own Input files.
   await schema
@@ -500,7 +496,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("hostDeletionOutcomeAt", "timestamptz")
     // The job's Batch and labels as it ended, to group cost by after the job is deleted. The Batch
     // is copied rather than referenced, as the Runner is.
-    .addColumn("batchRowId", "uuid", (col) => col.notNull())
+    .addColumn("batchUid", "uuid", (col) => col.notNull())
     .addColumn("labels", "jsonb", (col) => col.notNull())
     .addForeignKeyConstraint(
       "usageRecord_organizationId_fkey",

@@ -592,7 +592,7 @@ function confirmDeletions(runnerId: RunnerId, deleted: string[]) {
 const RUN_COLUMNS = [
   "id",
   "runId",
-  "batchRowId",
+  "batchUid",
   "input",
   "pendingControl",
   "runTimeoutSeconds",
@@ -664,7 +664,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                     blockedByOf({
                       status: batchEb.ref("job.status"),
                       placedAt: batchEb.ref("job.placedAt"),
-                      batchRowId: batchEb.ref("job.batchRowId"),
+                      batchUid: batchEb.ref("job.batchUid"),
                       inCanary: batchEb.ref("job.inCanary"),
                     }),
                     "is",
@@ -729,7 +729,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
             answer
               .selectFrom("wanted")
               .innerJoin("jobProgress", "jobProgress.jobId", "wanted.id")
-              .innerJoin("batch", "batch.rowId", "wanted.batchRowId")
+              .innerJoin("batch", "batch.uid", "wanted.batchUid")
               .select((eb) => [
                 "wanted.id",
                 "wanted.runId",
@@ -767,7 +767,7 @@ function placeAndRead(runnerId: RunnerId, load: Load) {
                             files
                               .selectFrom("batchInputFile")
                               .select(["batchInputFile.path", "batchInputFile.sha256"])
-                              .whereRef("batchInputFile.batchRowId", "=", "wanted.batchRowId")
+                              .whereRef("batchInputFile.batchUid", "=", "wanted.batchUid")
                               .unionAll(
                                 files
                                   .selectFrom("inputFile")

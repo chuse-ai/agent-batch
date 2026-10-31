@@ -21,7 +21,7 @@ const COPIED_ID_COLUMNS = {
   batch: { submitterKeyId: "Apikey", submitterMemberId: "Member" },
   usageRecord: {
     jobId: "Job",
-    batchRowId: { table: "Batch", type: "BatchRowId" },
+    batchUid: { table: "Batch", type: "BatchUid" },
     runnerId: "Runner",
     submitterKeyId: "Apikey",
     submitterMemberId: "Member",
