@@ -700,13 +700,17 @@ function uploadMissing(client: ApiClient, files: readonly HashedFile[]) {
 }
 
 /**
- * Whether a person watches the command: stdout and stderr both terminals, as openai-cli's
- * `batchHumanTerminal` requires, so a command whose output a pipe or a file takes shows no
- * progress, notices or receipts.
+ * Whether a person watches the command's progress, notices and receipts: stderr a terminal, as git
+ * shows its progress (`git clone --progress`), so stdout can go to a pipe or a file while the person
+ * watches. openai-cli also requires stdout a terminal (`batchHumanTerminal`), because its stdout is
+ * readable text that progress would break into; this CLI's is JSON, printed at the end.
  */
 function personWatches(): boolean {
-  return process.stdout.isTTY && process.stderr.isTTY;
+  return process.stderr.isTTY;
 }
+
+/** Token counts as a person reads them: 6.8M. */
+const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 
 /** Leaves the progress `logUpdateStderr` shows on stderr in place, so what follows goes below it. */
 const endProgress = Effect.sync(() => {
@@ -889,12 +893,10 @@ const saveJobLines = Effect.fnUntraced(function* (
         Stream.run(fs.sink(file, { flag: "wx", mode: 0o600 })),
       );
     }
-    // Each file is named whether or not it was saved, as openai-cli says of each file a Batch
-    // returns or lacks.
-    if (personWatches()) {
-      yield* Effect.sync(() =>
-        process.stderr.write(kept.length > 0 ? `Saved "${file}"\n` : `No ${name} file saved.\n`),
-      );
+    // Only the files saved are named. openai-cli also says when a Batch returned no file, which its
+    // counts do not tell; here a file is absent exactly when the counts above show no job for it.
+    if (kept.length > 0 && personWatches()) {
+      yield* Effect.sync(() => process.stderr.write(`Saved "${file}"\n`));
     }
   }
 });
@@ -902,10 +904,11 @@ const saveJobLines = Effect.fnUntraced(function* (
 /**
  * `batches submit --wait`: reads the Batch `batchId` until waiting for it is over, showing how it
  * stands on stderr when a person watches, then, with `outputDir`, saves each of `jobs`' lines
- * there, prints the Batch, and fails unless every job succeeded, as openai-cli does. A caller's
- * pause keeps it waiting, as `jobs wait` does; its failure breaker's pause ends the wait, as the
- * breaker paused it for a flaw to fix first. A timeout or Ctrl-C stops the wait, prints no Batch and
- * leaves the Batch running; during saving, it leaves the files saving had begun.
+ * there, prints the Batch (its usage, on a terminal), and fails unless every job succeeded, as
+ * openai-cli does. A caller's pause keeps it waiting, as `jobs wait` does; its failure breaker's
+ * pause ends the wait, as the breaker paused it for a flaw to fix first. A timeout or Ctrl-C stops
+ * the wait, prints no Batch and leaves the Batch running; during saving, it leaves the files
+ * saving had begun.
  */
 function waitAndSave(
   client: ApiClient,
@@ -980,7 +983,20 @@ function waitAndSave(
         ),
       ),
     );
-    yield* printStep(batch);
+    // On a terminal, the Batch is printed for a person, as openai-cli and gh print readable text
+    // there: what the lines before did not say, its usage, and its ID when it was made. A pipe or a
+    // file gets the Batch's JSON.
+    if (process.stdout.isTTY) {
+      const { totalTokens, cost } = batch.usage;
+      const used = `${compact.format(totalTokens)} tokens, $${cost.totalUsd.toFixed(2)}`;
+      yield* Effect.sync(() =>
+        process.stdout.write(
+          idGiven ? `Used ${used}.\n` : `Batch ${JSON.stringify(batch.id)} used ${used}.\n`,
+        ),
+      );
+    } else {
+      yield* printStep(batch);
+    }
     if (Exit.isFailure(saved)) yield* Effect.failCause(saved.cause);
     const { succeeded, ...others } = batch.jobCounts;
     const unsucceeded = sumAll(Object.values(others));
@@ -1010,7 +1026,7 @@ function submitBatchCommand() {
   return os
     .meta({
       description:
-        "Creates a Batch running an agent given by its flags, with the jobs of a JSONL file, one job's JSON per line as batches add-jobs takes it, or with --each, a job for each file or folder: a file becomes a job with that file as its Input file, and a folder a job with every file in its tree, at its path in the folder, hidden ones left out; each job's custom ID is its path as given, normalized. --each uploads the files the hub does not hold yet. Prints the Batch, with --wait once its jobs have ended, and with --output-dir saves each job's output or failure in that folder. Running the command again with the Batch's --id adds only the jobs the Batch lacks.",
+        "Creates a Batch running an agent given by its flags, with the jobs of a JSONL file, one job's JSON per line as batches add-jobs takes it, or with --each, a job for each file or folder: a file becomes a job with that file as its Input file, and a folder a job with every file in its tree, at its path in the folder, hidden ones left out; each job's custom ID is its path as given, normalized. --each uploads the files the hub does not hold yet. Prints the Batch, with --wait once its jobs have ended, or then on a terminal the tokens and cost it used, and with --output-dir saves each job's output or failure in that folder. Running the command again with the Batch's --id adds only the jobs the Batch lacks.",
       examples: [
         'agent-batch batches submit --id invoices --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait --output-dir ./results',
         "agent-batch batches submit jobs.jsonl --output-schema answer.schema.json",

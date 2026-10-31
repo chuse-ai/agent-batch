@@ -128,7 +128,7 @@ npx agent-batch batches submit postings.jsonl --id postings \
   --output-schema postings.schema.json --wait --output-dir ./results
 ```
 
-`--id` names the Batch, which the commands below take. Running the command again under the same ID adds only the jobs the Batch lacks; if you change the instructions or the schema, give a new ID, because the hub refuses the old one for a different agent. Once every job has ended, the command prints the Batch and saves one line per job, in the file's order: in `results/output.jsonl` the output of each that succeeded, already checked against the schema, and in `results/error.jsonl` the `failure` of each that did not, exiting 1 if any did not. A run's `results/output.jsonl`:
+`--id` names the Batch, which the commands below take. Running the command again under the same ID adds only the jobs the Batch lacks; if you change the instructions or the schema, give a new ID, because the hub refuses the old one for a different agent. Once every job has ended, the command saves one line per job, in the file's order: in `results/output.jsonl` the output of each that succeeded, already checked against the schema, and in `results/error.jsonl` the `failure` of each that did not, exiting 1 if any did not; then it prints the Batch, or in a terminal the tokens and cost it used. A run's `results/output.jsonl`:
 
 ```json
 {"customId":"posting-0001","status":"succeeded","output":{"mustHave":["5+ years of TypeScript experience","Postgres"],"seniority":"senior","niceToHave":["Effect","Cloudflare Workers"]}}
