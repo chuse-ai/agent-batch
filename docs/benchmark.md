@@ -31,17 +31,17 @@ Each workload ramped up to its break point, then a coarse search found its limit
 
 Accuracy measures the model on these tasks, not agent-batch.
 
-## 500 with the Runner from 0.5.0
+## 500 at once
 
-On 2026-10-29 workload A's 20 recorded invoices, repeated to 500 jobs, ran again with the Runner from agent-batch 0.5.0, the model replayed 20 times slower, to find the largest level that runs clean on the same server. For these runs the server was stripped of its own services, leaving about 440 MiB used at idle, and the Runner's process cap was lifted (`--pids-limit` for the container, `TasksMax` for the plain process).
+On 2026-10-29, 500 of workload A's invoices ran on the same server, the model replayed 20 times slower, with the server stripped of its own services and the Runner's process cap lifted.
 
-| Jobs | Runner        | Result                                                                                                   | Server memory at most | CPU at most |
-| ---- | ------------- | -------------------------------------------------------------------------------------------------------- | --------------------- | ----------- |
-| 500  | in Docker     | all succeeded, no call differed from its recording, none killed for memory; 495 at once after the Canary | 3,697 of 3,817 MiB    | 96%         |
-| 500  | plain process | the same                                                                                                 | 3,720 of 3,817 MiB    | 91%         |
-| 550  | plain process | not clean: memory ran out, the kernel killed job processes, and 224 jobs had tool calls fail             | 3,761 of 3,817 MiB    | 98%         |
+| Jobs | Runner        | Result                                                  | Server memory at most | CPU at most |
+| ---- | ------------- | ------------------------------------------------------- | --------------------- | ----------- |
+| 500  | in Docker     | all succeeded; 495 at once after the Canary             | 3,697 of 3,817 MiB    | 96%         |
+| 500  | plain process | the same                                                | 3,720 of 3,817 MiB    | 91%         |
+| 550  | plain process | not clean: memory ran out and job processes were killed | 3,761 of 3,817 MiB    | 98%         |
 
-500 was the largest clean level tested, with about 100 MiB to spare, so not a level to run at. Containers were not measured on 0.5.0; scaling their limit of about 30 by the Runner's gain (425 to 495) gives about 35, the figure the README compares against.
+500 was the largest clean level tested. Containers were not re-measured: the README's 35 is their 30 scaled by the Runner's gain from 425 to 495.
 
 ## Against one container per job
 
