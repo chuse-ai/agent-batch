@@ -77,11 +77,18 @@ function jobOf(id: string, customId: string, status: Record<string, unknown>) {
  * each creation gives, kept in `batchIds`, and answers
  * each job's read with `ended(customId)`, or with 503 when `jobsUnreadable`, every job having ended
  * by the Batch's read numbered `endedByRead`, the first unless given; it never answers a read of
- * the Batch when `stalled`. `batchRead` resolves on the first read.
+ * the Batch when `stalled`, and refuses with 422 the add numbered `refusedAdd`, if given.
+ * `batchRead` resolves on the first read.
  */
 function fakeHub(
   ended: (customId: string) => Record<string, unknown>,
-  { stalled = false, jobsUnreadable = false, stored = [] as string[], endedByRead = 1 } = {},
+  {
+    stalled = false,
+    jobsUnreadable = false,
+    stored = [] as string[],
+    endedByRead = 1,
+    refusedAdd = 0,
+  } = {},
 ) {
   // The ID the first creation gave; the hub creates one Batch.
   let batchId = "";
@@ -122,6 +129,12 @@ function fakeHub(
     }
     if (request.method === "POST" && request.url === `/batches/${batchId}/jobs`) {
       const { jobs } = z.parse(addSchema, json());
+      if (adds.length + 1 === refusedAdd) {
+        response.writeHead(422, { "content-type": "application/problem+json" });
+        return response.end(
+          JSON.stringify({ type: "about:blank", title: "Unprocessable Content", status: 422 }),
+        );
+      }
       adds.push(jobs);
       return answer(response, {
         batch: batchOf(batchId, { queued: ids.size + jobs.length }),
@@ -236,6 +249,22 @@ test("batches submit --each makes a job of each file and folder, named by its pa
       { digest: digestOf(photo), bytes: photo },
     ].toSorted((a, b) => a.digest.localeCompare(b.digest)),
   );
+});
+
+// The jobs added before the refusal are queued under the made ID, which a rerun needs to carry on
+// rather than make a second Batch.
+test("batches submit prints the ID it made when the hub refuses an add after the Batch exists", async () => {
+  const lines = Array.from({ length: 101 }, (_, index) =>
+    JSON.stringify({ customId: `posting-${index}`, input: `Posting ${index}.` }),
+  );
+  const cwd = await folderWith({ "jobs.jsonl": `${lines.join("\n")}\n` });
+  const hub = fakeHub(() => ({ status: "succeeded", output: {} }), { refusedAdd: 2 });
+
+  const { exitCode, stderr } = await submit(hub.listener, cwd, ["jobs.jsonl"]);
+
+  expect(exitCode).toBe(1);
+  expect(hub.adds.map((jobs) => jobs.length)).toEqual([100]);
+  expect(stderr).toContain(`--id ${hub.batchIds[0]}`);
 });
 
 test("batches submit adds the jobs of a JSONL file in its order, at most 100 at a time", async () => {

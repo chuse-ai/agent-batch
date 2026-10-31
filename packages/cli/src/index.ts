@@ -225,15 +225,18 @@ function givenOrNewId(given: string | undefined) {
 /**
  * `work`, which on an interrupt, such as Ctrl-C, or a failure that leaves unknown what the hub did,
  * prints `hint` on stderr when the ID the command runs under was made, not given, so the person can
- * run it again under that ID. The hub's answer refusing a call is known, and running the command
- * again as it is would be refused again, so it gets no hint. The made ID is shown only then, not up
- * front, to keep what a run that ends well prints short; a run killed outright never shows it, so
- * running it again makes a new one.
+ * run it again under that ID. The hub's answer refusing a call before what the ID names `exists` is
+ * known, and running the command again as it is would be refused again, so it gets no hint; once it
+ * exists, a refusal gets the hint too, since the person can fix what was refused and carry on under
+ * the same ID rather than make a second. The made ID is shown only then, not up front, to keep what a
+ * run that ends well prints short; a run killed outright never shows it, so running it again makes a
+ * new one.
  */
 function hintMadeIdOnStop<A, E, R>(
   work: Effect.Effect<A, E, R>,
   { made }: { made: boolean },
   hint: string,
+  { exists = false } = {},
 ) {
   const refused = (cause: Cause.Cause<E>) =>
     !Cause.hasInterrupts(cause) &&
@@ -243,8 +246,9 @@ function hintMadeIdOnStop<A, E, R>(
     );
   return made
     ? work.pipe(
-        Effect.onError((cause) =>
-          refused(cause) ? Effect.void : Effect.sync(() => process.stderr.write(`${hint}\n`)),
+        Effect.onErrorIf(
+          (cause) => exists || !refused(cause),
+          () => Effect.sync(() => process.stderr.write(`${hint}\n`)),
         ),
       )
     : work;
@@ -374,20 +378,24 @@ function submitCommand() {
       return runToEnd(
         Effect.gen(function* () {
           const client = yield* apiClient;
-          const added = yield* hintMadeIdOnStop(
-            Effect.gen(function* () {
-              const batch = yield* hubCall((signal) =>
-                client.batches.create({ id, agent, breaker: false }, { signal }),
-              ).pipe(Effect.retry(retryTransient));
-              return yield* hubCall((signal) =>
-                client.batches.addJobs(
-                  { id: batch.id, jobs: [{ ...given, customId: id }] },
-                  { signal },
-                ),
-              ).pipe(Effect.retry(retryTransient));
-            }),
+          const hint = `The job's custom ID is ${id}: to find out whether the job was accepted, submit it again with this ID, as customId in its JSON.`;
+          const batch = yield* hintMadeIdOnStop(
+            hubCall((signal) =>
+              client.batches.create({ id, agent, breaker: false }, { signal }),
+            ).pipe(Effect.retry(retryTransient)),
             runId,
-            `The job's custom ID is ${id}: to find out whether the job was accepted, submit it again with this ID, as customId in its JSON.`,
+            hint,
+          );
+          const added = yield* hintMadeIdOnStop(
+            hubCall((signal) =>
+              client.batches.addJobs(
+                { id: batch.id, jobs: [{ ...given, customId: id }] },
+                { signal },
+              ),
+            ).pipe(Effect.retry(retryTransient)),
+            runId,
+            hint,
+            { exists: true },
           );
           yield* printStep(added.jobs[0]?.job);
         }).pipe(Effect.mapError(commandError)),
@@ -702,15 +710,20 @@ function uploadMissing(client: ApiClient, files: readonly HashedFile[]) {
 /**
  * Whether a person watches the command's progress, notices and receipts: stderr a terminal, as git
  * shows its progress (`git clone --progress`), so stdout can go to a pipe or a file while the person
- * watches. openai-cli also requires stdout a terminal (`batchHumanTerminal`), because its stdout is
- * readable text that progress would break into; this CLI's is JSON, printed at the end.
+ * watches. openai-cli also requires stdout a terminal (`batchHumanTerminal`); git does not.
  */
 function personWatches(): boolean {
   return process.stderr.isTTY;
 }
 
 /** Token counts as a person reads them: 6.8M. */
-const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+const tokenCount = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+/** US dollars as a person reads them: $1,234.50. */
+const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
 /** Leaves the progress `logUpdateStderr` shows on stderr in place, so what follows goes below it. */
 const endProgress = Effect.sync(() => {
@@ -894,7 +907,8 @@ const saveJobLines = Effect.fnUntraced(function* (
       );
     }
     // Only the files saved are named. openai-cli also says when a Batch returned no file, which its
-    // counts do not tell; here a file is absent exactly when the counts above show no job for it.
+    // counts do not tell; here a file is absent when none of this run's jobs ended that way, which
+    // the counts above show too unless the Batch holds jobs added outside this run.
     if (kept.length > 0 && personWatches()) {
       yield* Effect.sync(() => process.stderr.write(`Saved "${file}"\n`));
     }
@@ -983,12 +997,12 @@ function waitAndSave(
         ),
       ),
     );
-    // On a terminal, the Batch is printed for a person, as openai-cli and gh print readable text
-    // there: what the lines before did not say, its usage, and its ID when it was made. A pipe or a
-    // file gets the Batch's JSON.
+    // On a terminal, the Batch is printed for a person, as `gh pr view` prints a curated view there
+    // and every field raw in a pipe: what the lines before did not say, its usage, and its ID when
+    // it was made. A pipe or a file gets the Batch's JSON.
     if (process.stdout.isTTY) {
       const { totalTokens, cost } = batch.usage;
-      const used = `${compact.format(totalTokens)} tokens, $${cost.totalUsd.toFixed(2)}`;
+      const used = `${tokenCount.format(totalTokens)} tokens, ${usd.format(cost.totalUsd)}`;
       yield* Effect.sync(() =>
         process.stdout.write(
           idGiven ? `Used ${used}.\n` : `Batch ${JSON.stringify(batch.id)} used ${used}.\n`,
@@ -1173,23 +1187,26 @@ function submitBatchCommand() {
           const again = `run this command again with ${CommandLine.display(["--id", id])}`;
           // Once every job is added, the hints that follow say how to run the command again, the
           // ID with them.
-          const { created, adds } = yield* hintMadeIdOnStop(
-            Effect.gen(function* () {
-              yield* uploadMissing(client, local.files);
-              const batch = yield* hubCall((signal) =>
+          const hint = `The Batch's ID is ${id}: to add the jobs it lacks, ${again}.`;
+          const created = yield* hintMadeIdOnStop(
+            Effect.andThen(
+              uploadMissing(client, local.files),
+              hubCall((signal) =>
                 client.batches.create({ id, agent: parsedAgent.data }, { signal }),
-              ).pipe(Effect.retry(retryTransient));
-              const jobAdds = yield* Effect.forEach(
-                Array.chunksOf(local.jobs, MAX_JOBS_PER_ADD),
-                (jobs) =>
-                  hubCall((signal) =>
-                    client.batches.addJobs({ id: batch.id, jobs }, { signal }),
-                  ).pipe(Effect.retry(retryTransient)),
-              );
-              return { created: batch, adds: jobAdds };
-            }),
+              ).pipe(Effect.retry(retryTransient)),
+            ),
             runId,
-            `The Batch's ID is ${id}: to add the jobs it lacks, ${again}.`,
+            hint,
+          );
+          const adds = yield* hintMadeIdOnStop(
+            Effect.forEach(Array.chunksOf(local.jobs, MAX_JOBS_PER_ADD), (jobs) =>
+              hubCall((signal) =>
+                client.batches.addJobs({ id: created.id, jobs }, { signal }),
+              ).pipe(Effect.retry(retryTransient)),
+            ),
+            runId,
+            hint,
+            { exists: true },
           );
           const added = adds.flatMap((add) => add.jobs.map(({ job }) => job));
           const submitted = Effect.gen(function* () {
