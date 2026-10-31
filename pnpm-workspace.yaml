@@ -60,7 +60,7 @@ catalog:
   canonicalize: ^5.1.0
   chunk-data: ^0.1.0
   content-type: ^3.1.1
-  crossws: ^0.4.15
+  crossws: ^0.4.17
   effect: ^4.1.0
   ensure-error: ^5.0.0
   env-paths: ^4.0.0
