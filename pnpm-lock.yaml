@@ -261,8 +261,8 @@ catalogs:
       specifier: ^3.1.1
       version: 3.1.1
     crossws:
-      specifier: ^0.4.15
-      version: 0.4.15
+      specifier: ^0.4.17
+      version: 0.4.17
     effect:
       specifier: ^4.1.0
       version: 4.1.0
@@ -398,19 +398,19 @@ importers:
         version: 2.1.5(hono@5.0.0-rc.1)
       '@orpc/experimental-effect':
         specifier: 'catalog:'
-        version: 2.0.0-beta.44(crossws@0.4.15)(effect@4.1.0)
+        version: 2.0.0-beta.44(crossws@0.4.17)(effect@4.1.0)
       '@orpc/json-schema':
         specifier: 'catalog:'
-        version: 2.0.0-beta.44(crossws@0.4.15)
+        version: 2.0.0-beta.44(crossws@0.4.17)
       '@orpc/openapi':
         specifier: 'catalog:'
-        version: 2.0.0-beta.44(crossws@0.4.15)
+        version: 2.0.0-beta.44(crossws@0.4.17)
       '@orpc/server':
         specifier: 'catalog:'
-        version: 2.0.0-beta.44(crossws@0.4.15)
+        version: 2.0.0-beta.44(crossws@0.4.17)
       '@orpc/zod':
         specifier: 'catalog:'
-        version: 2.0.0-beta.44(crossws@0.4.15)(zod@4.6.7)
+        version: 2.0.0-beta.44(crossws@0.4.17)(zod@4.6.7)
       '@standard-schema/utils':
         specifier: 'catalog:'
         version: 0.3.0
@@ -428,7 +428,7 @@ importers:
         version: link:../../packages/contract
       crossws:
         specifier: 'catalog:'
-        version: 0.4.15
+        version: 0.4.17
       effect:
         specifier: 'catalog:'
         version: 4.1.0
@@ -543,7 +543,7 @@ importers:
         version: 2.0.0-beta.44
       '@orpc/openapi':
         specifier: 'catalog:'
-        version: 2.0.0-beta.44(crossws@0.4.15)
+        version: 2.0.0-beta.44(crossws@0.4.17)
       '@standard-schema/utils':
         specifier: 'catalog:'
         version: 0.3.0
@@ -607,10 +607,10 @@ importers:
         version: 2.0.0-beta.44
       '@orpc/openapi':
         specifier: 'catalog:'
-        version: 2.0.0-beta.44(crossws@0.4.15)
+        version: 2.0.0-beta.44(crossws@0.4.17)
       '@orpc/server':
         specifier: 'catalog:'
-        version: 2.0.0-beta.44(crossws@0.4.15)
+        version: 2.0.0-beta.44(crossws@0.4.17)
       '@orpc/shared':
         specifier: 'catalog:'
         version: 2.0.0-beta.44
@@ -658,7 +658,7 @@ importers:
         version: 3.7.1(picomatch@4.0.7)(rollup@4.65.0)
       trpc-cli:
         specifier: 'catalog:'
-        version: 0.17.1(@orpc/server@2.0.0-beta.44(crossws@0.4.15))(effect@4.1.0)(zod@4.6.7)
+        version: 0.17.1(@orpc/server@2.0.0-beta.44(crossws@0.4.17))(effect@4.1.0)(zod@4.6.7)
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -679,13 +679,13 @@ importers:
         version: 2.0.0-beta.44
       '@orpc/json-schema':
         specifier: 'catalog:'
-        version: 2.0.0-beta.44(crossws@0.4.15)
+        version: 2.0.0-beta.44(crossws@0.4.17)
       '@orpc/openapi':
         specifier: 'catalog:'
-        version: 2.0.0-beta.44(crossws@0.4.15)
+        version: 2.0.0-beta.44(crossws@0.4.17)
       '@orpc/zod':
         specifier: 'catalog:'
-        version: 2.0.0-beta.44(crossws@0.4.15)(zod@4.6.7)
+        version: 2.0.0-beta.44(crossws@0.4.17)(zod@4.6.7)
       content-type:
         specifier: 'catalog:'
         version: 3.1.1
@@ -2311,6 +2311,7 @@ packages:
   '@smithy/core@3.36.0':
     resolution: {integrity: sha512-3hJiwG1F5t1SoXqp/yOCmYXziyx7ZVqF63S5W6YU201e/qwVaHPex+E/3vvyY9a3ORq/b+BydeNZpP2saQ9X2g==}
     engines: {node: '>=18.0.0'}
+    deprecated: Deprecated due to a bug in custom logger data redaction. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
 
   '@smithy/credential-provider-imds@4.5.2':
     resolution: {integrity: sha512-A9uSdn72ozbRUSit0eib0TW7nXuNPlaeM0zcGkJ+nE6tFcSDbnmtwoxbTCFBukVQcszDAyvsd7+rTduPTXpygg==}
@@ -3260,8 +3261,8 @@ packages:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
     engines: {node: '>= 8'}
 
-  crossws@0.4.15:
-    resolution: {integrity: sha512-NsUOpDZosz7nyI+qEIl05yaiXOWaXH2oTeM+XBWtiSWZtb5rzcIsl1AST/HzM2jzUn76eFuyrkn83E6iSBRUvw==}
+  crossws@0.4.17:
+    resolution: {integrity: sha512-YG2kyfafNXKmu7e6k64yrj6whrw7m5sBIsOSXOlJ/72X3TQWRQuw8DhvXFDcBk8HF77PnTSygnm7xpYCTnFpow==}
     peerDependencies:
       srvx: '>=0.11.5'
     peerDependenciesMeta:
@@ -6512,38 +6513,38 @@ snapshots:
       '@orpc/shared': 2.0.0-beta.44
       '@standard-schema/spec': 1.1.0
 
-  '@orpc/experimental-effect@2.0.0-beta.44(crossws@0.4.15)(effect@4.1.0)':
+  '@orpc/experimental-effect@2.0.0-beta.44(crossws@0.4.17)(effect@4.1.0)':
     dependencies:
       '@orpc/client': 2.0.0-beta.44
       '@orpc/contract': 2.0.0-beta.44
-      '@orpc/json-schema': 2.0.0-beta.44(crossws@0.4.15)
-      '@orpc/server': 2.0.0-beta.44(crossws@0.4.15)
+      '@orpc/json-schema': 2.0.0-beta.44(crossws@0.4.17)
+      '@orpc/server': 2.0.0-beta.44(crossws@0.4.17)
       '@orpc/shared': 2.0.0-beta.44
       effect: 4.1.0
     transitivePeerDependencies:
       - crossws
       - fastify
 
-  '@orpc/json-schema@2.0.0-beta.44(crossws@0.4.15)':
+  '@orpc/json-schema@2.0.0-beta.44(crossws@0.4.17)':
     dependencies:
       '@openapi-spec/types': 0.3.0
       '@orpc/client': 2.0.0-beta.44
       '@orpc/contract': 2.0.0-beta.44
-      '@orpc/server': 2.0.0-beta.44(crossws@0.4.15)
+      '@orpc/server': 2.0.0-beta.44(crossws@0.4.17)
       '@orpc/shared': 2.0.0-beta.44
       '@standard-schema/spec': 1.1.0
     transitivePeerDependencies:
       - crossws
       - fastify
 
-  '@orpc/openapi@2.0.0-beta.44(crossws@0.4.15)':
+  '@orpc/openapi@2.0.0-beta.44(crossws@0.4.17)':
     dependencies:
       '@openapi-spec/downgrader': 0.3.0
       '@openapi-spec/types': 0.3.0
       '@orpc/client': 2.0.0-beta.44
       '@orpc/contract': 2.0.0-beta.44
-      '@orpc/json-schema': 2.0.0-beta.44(crossws@0.4.15)
-      '@orpc/server': 2.0.0-beta.44(crossws@0.4.15)
+      '@orpc/json-schema': 2.0.0-beta.44(crossws@0.4.17)
+      '@orpc/server': 2.0.0-beta.44(crossws@0.4.17)
       '@orpc/shared': 2.0.0-beta.44
       '@standard-server/core': 0.10.3
       '@standard-server/fetch': 0.10.3
@@ -6552,7 +6553,7 @@ snapshots:
       - crossws
       - fastify
 
-  '@orpc/server@2.0.0-beta.44(crossws@0.4.15)':
+  '@orpc/server@2.0.0-beta.44(crossws@0.4.17)':
     dependencies:
       '@orpc/client': 2.0.0-beta.44
       '@orpc/contract': 2.0.0-beta.44
@@ -6565,7 +6566,7 @@ snapshots:
       '@standard-server/peer': 0.10.3
       cookie: 2.0.1
     optionalDependencies:
-      crossws: 0.4.15
+      crossws: 0.4.17
 
   '@orpc/shared@2.0.0-beta.44':
     dependencies:
@@ -6573,10 +6574,10 @@ snapshots:
       radash: 12.1.1
       type-fest: 5.10.0
 
-  '@orpc/zod@2.0.0-beta.44(crossws@0.4.15)(zod@4.6.7)':
+  '@orpc/zod@2.0.0-beta.44(crossws@0.4.17)(zod@4.6.7)':
     dependencies:
       '@openapi-spec/types': 0.3.0
-      '@orpc/json-schema': 2.0.0-beta.44(crossws@0.4.15)
+      '@orpc/json-schema': 2.0.0-beta.44(crossws@0.4.17)
       zod: 4.6.7
     transitivePeerDependencies:
       - crossws
@@ -7771,7 +7772,7 @@ snapshots:
       shebang-command: 2.0.0
       which: 2.0.2
 
-  crossws@0.4.15: {}
+  crossws@0.4.17: {}
 
   cssesc@3.0.0: {}
 
@@ -9448,11 +9449,11 @@ snapshots:
 
   treeverse@3.0.0: {}
 
-  trpc-cli@0.17.1(@orpc/server@2.0.0-beta.44(crossws@0.4.15))(effect@4.1.0)(zod@4.6.7):
+  trpc-cli@0.17.1(@orpc/server@2.0.0-beta.44(crossws@0.4.17))(effect@4.1.0)(zod@4.6.7):
     dependencies:
       commander: 14.0.3
     optionalDependencies:
-      '@orpc/server': 2.0.0-beta.44(crossws@0.4.15)
+      '@orpc/server': 2.0.0-beta.44(crossws@0.4.17)
       effect: 4.1.0
       zod: 4.6.7
 
