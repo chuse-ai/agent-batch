@@ -16,7 +16,7 @@ _Avoid_: seat
 A named, revocable credential owned by the organization that a service uses to call the hub, limited to the actions it is granted. Each key is an identity of its own, as a service account is elsewhere; the member who created it is recorded but does not act through it.
 
 **Job**:
-One self-contained piece of agent work: its Batch's agent working on the job's own input and Input files. It succeeds at most once, unattended, possibly over several runs; a caller may pause, resume or cancel it. Its agent works in conversations, pi's records within the job.
+One self-contained piece of agent work: its Batch's agent working on the job's own input and Input files. It succeeds at most once, unattended, possibly over several runs; a caller may pause, resume or cancel it. Its agent works in conversations, pi's records within the job. A running job is a running agent, so a count of running jobs may say agents; jobs in other statuses stay jobs.
 
 **Job status**:
 Where a job is in its life: queued, running, paused, succeeded, failed or cancelled. Succeeded, failed and cancelled are final; a paused, failed or cancelled job that started can be resumed while its journal exists, unless its Batch was cancelled. A running job whose Runner restarts stays running: it is recovered from its journal and carries on where it left off; it is not resumed. Where a status has more than one cause, the job's failure says which. Status is the one word for where a piece of work is in its life, so a job and each of its tool calls have one.
