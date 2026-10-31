@@ -291,8 +291,8 @@ catalogs:
       specifier: ^1.8.1
       version: 1.8.1
     json-schema-library:
-      specifier: ^11.6.14
-      version: 11.6.14
+      specifier: ^11.6.16
+      version: 11.6.16
     kanel:
       specifier: ^4.0.4
       version: 4.0.4
@@ -443,7 +443,7 @@ importers:
         version: 0.12.0(@standard-schema/spec@1.1.0)(hono@5.0.0-rc.1)(zod@4.6.7)
       json-schema-library:
         specifier: 'catalog:'
-        version: 11.6.14
+        version: 11.6.16
       kysely:
         specifier: 'catalog:'
         version: 0.29.7
@@ -561,7 +561,7 @@ importers:
         version: 5.0.0
       json-schema-library:
         specifier: 'catalog:'
-        version: 11.6.14
+        version: 11.6.16
       proper-lockfile:
         specifier: 'catalog:'
         version: 4.1.2
@@ -2311,6 +2311,7 @@ packages:
   '@smithy/core@3.36.0':
     resolution: {integrity: sha512-3hJiwG1F5t1SoXqp/yOCmYXziyx7ZVqF63S5W6YU201e/qwVaHPex+E/3vvyY9a3ORq/b+BydeNZpP2saQ9X2g==}
     engines: {node: '>=18.0.0'}
+    deprecated: Deprecated due to a bug in custom logger data redaction. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
 
   '@smithy/credential-provider-imds@4.5.2':
     resolution: {integrity: sha512-A9uSdn72ozbRUSit0eib0TW7nXuNPlaeM0zcGkJ+nE6tFcSDbnmtwoxbTCFBukVQcszDAyvsd7+rTduPTXpygg==}
@@ -3808,8 +3809,8 @@ packages:
   json-rpc-2.0@1.8.1:
     resolution: {integrity: sha512-BmN42JKn6FI36pcMMzHCXQhpKNEfbeqgSIcUYHKnifq0/4Ey6PDinovwUOgajT7NsgUtpWdDXaCWlpI4LHXN3g==}
 
-  json-schema-library@11.6.14:
-    resolution: {integrity: sha512-fN8X+ZBUOPDF7B9ZBjVq4ZKay0K/U9KQeJrQp4GqvjiPCMw/En8EJM0OHcFKBHynz6MDPJ0lIm/CZFbk0WhbZA==}
+  json-schema-library@11.6.16:
+    resolution: {integrity: sha512-DefZu5+3mP4JY0957Eaidr8fDC0ro2ObBz/9mOyyjHQnxLfpt1uevi3hDmzbYexWBiy3HEvtavMaUp90aNli6Q==}
 
   json-schema-to-ts@3.1.1:
     resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
@@ -8263,7 +8264,7 @@ snapshots:
 
   json-rpc-2.0@1.8.1: {}
 
-  json-schema-library@11.6.14:
+  json-schema-library@11.6.16:
     dependencies:
       '@hyperjump/json-schema-formats': 1.0.8
       '@sagold/json-pointer': 7.2.1
