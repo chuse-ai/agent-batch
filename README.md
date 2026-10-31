@@ -205,7 +205,7 @@ Full list: [docs/release-scope.md](https://github.com/chuse-ai/agent-batch/blob/
 
 ## Host notes
 
-agent-batch needs Docker Engine 29+ with Compose 5+, and Node 22.19+. On Ubuntu 24.04, run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` before `stack start`, so the sandboxes can start, and add a file in `/etc/sysctl.d` to keep it. Ubuntu 25.04 and later are not supported yet. Logins, status, logs and upgrading: [docs/deploy.md](https://github.com/chuse-ai/agent-batch/blob/main/docs/deploy.md).
+agent-batch needs Docker Engine 29+ with Compose 5+, and Node 22.19+. If you add yourself to the `docker` group to run Docker without `sudo`, log out and back in first, or `stack start` cannot reach Docker. On Ubuntu 24.04, run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` before `stack start`, so the sandboxes can start, and add a file in `/etc/sysctl.d` to keep it. Ubuntu 25.04 and later are not supported yet. Logins, status, logs and upgrading: [docs/deploy.md](https://github.com/chuse-ai/agent-batch/blob/main/docs/deploy.md).
 
 ## More than one machine
 
