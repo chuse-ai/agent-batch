@@ -1031,7 +1031,8 @@ function waitAndSave(
  * `openai batches submit` takes one, or a job for each path `--each` gives, whose files it uploads
  * first, only those the hub lacks. Jobs are added in their order, at most 100 at a time, so the
  * first are its Canary. Each call is retried on a transient failure, under one Batch ID: the
- * caller's, or one made for this run and printed on stderr if the command stops early, so running
+ * caller's, or one made for this run and printed on stderr if the command stops early, or without
+ * `--wait` in the hint for following the Batch, which needs it, so running
  * the same command again with it returns the same Batch and adds only the jobs it lacks. With `--wait`,
  * it then follows the Batch until no job is queued, running or paused, saves each job's line with
  * `--output-dir`, and prints the Batch.
@@ -1077,7 +1078,7 @@ function submitBatchCommand() {
             .check(z.describe("A file holding the JSON Schema each job's output must match")),
           id: batchCreationSchema.shape.id.check(
             z.describe(
-              "The Batch's ID, 1 to 100 letters, digits, _ and -, not beginning with -; one is made when left out, and printed if the command stops early. Running the command again with it returns the same Batch and adds only the jobs it lacks.",
+              "The Batch's ID, 1 to 100 letters, digits, _ and -, not beginning with -; one is made when left out, and printed if the command stops early or, without --wait, in the hint for following the Batch. Running the command again with it returns the same Batch and adds only the jobs it lacks.",
             ),
           ),
           wait: z.optional(

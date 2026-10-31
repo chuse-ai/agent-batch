@@ -268,7 +268,7 @@ exports[`the commands and their flags 1`] = `
             },
             {
               "attributeName": "id",
-              "description": "The Batch's ID, 1 to 100 letters, digits, _ and -, not beginning with -; one is made when left out, and printed if the command stops early. Running the command again with it returns the same Batch and adds only the jobs it lacks.; Min length: 1; Max length: 100; Pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*$",
+              "description": "The Batch's ID, 1 to 100 letters, digits, _ and -, not beginning with -; one is made when left out, and printed if the command stops early or, without --wait, in the hint for following the Batch. Running the command again with it returns the same Batch and adds only the jobs it lacks.; Min length: 1; Max length: 100; Pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*$",
               "flags": "--id [string]",
               "name": "id",
               "negate": false,
