@@ -14,15 +14,19 @@ Given a folder of invoices and a JSON Schema for what you want from each, one li
 npx agent-batch batches submit --id invoices --each invoices/*.pdf --instructions "Extract the supplier, number, currency and total." --output-schema invoice.schema.json --wait --output-dir ./results
 ```
 
+Here it is with 500 invoices, the Runner on one 4 GB server, the model's replies replayed from a recording and the wait sped up:
+
+<img alt="A terminal runs batches submit on 500 invoice PDFs: the Canary of 5 runs first, then 495 agents run at once while the server's memory bar climbs to 3.6 of 3.7 GiB, and the first three results print as JSON" src="https://raw.githubusercontent.com/chuse-ai/agent-batch/main/docs/images/hero.svg">
+
 Each PDF is a job. Each line of `results/output.jsonl` is one invoice's JSON, and each line of `results/error.jsonl` one that failed, with why.
 
-It does this without giving every job its own sandbox, so you don't pay for agents to wait on the model. Four hundred jobs in their own 1 GB sandboxes hold 400 GB of memory; on one Runner, for jobs that mostly wait on the model, they fit in a 4 GB server.
+It does this without giving every job its own sandbox, so you don't pay for agents to wait on the model. Five hundred agents in their own 1 GB sandboxes hold 500 GB of memory; on one Runner, for jobs that mostly wait on the model, they fit in a 4 GB server.
 
 Try it on your machine with Docker and Node: `npx agent-batch stack start`, then [the first job](#an-everyday-chore-done-by-an-agent).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/chuse-ai/agent-batch/main/docs/images/memory-dark.svg">
-  <img alt="Memory held by 400 jobs: 400 one-gigabyte sandboxes against 4 GB for one Runner, each square 1 GB, to scale" src="https://raw.githubusercontent.com/chuse-ai/agent-batch/main/docs/images/memory-light.svg">
+  <img alt="Memory held by 500 agents: 500 one-gigabyte sandboxes against 4 GB for one Runner, each square 1 GB, to scale" src="https://raw.githubusercontent.com/chuse-ai/agent-batch/main/docs/images/memory-light.svg">
 </picture>
 
 Open source, MIT, TypeScript. Early: versions are 0.x.
@@ -64,7 +68,7 @@ If you did not see `3`: `npx agent-batch jobs events --id "$ID"` prints what the
 
 Now change the input: put your own text in `input`, change the schema to whatever you want back, give it a new `customId`, and submit. That is the whole programming model; everything below is doing it many times at once.
 
-## Why 400 fit in 4 GB
+## Why 500 fit in 4 GB
 
 An agent job is mostly an `await`: the loop sends a prompt, waits on the model, runs a command, waits again. You would not give every `fetch` in a Node program its own virtual machine, yet agents are often run in parallel by giving each one its own sandbox. A container or VM per agent costs memory and seconds of CPU before the agent does anything: about 75–80 MiB even for a bare container running a Runner, and whatever you provision for a hosted sandbox, commonly 1 GB or more. Then it sits there while the agent waits on the model. An agent loop that is mostly `await` needs a few MiB. So in a Runner, the loops (the agent is [Pi](https://github.com/earendil-works/pi)) run many to a process, and each job's shell commands and file access go into a lightweight per-job sandbox (Anthropic's [sandbox-runtime](https://github.com/anthropics/sandbox-runtime): bubblewrap on Linux, Seatbelt on macOS), with no network for job commands by default.
 
@@ -74,19 +78,17 @@ one Runner process (Node, on your machine)
 ├─ job 2    agent loop · waiting on the model
 ├─ job 3    agent loop · running `wc -l inputs/notes.txt` ──► its own OS sandbox, no network
 ├─ ...
-└─ job 400  agent loop · waiting on the model
+└─ job 500  agent loop · waiting on the model
 ```
 
-| Measured on one Hetzner CAX11, 2026-10-25/26                                          | One Runner                                                                                                                                                                                                                                                                                                                                         | One container per job            |
-| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| Extraction jobs open at once (read a messy invoice, CV or ticket; submit JSON)        | **350–425**, 12–14× more                                                                                                                                                                                                                                                                                                                           | about 30, then the host thrashed |
-| Memory per open job                                                                   | 6.5 MiB                                                                                                                                                                                                                                                                                                                                            | about 90 MiB                     |
-| CPU per job, CPU-heavy jobs (data scripts over large CSVs, code fixes with test runs) | **1.45–4.9× less**; 1.45× for the heaviest, where the jobs' own work dominates                                                                                                                                                                                                                                                                     | baseline                         |
-| Conditions                                                                            | Arm, 2 vCPU, 4 GB RAM, about €7 a month. The Runner from 0.2.0, with real commands in real sandboxes. Model responses replayed from real recordings: at 20× their recorded latency for the jobs held open, standing for a slow model; at their recorded timing for CPU. 425 needs systemd's `TasksMax` raised. Server cost only, not model tokens. | same server, same Runner image   |
+| Measured on one Hetzner CAX11, 2026-10-25 to 29                                       | One Runner                                                                                                                                                                                                                                                                                                                                                    | One container per job            |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| Extraction jobs open at once (read a messy invoice and submit JSON)                   | **495**, about 14× more                                                                                                                                                                                                                                                                                                                                       | about 35, then the host thrashed |
+| Memory per open job                                                                   | 6.5 MiB                                                                                                                                                                                                                                                                                                                                                       | about 90 MiB                     |
+| CPU per job, CPU-heavy jobs (data scripts over large CSVs, code fixes with test runs) | **1.45–4.9× less**; 1.45× for the heaviest, where the jobs' own work dominates                                                                                                                                                                                                                                                                                | baseline                         |
+| Conditions                                                                            | Arm, 2 vCPU, 4 GB RAM, about €7 a month. Real commands in real sandboxes; the hub on another machine. Model responses replayed from real recordings: at 20× their recorded latency for the jobs held open, standing for a slow model; at their recorded timing for CPU. Several hundred need systemd's `TasksMax` raised. Server cost only, not model tokens. | same server                      |
 
 One container too many hung the host for about 30 minutes instead of failing a job. These are particular workloads on one machine, not a capacity guarantee. Method and results: [docs/benchmark.md](https://github.com/chuse-ai/agent-batch/blob/main/docs/benchmark.md).
-
-<!-- recording: a terminal, about 30 seconds, no narration, labelled "Hetzner CAX11, 2 vCPU, 4 GB". A Batch of a few hundred text jobs is added with the CLI; the 5 Canary jobs end first; then `jobs list --status running` and `--status succeeded` are re-run every few seconds and the counts move from running to succeeded; one `jobs get | jq .output` prints a validated JSON object. -->
 
 A Runner runs 8 jobs at a time by default. That is the concurrency limit, and it is a setting:
 
@@ -141,9 +143,9 @@ The first title said II; the responsibilities said senior.
 
 ## Stop watching your agents
 
-Two postings you can watch. Four hundred you count. With four hundred, this happens:
+Two postings you can watch. Five hundred you count. With five hundred, this happens:
 
-1. By default, the first 5 jobs run before the others. This is the Canary. If any fails, the Batch pauses before the rest start, so a prompt that breaks every job is caught after five, not four hundred.
+1. By default, the first 5 jobs run before the others. This is the Canary. If any fails, the Batch pauses before the rest start, so a prompt that breaks every job is caught after five, not five hundred.
 2. After the Canary, if more than 10% of the jobs that have ended since it began failed, the Batch pauses. This is the failure breaker. It judges from the first jobs to end, so a run of early failures pauses a large Batch quickly.
 3. `batches resume --id postings` carries on where it stopped; `batches pause`, `cancel` and `get` work the same way, as do single jobs, and ended jobs can be deleted.
 

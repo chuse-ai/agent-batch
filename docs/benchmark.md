@@ -31,6 +31,18 @@ Each workload ramped up to its break point, then a coarse search found its limit
 
 Accuracy measures the model on these tasks, not agent-batch.
 
+## 500 at once
+
+On 2026-10-29, 500 of workload A's invoices ran on the same server, the model replayed 20 times slower, with the Runner's process cap lifted.
+
+| Jobs | Runner        | Result                                                  | Server memory at most | CPU at most |
+| ---- | ------------- | ------------------------------------------------------- | --------------------- | ----------- |
+| 500  | in Docker     | all succeeded; 495 at once after the Canary             | 3,697 of 3,817 MiB    | 96%         |
+| 500  | plain process | the same                                                | 3,720 of 3,817 MiB    | 91%         |
+| 550  | plain process | not clean: memory ran out and job processes were killed | 3,761 of 3,817 MiB    | 98%         |
+
+500 was the largest clean level tested. Containers were not re-measured: the README's 35 is their 30 scaled by the Runner's gain from 425 to 495.
+
 ## Against one container per job
 
 | Measure                                      | One Runner | Containers                       | Ratio             |
